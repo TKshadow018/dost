@@ -1,0 +1,43 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Dost: assemble debug APK",
+            "type": "shell",
+            "command": "${workspaceFolder}/gradlew.bat",
+            "args": [":app:assembleDebug"],
+            "options": {
+                "env": {
+                    "JAVA_HOME": "C:\\Program Files\\Java\\jdk-25.0.4.1"
+                }
+            },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Dost: install debug APK",
+            "type": "shell",
+            "command": "${workspaceFolder}/gradlew.bat",
+            "args": [":app:installDebug"],
+            "options": {
+                "env": {
+                    "JAVA_HOME": "C:\\Program Files\\Java\\jdk-25.0.4.1"
+                }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Dost: clean build",
+            "type": "shell",
+            "command": "${workspaceFolder}/gradlew.bat",
+            "args": ["clean"],
+            "options": {
+                "env": {
+                    "JAVA_HOME": "C:\\Program Files\\Java\\jdk-25.0.4.1"
+                }
+            },
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}
