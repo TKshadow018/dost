@@ -15,4 +15,6 @@
 local.properties
 /app/dost-upload.jks
 /app/keystore.properties
+/app/api/config.php
+/dost-private-data/
 /app/src/main/assets/emails_list.csv

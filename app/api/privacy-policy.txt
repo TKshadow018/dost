@@ -1,0 +1,54 @@
+DOST PRIVACY POLICY
+Effective date: September 27, 2026
+
+ABOUT THIS POLICY
+Dost is an AI companion application intended for users of all ages. This policy explains what information Dost stores, what it sends to AI services, and how long Dost keeps its server-side conversation archive.
+
+1. INFORMATION STORED ON YOUR DEVICE
+Dost stores the following information in the app's private storage on your Android device:
+- Your profile information, including name, email, age, and gender.
+- Friend profiles, selected friend photos, schedules, time zones, and relationship scores.
+- Chat history, conversation summaries, and facts learned from conversations.
+- Language, preferred AI model, unread counts, and other app settings.
+- Compressed copies of photos that you attach to chat messages.
+
+This information is stored locally, but chat messages and chat-photo attachments are also sent to Dost's API server and AI services as described below. A friend photo selected for use as an avatar remains on the device and is not uploaded by that feature.
+
+2. INFORMATION SENT TO DOST AND AI SERVICES
+When you request an AI response, Dost sends your message, relevant conversation history, and context needed to generate the response to Dost's API server. This can include personal information you choose to share, such as your name, preferences, relationships, interests, or other details in your messages. Requests to generate a fictional friend profile also send the friend's name, age, and gender.
+
+The API server forwards AI prompts to OpenRouter, which routes them to the selected model provider. Chat requests are archived on Dost's server for service operation and troubleshooting. The archive may contain user and AI messages, message timestamps and identifiers, the selected model ID, friend and user display names, the server-observed IP address used to organize the archive, and chat-photo attachments. API keys are not written into conversation logs.
+
+OpenRouter and the selected model provider may process request data under their own privacy policies and terms. Dost does not control their independent retention or deletion practices. Please do not share passwords, API keys, authentication codes, financial-account credentials, or other highly sensitive information in conversations.
+
+3. RETENTION AND DELETION
+Dost server conversation archives are retained for no more than 3,650 days (10 years) after the most recent activity in each conversation session. A scheduled server cleanup removes expired session archives and their attached chat-photo files. The 10-year limit is Dost's chosen retention period; Google Play requires a disclosed retention and deletion policy but does not prescribe a universal maximum number of days.
+
+Information stored only on your device remains there until you clear Dost's app storage or uninstall the app, subject to Android backup settings. Removing a friend from the visible friend list does not currently erase that friend's separately stored local chat history, memories, or summaries.
+
+If you need help requesting earlier removal of a Dost server archive, contact us at the address below. Requests may require information sufficient to locate and verify the relevant archive. Once data has been sent to OpenRouter or a model provider, their own deletion and retention policies apply.
+
+The 3,650-day period applies to Dost's active server archive. Any infrastructure backup copies, if retained by a hosting provider, may follow a separate provider backup schedule.
+
+4. OPENROUTER API KEY
+If you provide your own OpenRouter API key, Dost stores it encrypted on your device using Android Keystore-backed encryption. When making a request, the app sends the key over HTTPS to Dost's API, which forwards it to OpenRouter and does not store it. You are responsible for protecting your key and any charges made through your OpenRouter account. If you leave the key blank, the API may use a server-configured key.
+
+5. PHOTOS AND DEVICE PERMISSIONS
+Dost uses Android's file picker when you choose a friend photo. The selected avatar URI is stored on your device and is not uploaded by the avatar feature. If you attach a photo to a chat message, Dost compresses it and sends it to the API server and AI provider as part of that request; a copy is kept in the server conversation archive until that archive expires.
+
+The optional floating chat feature requires Android's draw-over-other-apps permission. Dost uses this permission to show the floating chat bubble and panel when you enable the feature.
+
+6. DATA SHARING, ANALYTICS, AND ADVERTISING
+Dost does not operate its own advertising, analytics, or tracking service. Chat and profile-generation data is shared with Dost's API host, OpenRouter, and the model provider selected for the request to provide AI functionality. The API host also receives the network address of the connecting device as part of normal HTTP requests.
+
+7. USERS OF ALL AGES
+Dost is intended for users of all ages, including children. This policy describes how information is stored and shared for all users. Parents and guardians may guide children's use of Dost and help them decide what information to share.
+
+8. CHANGES TO THIS POLICY
+We may update this Privacy Policy when the app or its data practices change. We will post the updated policy at the published policy location and revise the effective date.
+
+9. CONTACT US
+For questions, suggestions, or help requesting removal of a server archive, contact:
+tushartk018@gmail.com
+
+Dost Privacy Policy - Effective September 27, 2026

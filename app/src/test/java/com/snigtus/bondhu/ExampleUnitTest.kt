@@ -18,11 +18,11 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun busyScheduleReturnsEndTimeWhenCurrentlyBusy() {
-        val friend = Friend(id = "school", name = "A", age = "15", gender = "female")
-        val now = ZonedDateTime.of(2025, 1, 2, 10, 0, 0, 0, ZoneId.of("Asia/Dhaka"))
+    fun busyScheduleUsesFriendTimezoneAndThirtyMinuteCooldown() {
+        val friend = Friend(id = "school", name = "A", age = "15", gender = "female", timeZoneId = "Asia/Dhaka")
+        val now = ZonedDateTime.of(2025, 1, 2, 4, 0, 0, 0, ZoneId.of("UTC"))
 
-        assertEquals(now.withHour(14), friend.busyUntil(now))
+        assertEquals(ZonedDateTime.of(2025, 1, 2, 14, 30, 0, 0, ZoneId.of("Asia/Dhaka")), friend.replyAvailableAt(now))
     }
 
     @Test
@@ -30,14 +30,25 @@ class ExampleUnitTest {
         val friend = Friend(id = "work", name = "B", age = "30", gender = "male")
         val now = ZonedDateTime.of(2025, 1, 2, 18, 0, 0, 0, ZoneId.of("Asia/Dhaka"))
 
-        assertNull(friend.busyUntil(now))
+        assertNull(friend.replyAvailableAt(now))
     }
 
     @Test
     fun busyScheduleHandlesOvernightWindow() {
-        val friend = Friend(id = "night", name = "C", age = "30", gender = "male", busyStartHour = 22, busyDurationHours = 6)
         val now = ZonedDateTime.of(2025, 1, 3, 1, 0, 0, 0, ZoneId.of("Asia/Dhaka"))
+        val friend = Friend(id = "night", name = "C", age = "30", gender = "male", busyStartHour = 22, busyDurationHours = 6, timeZoneId = now.zone.id)
 
-        assertEquals(now.withHour(4), friend.busyUntil(now))
+        assertEquals(now.withHour(4).plusMinutes(30), friend.replyAvailableAt(now))
+    }
+
+    @Test
+    fun responseContainsAtMostOneQuestion() {
+        assertEquals("How are you?", limitToSingleQuestion("How are you? What did you do today?"))
+        assertEquals("What about tomorrow？", limitToSingleQuestion("What about tomorrow？ هل أنت بخير؟"))
+    }
+
+    @Test
+    fun responseWithoutQuestionRemainsUnchanged() {
+        assertEquals("Sounds good.", limitToSingleQuestion("Sounds good."))
     }
 }

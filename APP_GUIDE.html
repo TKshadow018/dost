@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A detailed product and engineering guide to Dost, its Android app, conversation system, storage, and AI API.">
+  <title>Dost | App Guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #182a30;
+      --muted: #54686d;
+      --paper: #f2f7f5;
+      --surface: #ffffff;
+      --line: #d8e4df;
+      --green: #11685f;
+      --green-dark: #0a4c48;
+      --green-pale: #dff1e9;
+      --blue: #23627d;
+      --blue-pale: #e1eff3;
+      --gold: #a75a13;
+      --gold-pale: #fbefd9;
+      --red: #9f3432;
+      --red-pale: #fae9e6;
+      --shadow: 0 12px 38px rgba(25, 58, 53, .08);
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: "Segoe UI", "Trebuchet MS", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.68 var(--sans);
+    }
+    a { color: var(--green-dark); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: var(--blue); }
+    code, pre { font-family: Consolas, "Cascadia Code", monospace; }
+    code { color: #184f49; font-size: .92em; overflow-wrap: anywhere; }
+    .masthead {
+      position: relative;
+      overflow: hidden;
+      color: #f4fbf7;
+      background: var(--green-dark);
+      border-bottom: 5px solid #e1a343;
+    }
+    .masthead::after {
+      position: absolute;
+      right: -50px;
+      bottom: -145px;
+      width: 420px;
+      height: 300px;
+      border: 1px solid rgba(237, 248, 241, .22);
+      border-radius: 50%;
+      box-shadow: 0 0 0 34px rgba(237, 248, 241, .045), 0 0 0 74px rgba(237, 248, 241, .035);
+      content: "";
+      transform: rotate(-18deg);
+      pointer-events: none;
+    }
+    .masthead-inner { position: relative; z-index: 1; max-width: 1240px; margin: auto; padding: 46px 34px 42px; }
+    .eyebrow { margin: 0 0 10px; color: #a6d6c8; font-size: .76rem; font-weight: 700; text-transform: uppercase; }
+    h1, h2, h3 { font-family: var(--serif); font-weight: 600; line-height: 1.2; }
+    h1 { max-width: 760px; margin: 0; font-size: 3.5rem; }
+    .dek { max-width: 700px; margin: 14px 0 0; color: #d9ebe3; font-size: 1.12rem; }
+    .mast-meta { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 24px; color: #c4ddd3; font-size: .86rem; }
+    .mast-meta span::before { color: #e1a343; content: "• "; }
+    .layout { display: grid; grid-template-columns: 245px minmax(0, 1fr); gap: 42px; max-width: 1240px; margin: 0 auto; padding: 34px; }
+    .toc { position: sticky; top: 20px; align-self: start; max-height: calc(100vh - 40px); overflow-y: auto; padding: 16px 0; }
+    .toc h2 { margin: 0 0 12px; font: 700 .78rem/1.4 var(--sans); color: var(--muted); text-transform: uppercase; }
+    .toc ol { margin: 0; padding: 0; list-style: none; counter-reset: sections; }
+    .toc li { counter-increment: sections; }
+    .toc a { display: block; padding: 6px 9px; color: #38545a; border-left: 2px solid transparent; font-size: .88rem; line-height: 1.4; text-decoration: none; }
+    .toc a::before { display: inline-block; width: 25px; color: #8a9c9d; content: counter(sections, decimal-leading-zero); font: 600 .7rem var(--sans); }
+    .toc a:hover, .toc a:focus-visible { color: var(--green-dark); background: #e4efea; border-left-color: var(--green); outline: none; }
+    main { min-width: 0; }
+    .notice { margin: 0 0 26px; padding: 16px 18px; border-left: 4px solid var(--gold); background: var(--gold-pale); }
+    .notice strong { color: #713d0d; }
+    .notice p { margin: 4px 0 0; }
+    section { padding: 20px 0 28px; border-bottom: 1px solid var(--line); scroll-margin-top: 18px; }
+    section:last-of-type { border-bottom: 0; }
+    section h2 { margin: 0 0 14px; color: var(--green-dark); font-size: 1.85rem; }
+    h3 { margin: 24px 0 8px; color: #29464c; font-size: 1.24rem; }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 1.35rem; }
+    li { margin: 5px 0; }
+    .lead { color: #38545a; font-size: 1.08rem; }
+    .flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
+    .flow-step { position: relative; min-height: 112px; padding: 14px; background: var(--surface); border-top: 3px solid var(--green); box-shadow: var(--shadow); }
+    .flow-step b { display: block; margin-bottom: 5px; color: var(--green-dark); font: 700 .75rem var(--sans); text-transform: uppercase; }
+    .flow-step span { color: #455d62; font-size: .9rem; }
+    .grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+    .plain-panel { padding: 14px 17px; background: #e8f1ed; border-left: 3px solid var(--green); }
+    .plain-panel.blue { background: var(--blue-pale); border-left-color: var(--blue); }
+    .plain-panel.gold { background: var(--gold-pale); border-left-color: var(--gold); }
+    .plain-panel h3 { margin-top: 0; }
+    table { width: 100%; margin: 16px 0; border-collapse: collapse; background: var(--surface); font-size: .93rem; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--green-dark); background: #e4efea; font-size: .82rem; }
+    .pipeline { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 18px 0; }
+    .pipeline span { flex: 1 1 132px; padding: 12px; color: #214c50; background: var(--blue-pale); border-bottom: 2px solid #91b9c1; font-size: .88rem; text-align: center; }
+    .pipeline i { align-self: center; color: var(--gold); font-size: 1.2rem; font-style: normal; font-weight: 700; }
+    .endpoint { display: block; padding: 12px 14px; color: #d9eee7; background: #183a3b; border-radius: 3px; overflow-wrap: anywhere; }
+    .status { padding: 15px 17px; background: var(--red-pale); border-left: 4px solid var(--red); }
+    .status strong { color: #7e2624; }
+    .file-list { display: grid; grid-template-columns: minmax(170px, 250px) 1fr; gap: 0; margin: 15px 0; }
+    .file-list dt, .file-list dd { margin: 0; padding: 9px 11px; border-bottom: 1px solid var(--line); }
+    .file-list dt { color: var(--green-dark); font-weight: 700; }
+    .small { color: var(--muted); font-size: .88rem; }
+    .top-link { display: inline-block; margin-top: 14px; font-size: .88rem; }
+    footer { max-width: 1240px; margin: 0 auto; padding: 16px 34px 32px; color: var(--muted); font-size: .85rem; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; gap: 14px; padding: 20px; }
+      .toc { position: static; max-height: none; padding: 8px 0 12px; border-bottom: 1px solid var(--line); }
+      .toc ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .masthead-inner { padding: 36px 22px 32px; }
+      footer { padding: 12px 20px 26px; }
+    }
+    @media (max-width: 560px) {
+      body { font-size: 15px; }
+      h1 { font-size: 2.2rem; }
+      .toc ol, .flow, .grid-two { grid-template-columns: 1fr; }
+      .layout { padding: 14px 18px; }
+      section h2 { font-size: 1.55rem; }
+      .file-list { grid-template-columns: 1fr; }
+      .file-list dt { padding-bottom: 2px; border-bottom: 0; }
+      .file-list dd { padding-top: 2px; }
+      table { display: block; overflow-x: auto; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+    @media print {
+      :root { --paper: #fff; --surface: #fff; --ink: #111; --line: #bbb; }
+      body { background: #fff; font-size: 11pt; }
+      .masthead { color: #111; background: #fff; border-bottom: 2px solid #333; }
+      .masthead-inner { padding: 20px 0; }
+      .eyebrow, .dek, .mast-meta { color: #333; }
+      .layout { display: block; max-width: none; padding: 10px 0; }
+      .toc { position: static; max-height: none; border-bottom: 1px solid #888; }
+      .toc ol { columns: 2; }
+      .flow-step, .plain-panel, .notice, .status { box-shadow: none; break-inside: avoid; }
+      section { break-inside: auto; }
+      a { color: #111; }
+      footer { padding: 10px 0; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead" id="top">
+    <div class="masthead-inner">
+      <p class="eyebrow">Product and engineering guide</p>
+      <h1>Dost: how the app works</h1>
+      <p class="dek">A practical tour of onboarding, fictional friends, AI conversations, busy-time replies, saved memories, and the PHP service behind the Android app.</p>
+      <div class="mast-meta">
+        <span>Android · Kotlin · Jetpack Compose</span>
+        <span>AI gateway · PHP · OpenRouter</span>
+        <span>Repository guide · 27 September 2026</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Contents">
+      <h2>In this guide</h2>
+      <ol>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#getting-started">Getting started</a></li>
+        <li><a href="#friends">Friends and profiles</a></li>
+        <li><a href="#chat">Chat and reply flow</a></li>
+        <li><a href="#schedule">Busy schedule</a></li>
+        <li><a href="#memory">Memory and relationship</a></li>
+        <li><a href="#floating">Floating chat</a></li>
+        <li><a href="#settings">Settings</a></li>
+        <li><a href="#data">Data and privacy</a></li>
+        <li><a href="#backend">AI backend</a></li>
+        <li><a href="#operations">Operations and troubleshooting</a></li>
+        <li><a href="#source-map">Source map and build</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <div class="notice" role="note">
+        <strong>Deployment note</strong>
+        <p>The local PHP source contains a fix for the chat-reply archive call, but the last live <code>chat_reply</code> request to Hostinger still returned HTTP 500. The non-archiving AI completion request returned HTTP 200. The PHP change must be deployed before the app's live reply path can be considered healthy.</p>
+      </div>
+
+      <section id="overview">
+        <h2>01 · Overview</h2>
+        <p class="lead">Dost is an Android conversation app built around a small collection of fictional AI friends. It combines a local-first profile and chat UI with an online PHP gateway that forwards AI requests to OpenRouter.</p>
+        <div class="flow" aria-label="High-level conversation architecture">
+          <div class="flow-step"><b>01 · Android UI</b><span>Compose screens collect profile settings, text, images, and friend choices.</span></div>
+          <div class="flow-step"><b>02 · Conversation manager</b><span>Stores messages, checks busy windows, and schedules delayed work.</span></div>
+          <div class="flow-step"><b>03 · PHP gateway</b><span>Validates requests, archives chat events, and calls the AI provider.</span></div>
+          <div class="flow-step"><b>04 · OpenRouter</b><span>Routes the selected model and returns a character reply and structured data.</span></div>
+        </div>
+        <p>The app supports English, Bangla, and Hindi selection. The central product idea is that a user creates fictional companions, chats with them, and can configure their time zone and daily unavailable hours.</p>
+        <p class="small">This document describes behavior found in the workspace source. A successful local build does not itself deploy the Android APK or the PHP service.</p>
+      </section>
+
+      <section id="getting-started">
+        <h2>02 · Getting started</h2>
+        <ol>
+          <li>The app opens to a splash screen and checks whether a local profile exists.</li>
+          <li>First-time onboarding asks for the user's name, email, age, and gender.</li>
+          <li>The next step can create the first friend using a name, age, gender, and optional photo, or skip adding a friend for now.</li>
+          <li>After onboarding, the user lands on the friends list. The current implementation permits up to five friends.</li>
+        </ol>
+        <p>This is profile onboarding, not a remote sign-in flow: the inspected Android code saves profile information in local app preferences and does not authenticate an account with a server.</p>
+        <p>When a friend is created, Dost first saves the basic friend record. It then asks the AI service to generate a fictional character profile, including personality, interests, family details, conversation style, and other profile fields. If that request fails, the basic friend remains available with its default profile values.</p>
+      </section>
+
+      <section id="friends">
+        <h2>03 · Friends and profiles</h2>
+        <h3>Creating a friend</h3>
+        <p>The add-friend form collects the friend's name, age, gender, photo, time zone, and daily busy schedule. The schedule controls include a Work or School choice, a start time, and a duration. The selected reason and schedule are stored on the friend record and the reason is included in the AI character context.</p>
+        <table>
+          <thead><tr><th>Default</th><th>Start</th><th>Duration</th><th>Resume buffer</th></tr></thead>
+          <tbody>
+            <tr><td>School (age under 18)</td><td>8:00 AM</td><td>6 hours</td><td>30 minutes after the busy interval</td></tr>
+            <tr><td>Work (age 18 or older, or age unavailable)</td><td>9:00 AM</td><td>8 hours</td><td>30 minutes after the busy interval</td></tr>
+          </tbody>
+        </table>
+        <p>The user can customize the start hour and choose a duration from four to eight hours when creating a friend. The selected time zone determines the friend's local schedule. In the friend profile dialog, the time zone can be changed later; that dialog displays the busy interval but does not currently provide controls for editing the reason, start time, or duration.</p>
+        <h3>Generated friend profile</h3>
+        <p>The profile-generation prompt requests a fictional, internally consistent character and instructs the model not to use real private data. The generated fields are saved locally with the friend and later supplied as context for chat replies. The model can be selected in AI settings, so profile generation uses the currently preferred model too.</p>
+      </section>
+
+      <section id="chat">
+        <h2>04 · Chat and reply flow</h2>
+        <h3>Sending a message</h3>
+        <ol>
+          <li>The user's text or image is appended to the local conversation and saved before the AI request begins.</li>
+          <li>The app checks whether the friend is inside their configured unavailable interval.</li>
+          <li>If the friend is available, the recent session history and friend context are sent to the PHP API.</li>
+          <li>The app parses the AI response, adds any explicit user facts to memory, updates relationship scores, and appends the assistant message.</li>
+          <li>Message archival is also queued with Android WorkManager; network-dependent work waits for connectivity and can retry after transient failures.</li>
+        </ol>
+        <p>The AI prompt includes the selected language, user and friend clocks, fictional friend profile, relationship scores, recent memory facts, and up to three recent session summaries. It tells the model to stay in character as a fictional friend, avoid claiming to be a real person, and return a JSON object containing the reply and optional structured updates.</p>
+        <h3>Images</h3>
+        <p>Images are resized to a maximum dimension of 1,280 pixels and compressed as JPEG to a maximum of 300 KB. The compressed copy is stored in the app's private files directory. The API forwards image data as a multimodal data URL; a vision-capable selected model is needed for useful image analysis.</p>
+        <h3>Follow-ups and errors</h3>
+        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 30 seconds. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
+      </section>
+
+      <section id="schedule">
+        <h2>05 · Busy schedule and delayed replies</h2>
+        <p>Busy time is computed using the friend's time zone. The configured interval begins at the chosen start hour and lasts for the selected duration; replies become available 30 minutes after that interval ends. The calculation checks both the current local date and the previous date so schedules that cross midnight can be recognized.</p>
+        <div class="plain-panel">
+          <h3>When a message arrives during busy time</h3>
+          <ol>
+            <li>The message is saved locally and the chat shows that a reply is waiting.</li>
+            <li>A unique WorkManager job is scheduled for the calculated resume time.</li>
+            <li>Additional messages can be added to the same waiting session.</li>
+            <li>When the worker runs, it checks the schedule again and sends the latest session history if the friend is available.</li>
+          </ol>
+        </div>
+        <p>WorkManager also requires network connectivity for AI and log jobs. A delayed reply can therefore occur later than the schedule boundary if the device is offline or background execution is deferred by Android. Updating a friend's time zone reschedules a pending busy reply.</p>
+        <p>The chat header shows either the current “busy until” time or the configured daily hours. The schedule uses the friend's clock, while the app separately stores a user time zone for displaying and prompting with the user's clock.</p>
+      </section>
+
+      <section id="memory">
+        <h2>06 · Memory, relationship, and sessions</h2>
+        <div class="grid-two">
+          <div class="plain-panel">
+            <h3>Personal memories</h3>
+            <p>The AI is instructed to extract facts explicitly stated by the user, preserve who each fact is about, and avoid inventing details. Memories are stored by friend and are included in later prompts when relevant.</p>
+          </div>
+          <div class="plain-panel blue">
+            <h3>Relationship meters</h3>
+            <p>The model returns bounded friendship and love impacts. The app clamps scores to 0–100. The love meter remains locked until friendship is above 70; if friendship falls to 70 or lower, love is reset to zero.</p>
+          </div>
+        </div>
+        <h3>Conversation sessions</h3>
+        <p>A session remains active while messages continue. Five minutes after the latest activity, the session-summary worker can summarize it, store the summary locally, and clear the current session ID. The next message then begins a new session. The chat menu exposes recent summaries, while up to three recent summaries are provided to the AI for continuity.</p>
+        <p>The app keeps message history locally for display. Session summaries and learned facts are also stored locally, separately per friend. The server archive is an additional copy; it is not the source used to render the chat UI.</p>
+      </section>
+
+      <section id="floating">
+        <h2>07 · Floating chat</h2>
+        <p>Dost can open a movable chat bubble over other apps. The user starts it from the chat menu using “Minimize chat.” Android requires the user to grant the draw-over-other-apps permission. The foreground service displays a notification while the overlay is active.</p>
+        <ul>
+          <li>The bubble uses the selected friend's photo or an initial-based fallback avatar.</li>
+          <li>An unread badge is shown while the overlay is collapsed and messages are unread.</li>
+          <li>Tapping the bubble expands a compact chat panel; the bubble can be dragged and dismissed using the close target.</li>
+          <li>Opening the main Dost activity stops the overlay service.</li>
+        </ul>
+      </section>
+
+      <section id="settings">
+        <h2>08 · Settings and personalization</h2>
+        <table>
+          <thead><tr><th>Setting</th><th>What it changes</th><th>Where it is used</th></tr></thead>
+          <tbody>
+            <tr><td>App language</td><td>English, Bangla, or Hindi</td><td>UI labels and language requested for AI responses</td></tr>
+            <tr><td>Your time zone</td><td>IANA time-zone identifier</td><td>User clock in AI prompts</td></tr>
+            <tr><td>Preferred model</td><td>Choose from the catalog or enter a model ID</td><td>Chat, generated profiles, and summaries</td></tr>
+            <tr><td>OpenRouter API key</td><td>Optional personal key; blank uses the server key</td><td>Sent to the API over HTTPS as a request header</td></tr>
+            <tr><td>Friend time zone</td><td>Set in friend profile</td><td>Busy schedule calculation and friend clock in prompts</td></tr>
+          </tbody>
+        </table>
+        <p>The model catalog contains the free IDs listed by the PHP API as well as other OpenRouter IDs. Without a personal key, the API accepts only its server-side allowlist. With a personal key, the PHP API accepts syntactically valid provider/model IDs, and paid models may bill the user's OpenRouter account. The key is encrypted on-device with Android Keystore-backed AES-GCM and is not added to server conversation logs.</p>
+        <p>The settings screen also links to learned knowledge and supports deleting friends. Deleting a friend removes that friend from the local friend list; server archives have no automatic deletion or retention behavior in the inspected API.</p>
+      </section>
+
+      <section id="data">
+        <h2>09 · Data and privacy</h2>
+        <h3>Stored on the Android device</h3>
+        <ul>
+          <li>User profile fields, friends, schedules, time zones, scores, and selected model are stored in app preferences.</li>
+          <li>Conversation messages, session summaries, learned memories, unread counts, and message-log status are stored locally by friend.</li>
+          <li>Compressed chat images are stored under the app-private <code>files/chat_images</code> directory.</li>
+          <li>The optional OpenRouter API key is encrypted; other profile and conversation values are not encrypted by the app's own storage layer.</li>
+        </ul>
+        <h3>Sent to the service</h3>
+        <p>Chat requests include message history and prompt context required to generate a reply. Profile generation sends the new friend's name, age, and gender. The PHP service saves chat events as JSON Lines, including text, timestamps, model IDs, and optional image filenames; chat images are stored alongside those logs. The API obtains the client IP from the web server and uses sanitized user and friend labels in archive paths.</p>
+        <div class="plain-panel gold">
+          <h3>Retention and access</h3>
+          <p>The API README states that server logs have no automatic deletion or retention period and are not exposed through an HTTP read endpoint. Operators must protect the storage directory, define retention, and secure backups. The documented default is a <code>log</code> directory beside the API; a private directory outside the web root can be configured with <code>DOST_CONVERSATION_STORAGE_DIR</code>.</p>
+        </div>
+        <p>The Android manifest enables backup and references backup-rule files that currently contain only sample/commented rules. Review Android backup behavior and server retention settings before distributing the app with real personal data.</p>
+      </section>
+
+      <section id="backend">
+        <h2>10 · AI backend</h2>
+        <p>The Android client posts JSON to the PHP endpoint:</p>
+        <code class="endpoint">https://bisque-bear-900175.hostingersite.com/api/ai.php</code>
+        <div class="pipeline" aria-label="Server request stages">
+          <span>Validate method and JSON</span><i aria-hidden="true">›</i>
+          <span>Rate-limit request</span><i aria-hidden="true">›</i>
+          <span>Validate model and messages</span><i aria-hidden="true">›</i>
+          <span>Archive chat history</span><i aria-hidden="true">›</i>
+          <span>Call OpenRouter</span><i aria-hidden="true">›</i>
+          <span>Archive assistant reply and return it</span>
+        </div>
+        <ul>
+          <li><code>chat_reply</code> includes installation, friend, and session IDs in request headers. The server validates identifiers, stores the supplied user/assistant history, calls OpenRouter, stores the returned assistant content, and returns the provider response.</li>
+          <li><code>log_message</code> saves individual queued events. The server deduplicates events by message ID.</li>
+          <li>The default operation is a completion request used for generated profiles and summaries; it does not use the chat archive path.</li>
+          <li>AI requests are limited to 30 per client IP per minute and message-log requests to 120 per IP per minute.</li>
+          <li>The PHP host needs PHP with cURL and outbound HTTPS access. The server key is read from <code>OPENROUTER_API_KEY</code> or a server-only <code>config.php</code>.</li>
+          <li>The app uses connection/read timeouts; the PHP-to-provider request has a 10-second connect timeout and 90-second total timeout.</li>
+        </ul>
+      </section>
+
+      <section id="operations">
+        <h2>11 · Operations and troubleshooting</h2>
+        <h3>Known chat-reply deployment issue</h3>
+        <div class="status">
+          <strong>Live status at last verification, 27 September 2026</strong>
+          <p>A non-archiving completion POST to the live endpoint returned HTTP 200 and an AI response. A synthetic <code>chat_reply</code> POST returned HTTP 500. The workspace version of <code>app/api/ai.php</code> was corrected to pass all six archive-context values plus the event to <code>append_conversation_event</code>, and PHP syntax lint passed. Replaying against the hosted URL still returned HTTP 500, indicating the patched file had not yet been deployed or another hosted-side issue remains.</p>
+        </div>
+        <p>Deploy the workspace <code>app/api/ai.php</code> to the Hostinger API directory, then test an actual chat reply. A browser GET returning HTTP 405 with <code>POST requests only</code> confirms route reachability only; it does not verify the API key, provider request, or chat archival path.</p>
+        <h3>Common failure indicators</h3>
+        <table>
+          <thead><tr><th>Symptom</th><th>Likely area to inspect</th></tr></thead>
+          <tbody>
+            <tr><td>AI server says it is not configured</td><td>Host environment variable or server-only <code>config.php</code></td></tr>
+            <tr><td>Model not allowed</td><td>Server key is in use and selected model is not in the PHP allowlist; use an allowed ID or configure a personal key</td></tr>
+            <tr><td>Reply waits past the scheduled time</td><td>Friend time zone, pending WorkManager job, device connectivity, and Android background-work constraints</td></tr>
+            <tr><td>Photo produces no useful description</td><td>Choose a vision-capable model and check whether image data remains within API limits</td></tr>
+            <tr><td>Message archive fails</td><td>PHP write permissions, cURL availability, log directory placement, and private access rules</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="source-map">
+        <h2>12 · Source map and build</h2>
+        <dl class="file-list">
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/MainActivity.kt">MainActivity.kt</a></dt><dd>Application navigation, onboarding handoff, friends list, settings, chat UI, and image processing.</dd>
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/AuthScreens.kt">AuthScreens.kt</a></dt><dd>Two-step local profile and first-friend onboarding UI.</dd>
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/AppModels.kt">AppModels.kt</a></dt><dd>Friend, message, memory, session-summary models and busy-time calculation.</dd>
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/ConversationManager.kt">ConversationManager.kt</a></dt><dd>Local message state, AI calls, reply handling, relationship updates, memories, and session lifecycle.</dd>
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/ConversationWorkScheduler.kt">ConversationWorkScheduler.kt</a></dt><dd>WorkManager jobs for busy replies, follow-ups, session summaries, and message logging.</dd>
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/OpenRouterClient.kt">OpenRouterClient.kt</a></dt><dd>HTTP client, model catalog, AI prompts, request parsing, and server message logging.</dd>
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/DostStore.kt">DostStore.kt</a></dt><dd>SharedPreferences persistence, encrypted API key, profile/friend/message data, and summaries.</dd>
+          <dt><a href="app/src/main/java/com/snigtus/bondhu/FloatingChatService.kt">FloatingChatService.kt</a></dt><dd>Android foreground service and movable overlay chat.</dd>
+          <dt><a href="app/api/ai.php">app/api/ai.php</a></dt><dd>PHP validation, rate limits, conversation archive, and OpenRouter proxy.</dd>
+          <dt><a href="app/api/README.md">app/api/README.md</a></dt><dd>Hostinger deployment, server configuration, archive security, and endpoint smoke test.</dd>
+        </dl>
+        <h3>Build and test</h3>
+        <p>From the repository root on Windows, build the debug APK with:</p>
+        <code class="endpoint">.\gradlew.bat :app:assembleDebug</code>
+        <p>The APK is written to <code>app/build/outputs/apk/debug/app-debug.apk</code>. Run local Android unit tests with:</p>
+        <code class="endpoint">.\gradlew.bat :app:testDebugUnitTest</code>
+        <p class="small">The app module uses application ID <code>com.snigtus.dost</code>, minimum Android API 26, target API 36, and compile API 37 in the checked-in Gradle configuration.</p>
+      </section>
+
+      <p><a class="top-link" href="#top">Back to top ↑</a></p>
+    </main>
+  </div>
+
+  <footer>
+    Dost source guide · Generated from the current workspace · No scripts, trackers, fonts, or remote assets are loaded by this page.
+  </footer>
+</body>
+</html>

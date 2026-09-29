@@ -6,8 +6,7 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Chat history, profile data, and the encrypted API key stay on the device. -->
+    <exclude domain="sharedpref" path="dost_local_data.xml"/>
+    <exclude domain="file" path="messages/"/>
 </full-backup-content>

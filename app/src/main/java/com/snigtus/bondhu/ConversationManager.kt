@@ -4,11 +4,13 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import java.time.ZonedDateTime
 import java.util.concurrent.ConcurrentHashMap
 
@@ -54,28 +56,43 @@ object ConversationManager {
                     val remaining = SESSION_INACTIVITY_MILLIS - (System.currentTimeMillis() - latestMessage.timestampMillis)
                     scheduleSessionEnd(friend.id, sessionId, remaining.coerceAtLeast(0L))
                 }
+                messagesFor(friend.id).filterNot { store.isMessageLogged(it.messageId) }.forEach { message ->
+                    ConversationWorkScheduler.scheduleMessageLog(appContext, friend.id, message.messageId)
+                }
             }
         }
     }
 
     fun messagesFor(friendId: String): List<ChatMessage> = messageState.value[friendId] ?: store.loadMessages(friendId)
 
-    fun send(friend: Friend, text: String, language: AppLanguage) {
-        if (text.isBlank()) return
+    fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "") {
+        if (text.isBlank() && imagePath.isBlank()) return
+        val selectedModel = store.aiModel()
+        val messageContent = text.ifBlank { "Shared an image" }
         if (store.hasScheduledReply(friend.id)) {
-            if (friend.id !in waitingForScheduleState.value) return
-            val sessionId = store.currentSessionId(friend.id) ?: return
-            appendUserMessage(friend.id, text, sessionId)
+            val sessionId = store.currentSessionId(friend.id)
+            if (sessionId == null) {
+                store.setScheduledReply(friend.id, false)
+                return
+            }
+            appendUserMessage(friend.id, messageContent, sessionId, selectedModel, imagePath)
             scheduleSessionEnd(friend.id, sessionId, SESSION_INACTIVITY_MILLIS)
+            if (friend.id !in waitingForScheduleState.value) {
+                // A reply was marked scheduled but no worker is waiting (state lost or a
+                // worker already running). Re-schedule so this message is not dropped.
+                sendingState.update { it + friend.id }
+                waitingForScheduleState.update { it + friend.id }
+                ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, language)
+            }
             return
         }
         if (jobs.contains(friend.id)) return
         ConversationWorkScheduler.cancelCheckIn(appContext, friend.id)
         val sessionId = store.currentSessionId(friend.id) ?: java.util.UUID.randomUUID().toString()
         store.saveCurrentSessionId(friend.id, sessionId)
-        appendUserMessage(friend.id, text, sessionId)
+        appendUserMessage(friend.id, messageContent, sessionId, selectedModel, imagePath)
         scheduleSessionEnd(friend.id, sessionId, SESSION_INACTIVITY_MILLIS)
-        if (friend.busyUntil(ZonedDateTime.now()) != null) {
+        if (friend.replyAvailableAt(ZonedDateTime.now()) != null) {
             store.setScheduledReply(friend.id, true)
             sendingState.update { it + friend.id }
             waitingForScheduleState.update { it + friend.id }
@@ -86,11 +103,7 @@ object ConversationManager {
         sendingState.update { it + friend.id }
         scope.launch {
             try {
-                val answer = OpenRouterClient().reply(
-                    store.apiKey(), friend, messagesFor(friend.id).filter { it.sessionId == sessionId }, language,
-                    store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                    store.loadSessionSummaries(friend.id).takeLast(3)
-                )
+                val answer = requestReply(friend, sessionId, language)
                 store.addUserMemories(friend.id, answer.memories)
                 val friendship = (friend.friendshipScore + answer.friendshipImpact).coerceIn(0, 100)
                 val love = if (friendship > 70) (friend.loveScore + answer.loveImpact).coerceIn(0, 100) else 0
@@ -104,15 +117,17 @@ object ConversationManager {
                     }
                 }
                 val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
-                val response = listOf(answer.text, answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }.orEmpty())
-                    .filter { it.isNotBlank() }.joinToString("\n\n")
-                appendAssistant(friend.id, response.ifBlank { fallback(language) })
+                val response = listOf(
+                    answer.text,
+                    answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+                ).filter { it.isNotBlank() }.joinToString("\n\n")
+                appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
                 when {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
                     !hasQuestion -> scheduleInactivityQuestion(friend, language, sessionId)
                 }
             } catch (_: Throwable) {
-                appendAssistant(friend.id, fallback(language))
+                appendAssistant(friend.id, connectionIssueReply(language), modelId = selectedModel)
             } finally {
                 jobs.remove(friend.id)
                 sendingState.update { it - friend.id }
@@ -136,25 +151,50 @@ object ConversationManager {
         if (activeFriendId == friendId) activeFriendId = null
     }
 
+    fun removeFriend(friendId: String) {
+        // Delete images first while we still have the message list, then clear state.
+        messagesFor(friendId).forEach { message ->
+            message.imagePath.takeIf { it.isNotBlank() }?.let { path ->
+                runCatching { File(path).takeIf { it.isFile }?.delete() }
+            }
+        }
+        publish(friendId, emptyList())
+        unreadState.update { it - friendId }
+        sendingState.update { it - friendId }
+        waitingForScheduleState.update { it - friendId }
+        jobs.remove(friendId)
+        if (::appContext.isInitialized) ConversationWorkScheduler.cancelAllForFriend(appContext, friendId)
+    }
+
+    fun refreshBusyReply(friend: Friend) {
+        if (!store.hasScheduledReply(friend.id)) return
+        val sessionId = store.currentSessionId(friend.id) ?: return
+        ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language())
+    }
+
     private fun scheduleInactivityQuestion(friend: Friend, language: AppLanguage, sessionId: String, delayMillis: Long = DEFAULT_FOLLOW_UP_MILLIS) {
         val latestUserMessage = messagesFor(friend.id).lastOrNull { it.sessionId == sessionId && it.role == "user" } ?: return
         ConversationWorkScheduler.scheduleCheckIn(appContext, friend, sessionId, language, delayMillis, latestUserMessage.timestampMillis)
     }
 
-    private fun appendUserMessage(friendId: String, text: String, sessionId: String) {
+    private fun appendUserMessage(friendId: String, text: String, sessionId: String, modelId: String, imagePath: String) {
+        val userMessage = ChatMessage("user", text, sessionId = sessionId, modelId = modelId, imagePath = imagePath)
         val updated = messagesFor(friendId).map { message ->
             if (message.sessionId.isBlank()) message.copy(sessionId = sessionId) else message
-        }.toMutableList().apply { add(ChatMessage("user", text, sessionId = sessionId)) }
+        }.toMutableList().apply { add(userMessage) }
         publish(friendId, updated)
         store.saveMessages(friendId, updated)
+        ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, userMessage.messageId)
     }
 
-    private fun appendAssistant(friendId: String, response: String) {
+    private fun appendAssistant(friendId: String, response: String, messageId: String? = null, modelId: String = store.aiModel()) {
         val sessionId = store.currentSessionId(friendId) ?: java.util.UUID.randomUUID().toString()
         store.saveCurrentSessionId(friendId, sessionId)
-        val saved = messagesFor(friendId).toMutableList().apply { add(ChatMessage("assistant", response, sessionId = sessionId)) }
+        val assistantMessage = ChatMessage("assistant", response, sessionId = sessionId, messageId = messageId ?: java.util.UUID.randomUUID().toString(), modelId = modelId)
+        val saved = messagesFor(friendId).toMutableList().apply { add(assistantMessage) }
         publish(friendId, saved)
         store.saveMessages(friendId, saved)
+        ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, assistantMessage.messageId)
         scheduleSessionEnd(friendId, sessionId, SESSION_INACTIVITY_MILLIS)
         if (activeFriendId != friendId) {
             store.incrementUnread(friendId)
@@ -162,10 +202,38 @@ object ConversationManager {
         }
     }
 
-    private fun fallback(language: AppLanguage): String = when (language) {
-        AppLanguage.BANGLA -> "আমি এখন একটু ব্যস্ত আছি। একটু পরে আমাকে মেসেজ করবে?"
-        AppLanguage.HINDI -> "मैं अभी थोड़ा व्यस्त हूँ। क्या आप मुझे थोड़ी देर बाद संदेश भेजेंगे?"
-        AppLanguage.ENGLISH -> "I am a little busy right now. Could you message me again later?"
+    private fun unavailableReply(language: AppLanguage): String = when (language) {
+        AppLanguage.BANGLA -> "দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। একটু পরে আবার চেষ্টা করো।"
+        AppLanguage.HINDI -> "माफ़ कीजिए, अभी जवाब नहीं दे पा रहा हूँ। कृपया थोड़ी देर बाद फिर कोशिश करें।"
+        AppLanguage.ENGLISH -> "Sorry, I couldn't reply just now. Please try again in a moment."
+    }
+
+    private fun connectionIssueReply(language: AppLanguage): String = when (language) {
+        AppLanguage.BANGLA -> "এই মুহূর্তে সংযোগে সমস্যা হচ্ছে। কিছুক্ষণ পর আবার চেষ্টা করলে আমি উত্তর দেব।"
+        AppLanguage.HINDI -> "अभी कनेक्शन में समस्या है। थोड़ी देर बाद फिर कोशिश करें, मैं जवाब दे दूँगा।"
+        AppLanguage.ENGLISH -> "I'm having connection trouble right now. Try again in a little while and I'll reply."
+    }
+
+    private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false): AiReply {
+        val client = OpenRouterClient()
+        val selectedModel = store.aiModel()
+        val apiKey = store.openRouterApiKey()
+        val history = messagesFor(friend.id).filter { it.sessionId == sessionId }
+        try {
+            return client.reply(
+                apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
+                store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
+                store.loadSessionSummaries(friend.id).takeLast(3), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+            )
+        } catch (firstFailure: Throwable) {
+            if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
+            delay(1_500)
+            return client.reply(
+                apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
+                store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
+                store.loadSessionSummaries(friend.id).takeLast(3), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+            )
+        }
     }
 
     private fun scheduleSessionEnd(friendId: String, sessionId: String, delayMillis: Long) {
@@ -177,24 +245,29 @@ object ConversationManager {
             store.setScheduledReply(friendId, false)
             return true
         }
-        if (store.currentSessionId(friendId) != sessionId) return true
-        if (friend.busyUntil(ZonedDateTime.now()) != null) return false
+        if (store.currentSessionId(friendId) != sessionId) {
+            store.setScheduledReply(friendId, false)
+            waitingForScheduleState.update { it - friendId }
+            sendingState.update { it - friendId }
+            return true
+        }
+        if (friend.replyAvailableAt(ZonedDateTime.now()) != null) return false
         val history = messagesFor(friendId).filter { it.sessionId == sessionId }
         val latestUserMessage = history.lastOrNull { it.role == "user" } ?: return true
         if (expectedUserTimestamp != null && latestUserMessage.timestampMillis != expectedUserTimestamp) return true
         if (!jobs.add(friendId)) return false
+        val selectedModel = store.aiModel()
         waitingForScheduleState.update { it - friendId }
         sendingState.update { it + friendId }
         try {
-            val answer = OpenRouterClient().reply(
-                store.apiKey(), friend, history, language, store.loadUserMemories(friendId), friend.friendshipScore,
-                friend.loveScore, store.loadSessionSummaries(friendId).takeLast(3), forceFollowUp = forceFollowUp
-            )
+            val answer = requestReply(friend, sessionId, language, forceFollowUp)
             store.addUserMemories(friendId, answer.memories)
             updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
-            val response = listOf(answer.text, answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }.orEmpty())
-                .filter { it.isNotBlank() }.joinToString("\n\n")
-            appendAssistant(friendId, response.ifBlank { fallback(language) })
+            val response = listOf(
+                answer.text,
+                answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+            ).filter { it.isNotBlank() }.joinToString("\n\n")
+            appendAssistant(friendId, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
             store.setScheduledReply(friendId, false)
             if (!forceFollowUp) {
                 val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
@@ -212,15 +285,21 @@ object ConversationManager {
     }
 
     suspend fun runSessionSummary(friendId: String, sessionId: String): Boolean {
-        if (store.currentSessionId(friendId) != sessionId) return true
+        if (store.currentSessionId(friendId) != sessionId) {
+            store.saveCurrentSessionId(friendId, null)
+            return true
+        }
         if (store.hasScheduledReply(friendId) || jobs.contains(friendId)) return false
         val sessionMessages = messagesFor(friendId).filter { it.sessionId == sessionId }
-        if (sessionMessages.isEmpty()) return true
+        if (sessionMessages.isEmpty()) {
+            store.saveCurrentSessionId(friendId, null)
+            return true
+        }
         val latestMessage = sessionMessages.maxBy { it.timestampMillis }
         val remaining = SESSION_INACTIVITY_MILLIS - (System.currentTimeMillis() - latestMessage.timestampMillis)
         if (remaining > 0L) return false
         val friendName = store.loadFriends().firstOrNull { it.id == friendId }?.name ?: return true
-        val summary = OpenRouterClient().summarizeSession(store.apiKey(), friendName, sessionMessages, store.language())
+        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, sessionMessages, store.language())
         val latestAfterSummary = messagesFor(friendId).lastOrNull { it.sessionId == sessionId }
         if (store.currentSessionId(friendId) != sessionId || latestAfterSummary?.timestampMillis != latestMessage.timestampMillis) return false
         store.saveSessionSummary(friendId, SessionSummary(sessionId, sessionMessages.minOf { it.timestampMillis }, System.currentTimeMillis(), summary))

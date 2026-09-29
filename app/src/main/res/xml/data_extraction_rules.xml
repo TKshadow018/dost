@@ -5,15 +5,12 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Chat history, profile data, and the encrypted API key stay on the device. -->
+        <exclude domain="sharedpref" path="dost_local_data.xml"/>
+        <exclude domain="file" path="messages/"/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="dost_local_data.xml"/>
+        <exclude domain="file" path="messages/"/>
     </device-transfer>
-    -->
 </data-extraction-rules>
