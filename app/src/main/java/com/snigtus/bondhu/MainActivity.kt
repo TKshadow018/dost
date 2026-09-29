@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.snigtus.dost
 
@@ -29,8 +29,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -138,6 +144,16 @@ fun DostApp() {
         closeAfterOverlayPermission = false
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(screen) {
+        if (screen == AppScreen.HOME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ReplyNotifier.ensureChannel(context)
+            if (!ReplyNotifier.canNotify(context)) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
     fun requestFloatingChat(friendId: String? = null, closeApp: Boolean = false) {
         bubbleFriendId = friendId ?: selectedFriend?.id ?: friends.firstOrNull()?.id
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
@@ -157,6 +173,7 @@ fun DostApp() {
         if (friends.size >= 5) return
         friends.add(friend)
         store.saveFriends(friends)
+        ConversationWorkScheduler.scheduleMorningGreeting(context, friend, language)
         scope.launch {
             runCatching { OpenRouterClient().generateFriendProfile(store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, language) }
                 .onSuccess { profile ->
@@ -187,7 +204,17 @@ fun DostApp() {
         store.saveFriends(friends)
     }
 
-    Crossfade(targetState = screen, label = "pageTransition") { currentScreen ->
+    androidx.compose.animation.AnimatedContent(
+        targetState = screen,
+        label = "pageTransition",
+        transitionSpec = {
+            val order = listOf(AppScreen.SPLASH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE)
+            val forward = order.indexOf(targetState) >= order.indexOf(initialState)
+            val slideIn = slideInHorizontally(animationSpec = tween(300)) { if (forward) it else -it }
+            val slideOut = slideOutHorizontally(animationSpec = tween(300)) { if (forward) -it else it }
+            slideIn.togetherWith(slideOut)
+        }
+    ) { currentScreen ->
     when (currentScreen) {
         AppScreen.SPLASH -> DostSplashScreen {
             screen = if (store.hasUserProfile()) AppScreen.HOME else AppScreen.REGISTER
@@ -275,23 +302,18 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     Scaffold(
-        containerColor = Color.Black,
-        contentColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
                 actions = {
                     TextButton(onClick = { showSettings = true }) { Text(when { bangla -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) }
                     TextButton(onClick = { if (friends.size < 5) showAddFriend = true }) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black,
-                    titleContentColor = Color.White,
-                    actionIconContentColor = Color.White
-                )
+                }
             )
         },
-        floatingActionButton = { FloatingActionButton(onClick = { if (friends.size < 5) showAddFriend = true }, containerColor = Color.White, contentColor = Color.Black) { Text("+") } }
+        floatingActionButton = { FloatingActionButton(onClick = { if (friends.size < 5) showAddFriend = true }, containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+") } }
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding), verticalArrangement = Arrangement.spacedBy(0.dp)) {
             item {
@@ -299,9 +321,9 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(when { bangla -> "বন্ধুরা"; hindi -> "दोस्त"; else -> "Friends" }, style = MaterialTheme.typography.titleMedium); Text("${friends.size}/5", style = MaterialTheme.typography.labelLarge) }
                 }
             }
-            item { HorizontalDivider(color = Color.White.copy(alpha = 0.16f)) }
+            item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
             if (friends.isEmpty()) item { EmptyFriendsState(onAdd = { showAddFriend = true }, language = language) }
-            items(friends) { friend -> FriendRow(friend, unread = unreadCounts[friend.id] ?: 0, onOpenChat = { onOpenChat(friend) }, language = language) }
+            items(friends) { friend -> FriendRow(friend, unread = unreadCounts[friend.id] ?: 0, onOpenChat = { onOpenChat(friend) }, onDelete = { onDeleteFriend(friend) }, language = language) }
         }
     }
     if (showAddFriend) AddFriendDialog(onDismiss = { showAddFriend = false }, onAdd = { onAddFriend(it); showAddFriend = false })
@@ -313,23 +335,35 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
 private fun EmptyFriendsState(onAdd: () -> Unit, language: AppLanguage) {
     val hindi = language == AppLanguage.HINDI
     Column(modifier = Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(when { language == AppLanguage.BANGLA -> "এখনও কোনো মেসেজ নেই"; hindi -> "अभी कोई संदेश नहीं है"; else -> "No messages yet" }, style = MaterialTheme.typography.titleLarge)
-        Text(when { language == AppLanguage.BANGLA -> "চ্যাট তালিকা শুরু করতে একজন বন্ধু যোগ করুন।"; hindi -> "अपनी चैट सूची शुरू करने के लिए एक दोस्त जोड़ें।"; else -> "Add a friend to start your chat list." })
+        DostBrand()
+        Text(when { language == AppLanguage.BANGLA -> "এখনও কোনো বন্ধু নেই"; hindi -> "अभी कोई दोस्त नहीं"; else -> "No friends yet" }, style = MaterialTheme.typography.titleLarge)
+        Text(when { language == AppLanguage.BANGLA -> "একজন AI বন্ধু যোগ করুন এবং কথা বলা শুরু করুন।"; hindi -> "एक AI दोस्त जोड़ें और बात करना शुरू करें।"; else -> "Add an AI friend and start a conversation." }, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Button(onClick = onAdd) { Text(when { language == AppLanguage.BANGLA -> "বন্ধু যোগ করুন"; hindi -> "दोस्त जोड़ें"; else -> "Add a friend" }) }
     }
 }
 
 @Composable
-private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, language: AppLanguage) {
-    Row(modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenChat).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage) {
+    var confirmDelete by remember { mutableStateOf(false) }
+    val lastMessage = ConversationManager.messages.collectAsState().value[friend.id]?.lastOrNull()
+    androidx.compose.foundation.layout.Box {
+        Row(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onOpenChat, onLongClick = { confirmDelete = true }).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             FriendPhoto(friend.photoUri, friend.name, Modifier.size(46.dp).clip(CircleShape))
             Column(modifier = Modifier.weight(1f)) {
-                Text(friend.name, style = MaterialTheme.typography.titleMedium)
-                Text("${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100", style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else "", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100",
+                    style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.size(width = 64.dp, height = 6.dp))
+            LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.size(width = 56.dp, height = 6.dp))
             if (unread > 0) Badge { Text(unread.coerceAtMost(99).toString()) }
         }
+        DropdownMenu(expanded = confirmDelete, onDismissRequest = { confirmDelete = false }) {
+            DropdownMenuItem(text = { Text(when { language == AppLanguage.BANGLA -> "মুছুন"; language == AppLanguage.HINDI -> "हटाएं"; else -> "Delete" }, color = MaterialTheme.colorScheme.error) }, onClick = { confirmDelete = false; onDelete() })
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -591,7 +625,12 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
     var showUserInfo by remember { mutableStateOf(false) }
     var showSessionSummaries by remember { mutableStateOf(false) }
     var showChatMenu by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var showSearch by remember { mutableStateOf(false) }
     var sessionSummaries by remember(friend.id) { mutableStateOf(store.loadSessionSummaries(friend.id).takeLast(10).reversed()) }
+    val displayedMessages = remember(messages, searchQuery) {
+        if (searchQuery.isBlank()) messages else messages.filter { it.content.contains(searchQuery, ignoreCase = true) }
+    }
     val busyUntil = friend.replyAvailableAt(currentTime)
     val dailyBusyStart = LocalTime.of(friend.busyStartHour.coerceIn(0, 23), 0)
     val dailyBusyEnd = dailyBusyStart.plusHours(friend.busyDurationHours.coerceIn(4, 8).toLong())
@@ -609,13 +648,28 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
         val itemCount = messages.size + (if (sending) 1 else 0) + (if (error != null) 1 else 0)
         if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
     }
-    Scaffold(topBar = { TopAppBar(title = { Row(modifier = Modifier.clickable { showFriendInfo = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { FriendPhoto(friend.photoUri, friend.name, Modifier.size(40.dp).clip(CircleShape)); Column { Text(friend.name); Text("${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100", style = MaterialTheme.typography.labelSmall); Text(if (busyUntil != null) "Busy until ${busyUntil.format(DateTimeFormatter.ofPattern("h:mm a z"))}" else "Daily busy ${dailyBusyStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${dailyBusyEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${friend.timeZoneId})", style = MaterialTheme.typography.labelSmall) } } }, navigationIcon = { TextButton(onClick = onBack) { Text(when { bangla -> "ফিরুন"; hindi -> "वापस"; else -> "Back" }) } }, actions = { androidx.compose.foundation.layout.Box { IconButton(onClick = { showChatMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }; DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) { DropdownMenuItem(text = { Text("Your profile") }, onClick = { showChatMenu = false; showUserInfo = true }); DropdownMenuItem(text = { Text("Session summaries") }, onClick = { showChatMenu = false; sessionSummaries = store.loadSessionSummaries(friend.id).takeLast(10).reversed(); showSessionSummaries = true }); DropdownMenuItem(text = { Text("Minimize chat") }, onClick = { showChatMenu = false; onFloatingChat() }) } } }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Row(modifier = Modifier.clickable { showFriendInfo = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { FriendPhoto(friend.photoUri, friend.name, Modifier.size(40.dp).clip(CircleShape)); Column { Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else ""); Text("${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100", style = MaterialTheme.typography.labelSmall); Text(if (busyUntil != null) "${friend.name} will reply at ${busyUntil.format(DateTimeFormatter.ofPattern("h:mm a"))}" else "Daily busy ${dailyBusyStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${dailyBusyEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${friend.timeZoneId})", style = MaterialTheme.typography.labelSmall) } } }, navigationIcon = { TextButton(onClick = onBack) { Text(when { bangla -> "ফিরুন"; hindi -> "वापस"; else -> "Back" }) } }, actions = { androidx.compose.foundation.layout.Box { IconButton(onClick = { showChatMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }; DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) { DropdownMenuItem(text = { Text("Search") }, onClick = { showChatMenu = false; showSearch = !showSearch; if (!showSearch) searchQuery = "" }); DropdownMenuItem(text = { Text("Export chat") }, onClick = { showChatMenu = false; exportChat(context, friend, messages) }); DropdownMenuItem(text = { Text("Your profile") }, onClick = { showChatMenu = false; showUserInfo = true }); DropdownMenuItem(text = { Text("Session summaries") }, onClick = { showChatMenu = false; sessionSummaries = store.loadSessionSummaries(friend.id).takeLast(10).reversed(); showSessionSummaries = true }); DropdownMenuItem(text = { Text("Minimize chat") }, onClick = { showChatMenu = false; onFloatingChat() }) } } }) }) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             RelationshipMeters(friend = friend, language = language)
+            if (showSearch) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text(when { bangla -> "মেসেজ খুঁজুন..."; hindi -> "संदेश खोजें..."; else -> "Search messages..." }) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)) {
-                if (messages.isEmpty()) item { Text(when { bangla -> "${friend.name}-এর সাথে কথা বলা শুরু করুন।"; hindi -> "${friend.name} के साथ बातचीत शुरू करें।"; else -> "Start a conversation with ${friend.name}." }, modifier = Modifier.padding(12.dp)) }
-                items(messages) { message ->
-                    MessageBubble(message = message, friendName = friend.name)
+                if (displayedMessages.isEmpty()) item { Text(when { bangla -> "${friend.name}-এর সাথে কথা বলা শুরু করুন।"; hindi -> "${friend.name} के साथ बातचीत शुरू करें।"; else -> "Start a conversation with ${friend.name}." }, modifier = Modifier.padding(12.dp)) }
+                items(displayedMessages) { message ->
+                    MessageBubble(
+                        message = message,
+                        friendName = friend.name,
+                        onRegenerate = if (message.role == "assistant" && message.messageId == displayedMessages.lastOrNull { it.role == "assistant" }?.messageId) {
+                            { ConversationManager.regenerateReply(friend, language) }
+                        } else null
+                    )
                 }
                 if (sending && waitingForSchedule) item { Text("${friend.name} will reply after the busy schedule.", modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium) }
                 else if (sending) item { ThinkingBubble(friendName = friend.name, bangla = bangla, hindi = hindi) }
@@ -722,26 +776,65 @@ private fun SessionSummariesDialog(summaries: List<SessionSummary>, language: Ap
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, friendName: String) {
+private fun MessageBubble(message: ChatMessage, friendName: String, onRegenerate: (() -> Unit)? = null) {
     val isUser = message.role == "user"
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
-        Surface(
-            color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.fillMaxWidth(0.84f)
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(if (isUser) "You" else friendName, style = MaterialTheme.typography.labelSmall)
-                val image = remember(message.imagePath) {
-                    message.imagePath.takeIf { it.isNotBlank() && File(it).isFile }
-                        ?.let(BitmapFactory::decodeFile)?.asImageBitmap()
+    val context = LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
+    val timeText = remember(message.timestampMillis) {
+        Instant.ofEpochMilli(message.timestampMillis).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("h:mm a"))
+    }
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
+        androidx.compose.foundation.layout.Box {
+            Surface(
+                color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                shape = RoundedCornerShape(
+                    topStart = 18.dp, topEnd = 18.dp,
+                    bottomStart = if (isUser) 18.dp else 4.dp,
+                    bottomEnd = if (isUser) 4.dp else 18.dp
+                ),
+                modifier = Modifier
+                    .fillMaxWidth(0.84f)
+                    .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(if (isUser) "You" else friendName, style = MaterialTheme.typography.labelSmall)
+                    val image = remember(message.imagePath) {
+                        message.imagePath.takeIf { it.isNotBlank() && File(it).isFile }
+                            ?.let(BitmapFactory::decodeFile)?.asImageBitmap()
+                    }
+                    if (image != null) Image(image, contentDescription = "Attached image", modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)))
+                    Text(message.content, style = MaterialTheme.typography.bodyLarge)
                 }
-                if (image != null) Image(image, contentDescription = "Attached image", modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)))
-                Text(message.content, style = MaterialTheme.typography.bodyLarge)
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(text = { Text("Copy") }, onClick = {
+                    menuOpen = false
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("message", message.content))
+                })
+                if (!isUser && onRegenerate != null) {
+                    DropdownMenuItem(text = { Text("Reply differently") }, onClick = { menuOpen = false; onRegenerate() })
+                }
             }
         }
+        Text(timeText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
     }
+}
+
+private fun exportChat(context: Context, friend: Friend, messages: List<ChatMessage>) {
+    val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
+    val transcript = messages.joinToString("\n") { message ->
+        val who = if (message.role == "user") "You" else friend.name
+        val time = Instant.ofEpochMilli(message.timestampMillis).atZone(ZoneId.systemDefault()).format(formatter)
+        "[$time] $who: ${message.content}"
+    }
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Chat with ${friend.name}")
+        putExtra(Intent.EXTRA_TEXT, transcript)
+    }
+    context.startActivity(Intent.createChooser(intent, "Export chat"))
 }
 
 private fun storeChatImage(context: Context, uri: Uri): String {

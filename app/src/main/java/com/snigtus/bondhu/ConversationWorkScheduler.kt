@@ -18,6 +18,7 @@ internal object ConversationWorkScheduler {
     private const val BUSY_REPLY = "busy_reply"
     private const val CHECK_IN = "check_in"
     private const val SESSION_SUMMARY = "session_summary"
+    private const val MORNING_GREETING = "morning_greeting"
 
     fun scheduleBusyReply(context: Context, friend: Friend, sessionId: String, language: AppLanguage) {
         val now = ZonedDateTime.now()
@@ -43,6 +44,19 @@ internal object ConversationWorkScheduler {
         workManager.cancelUniqueWork("reply_$friendId")
         workManager.cancelUniqueWork("check_in_$friendId")
         workManager.cancelUniqueWork("session_end_$friendId")
+        workManager.cancelUniqueWork("morning_$friendId")
+    }
+
+    fun scheduleMorningGreeting(context: Context, friend: Friend, language: AppLanguage) {
+        val zone = validZoneId(friend.timeZoneId)
+        val now = ZonedDateTime.now(zone)
+        var target = now.withHour(8).withMinute(0).withSecond(0).withNano(0)
+        if (!now.isBefore(target)) target = target.plusDays(1)
+        // Don't greet during busy hours; push to after the busy window if needed.
+        val availableAt = friend.replyAvailableAt(target) ?: target
+        val delayMillis = Duration.between(ZonedDateTime.now(zone), availableAt).toMillis().coerceAtLeast(0L)
+        val sessionId = java.util.UUID.randomUUID().toString()
+        enqueue(context, "morning_${friend.id}", ExistingWorkPolicy.REPLACE, MORNING_GREETING, friend.id, sessionId, language, delayMillis)
     }
 
     fun scheduleSessionEnd(context: Context, friendId: String, sessionId: String, delayMillis: Long) {
@@ -114,6 +128,11 @@ internal class ConversationTaskWorker(context: Context, parameters: WorkerParame
                     )
                 }
                 "session_summary" -> ConversationManager.runSessionSummary(friendId, sessionId)
+                "morning_greeting" -> {
+                    val language = inputData.getString("language")?.let { runCatching { AppLanguage.valueOf(it) }.getOrNull() }
+                        ?: return Result.failure()
+                    ConversationManager.runMorningGreeting(friendId, sessionId, language)
+                }
                 else -> return Result.failure()
             }
             if (completed) Result.success() else Result.retry()

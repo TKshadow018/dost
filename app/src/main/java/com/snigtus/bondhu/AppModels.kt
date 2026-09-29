@@ -27,6 +27,7 @@ data class Friend(
     ,val bodyFeatures: String = ""
     ,val friendshipScore: Int = 0
     ,val loveScore: Int = 0
+    ,val mood: String = ""
     ,val photoUri: String = ""
     ,val busyStartHour: Int = if ((age.toIntOrNull() ?: 18) < 18) 8 else 9
     ,val busyDurationHours: Int = if ((age.toIntOrNull() ?: 18) < 18) 6 else 8

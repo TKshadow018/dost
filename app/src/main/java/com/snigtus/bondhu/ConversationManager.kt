@@ -103,8 +103,10 @@ object ConversationManager {
         sendingState.update { it + friend.id }
         scope.launch {
             try {
+                delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
                 store.addUserMemories(friend.id, answer.memories)
+                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
                 val friendship = (friend.friendshipScore + answer.friendshipImpact).coerceIn(0, 100)
                 val love = if (friendship > 70) (friend.loveScore + answer.loveImpact).coerceIn(0, 100) else 0
                 val currentFriend = store.loadFriends().firstOrNull { it.id == friend.id }
@@ -199,6 +201,27 @@ object ConversationManager {
         if (activeFriendId != friendId) {
             store.incrementUnread(friendId)
             unreadState.update { it + (friendId to store.unreadCount(friendId)) }
+            store.loadFriends().firstOrNull { it.id == friendId }?.let { friend ->
+                ReplyNotifier.notifyReply(appContext, friend, response)
+            }
+        }
+    }
+
+    private fun updateMood(friend: Friend, friendshipImpact: Int, loveImpact: Int) {
+        val total = friendshipImpact + loveImpact
+        val mood = when {
+            total >= 2 -> "😊"
+            total == 1 -> "🙂"
+            total <= -1 -> "😔"
+            else -> friend.mood
+        }
+        if (mood != friend.mood) {
+            val friends = store.loadFriends()
+            val index = friends.indexOfFirst { it.id == friend.id }
+            if (index >= 0) {
+                friends[index] = friends[index].copy(mood = mood)
+                store.saveFriends(friends)
+            }
         }
     }
 
@@ -214,11 +237,48 @@ object ConversationManager {
         AppLanguage.ENGLISH -> "I'm having connection trouble right now. Try again in a little while and I'll reply."
     }
 
-    private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false): AiReply {
+    private fun typingDelayMillis(): Long = 700L + java.util.concurrent.ThreadLocalRandom.current().nextLong(1_300L)
+
+    fun regenerateReply(friend: Friend, language: AppLanguage) {
+        val sessionId = store.currentSessionId(friend.id) ?: return
+        if (jobs.contains(friend.id) || friend.replyAvailableAt(ZonedDateTime.now()) != null) return
+        val messages = messagesFor(friend.id).toMutableList()
+        // Remove trailing assistant messages until we reach a user message to regenerate against.
+        while (messages.isNotEmpty() && messages.last().role == "assistant" && messages.last().sessionId == sessionId) {
+            messages.removeAt(messages.lastIndex)
+        }
+        if (messages.lastOrNull { it.sessionId == sessionId }?.role != "user") return
+        publish(friend.id, messages)
+        store.saveMessages(friend.id, messages)
+        jobs.add(friend.id)
+        sendingState.update { it + friend.id }
+        scope.launch {
+            try {
+                delay(typingDelayMillis())
+                val answer = requestReply(friend, sessionId, language)
+                store.addUserMemories(friend.id, answer.memories)
+                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
+                val response = listOf(
+                    answer.text,
+                    answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+                ).filter { it.isNotBlank() }.joinToString("\n\n")
+                appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, store.aiModel())
+            } catch (_: Throwable) {
+                appendAssistant(friend.id, connectionIssueReply(language), modelId = store.aiModel())
+            } finally {
+                jobs.remove(friend.id)
+                sendingState.update { it - friend.id }
+            }
+        }
+    }
+
+    private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null): AiReply {
         val client = OpenRouterClient()
         val selectedModel = store.aiModel()
         val apiKey = store.openRouterApiKey()
-        val history = messagesFor(friend.id).filter { it.sessionId == sessionId }
+        val history = messagesFor(friend.id).filter { it.sessionId == sessionId }.let { existing ->
+            if (seedMessage != null && existing.isEmpty()) listOf(seedMessage) else existing
+        }
         try {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
@@ -324,4 +384,28 @@ object ConversationManager {
 
     private const val DEFAULT_FOLLOW_UP_MILLIS = 30_000L //will be 1 minutes later
     private const val SESSION_INACTIVITY_MILLIS = 5 * 60 * 1000L // will be 60 minutes later
+
+    suspend fun runMorningGreeting(friendId: String, sessionId: String, language: AppLanguage): Boolean {
+        val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
+        // Reschedule tomorrow's greeting first so the chain never dies.
+        ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, language)
+        if (friend.replyAvailableAt(ZonedDateTime.now()) != null) return true
+        if (!jobs.add(friendId)) return false
+        sendingState.update { it + friendId }
+        try {
+            val greetingSeed = ChatMessage("user", "Say a warm good-morning greeting to me as if you just woke up and thought of me.", sessionId = sessionId, modelId = store.aiModel())
+            val answer = runCatching {
+                requestReply(friend, sessionId, language, forceFollowUp = false, seedMessage = greetingSeed)
+            }.getOrNull() ?: return true
+            val response = listOf(
+                answer.text,
+                answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+            ).filter { it.isNotBlank() }.joinToString("\n\n")
+            if (response.isNotBlank()) appendAssistant(friendId, response, answer.serverMessageId, store.aiModel())
+            return true
+        } finally {
+            jobs.remove(friendId)
+            sendingState.update { it - friendId }
+        }
+    }
 }
