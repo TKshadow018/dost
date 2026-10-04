@@ -14,6 +14,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +33,12 @@ fun FriendPhoto(photoUri: String, fallback: String, modifier: Modifier = Modifie
         contentAlignment = Alignment.Center
     ) {
         if (bitmap != null) {
-            Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = "$fallback photo", modifier = Modifier.fillMaxSize())
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = "$fallback photo",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
         } else {
             Text(fallback.take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.titleLarge)
         }

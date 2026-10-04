@@ -41,7 +41,23 @@ data class SystemFriendListing(
     val name: String,
     val age: String,
     val gender: String,
+    val personality: String,
     val interests: String,
+    val memories: String,
+    val conversationStyle: String,
+    val family: String,
+    val familyMembers: String,
+    val familyActivities: String,
+    val financialCondition: String,
+    val address: String,
+    val height: String,
+    val weight: String,
+    val facialFeatures: String,
+    val bodyFeatures: String,
+    val busyStartHour: Int,
+    val busyDurationHours: Int,
+    val busyReason: String,
+    val timeZoneId: String,
     val photoUrl: String
 )
 

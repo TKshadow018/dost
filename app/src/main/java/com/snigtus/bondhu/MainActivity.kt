@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -502,6 +503,11 @@ private fun SystemFriendPickerDialog(
 ) {
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
+    val notProvided = when {
+        bangla -> "দেওয়া হয়নি"
+        hindi -> "उपलब्ध नहीं"
+        else -> "Not provided"
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(when { bangla -> "সিস্টেম বন্ধু"; hindi -> "सिस्टम दोस्त"; else -> "System friends" }) },
@@ -514,34 +520,74 @@ private fun SystemFriendPickerDialog(
                     }
                     catalog.isEmpty() && error == null -> Text(when { bangla -> "এখনও কোনো সিস্টেম বন্ধু নেই।"; hindi -> "अभी कोई सिस्टम दोस्त उपलब्ध नहीं है।"; else -> "No system friends are available yet." })
                     else -> LazyColumn(
-                        modifier = Modifier.heightIn(max = 420.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.heightIn(max = 540.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         items(catalog, key = { it.id }) { listing ->
                             val alreadyAdded = listing.id in addedCatalogIds
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                FriendPhoto(listing.photoUrl, listing.name, Modifier.size(48.dp).clip(CircleShape))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(listing.name, style = MaterialTheme.typography.titleSmall)
-                                    Text("${listing.age} · ${listing.gender}", style = MaterialTheme.typography.bodySmall)
-                                    if (listing.interests.isNotBlank()) {
-                                        Text(listing.interests, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                            val scheduleStart = LocalTime.of(listing.busyStartHour.coerceIn(0, 23), 0)
+                            val scheduleEnd = scheduleStart.plusHours(listing.busyDurationHours.coerceIn(4, 8).toLong())
+                            val details = listOf(
+                                (when { bangla -> "ব্যক্তিত্ব"; hindi -> "व्यक्तित्व"; else -> "Personality" }) to listing.personality,
+                                (when { bangla -> "আগ্রহ"; hindi -> "रुचियाँ"; else -> "Interests" }) to listing.interests,
+                                (when { bangla -> "স্মৃতি"; hindi -> "यादें"; else -> "Memories" }) to listing.memories,
+                                (when { bangla -> "কথোপকথনের ধরন"; hindi -> "बातचीत की शैली"; else -> "Conversation style" }) to listing.conversationStyle,
+                                (when { bangla -> "পরিবার"; hindi -> "परिवार"; else -> "Family" }) to listing.family,
+                                (when { bangla -> "পরিবারের সদস্য"; hindi -> "परिवार के सदस्य"; else -> "Family members" }) to listing.familyMembers,
+                                (when { bangla -> "পারিবারিক কাজকর্ম"; hindi -> "पारिवारिक गतिविधियाँ"; else -> "Family activities" }) to listing.familyActivities,
+                                (when { bangla -> "আর্থিক অবস্থা"; hindi -> "आर्थिक स्थिति"; else -> "Financial condition" }) to listing.financialCondition,
+                                (when { bangla -> "ঠিকানা"; hindi -> "पता"; else -> "Address" }) to listing.address,
+                                (when { bangla -> "উচ্চতা"; hindi -> "कद"; else -> "Height" }) to listing.height,
+                                (when { bangla -> "ওজন"; hindi -> "वज़न"; else -> "Weight" }) to listing.weight,
+                                (when { bangla -> "মুখের বৈশিষ্ট্য"; hindi -> "चेहरे की विशेषताएँ"; else -> "Facial features" }) to listing.facialFeatures,
+                                (when { bangla -> "শারীরিক গঠন"; hindi -> "शारीरिक बनावट"; else -> "Body features" }) to listing.bodyFeatures,
+                                (when { bangla -> "ব্যস্ততার কারণ"; hindi -> "व्यस्त रहने का कारण"; else -> "Busy with" }) to listing.busyReason,
+                                (when { bangla -> "দৈনিক সময়সূচি"; hindi -> "दैनिक समय-सारणी"; else -> "Daily schedule" }) to "${scheduleStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${scheduleEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${listing.timeZoneId})",
+                                (when { bangla -> "সময় অঞ্চল"; hindi -> "समय क्षेत्र"; else -> "Time zone" }) to listing.timeZoneId
+                            )
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(20.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    FriendPhoto(
+                                        listing.photoUrl,
+                                        listing.name,
+                                        Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(14.dp))
+                                    )
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(listing.name, style = MaterialTheme.typography.headlineSmall)
+                                        Text(
+                                            "${listing.age} · ${listing.gender}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    HorizontalDivider()
+                                    details.forEach { (label, value) ->
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                            Text(value.ifBlank { notProvided }, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                    }
+                                    Button(
+                                        onClick = { onSelect(listing) },
+                                        enabled = !alreadyAdded && !systemLimitReached && addingCatalogId == null,
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                    ) {
+                                        Text(when {
+                                            addingCatalogId == listing.id -> if (bangla) "যোগ হচ্ছে..." else if (hindi) "जोड़ा जा रहा है..." else "Adding..."
+                                            alreadyAdded -> if (bangla) "যোগ হয়েছে" else if (hindi) "जोड़ा गया" else "Added"
+                                            bangla -> "এই বন্ধুকে যোগ করুন"
+                                            hindi -> "इस दोस्त को जोड़ें"
+                                            else -> "Add this friend"
+                                        })
                                     }
                                 }
-                                TextButton(
-                                    onClick = { onSelect(listing) },
-                                    enabled = !alreadyAdded && !systemLimitReached && addingCatalogId == null
-                                ) {
-                                    Text(when {
-                                        addingCatalogId == listing.id -> if (bangla) "যোগ হচ্ছে" else if (hindi) "जोड़ रहे हैं" else "Adding"
-                                        alreadyAdded -> if (bangla) "যোগ হয়েছে" else if (hindi) "जोड़ा गया" else "Added"
-                                        bangla -> "যোগ করুন"
-                                        hindi -> "जोड़ें"
-                                        else -> "Add"
-                                    })
-                                }
                             }
-                            HorizontalDivider()
                         }
                     }
                 }
