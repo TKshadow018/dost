@@ -1,8 +1,6 @@
 package com.snigtus.dost
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -26,9 +24,7 @@ fun FriendPhoto(photoUri: String, fallback: String, modifier: Modifier = Modifie
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(initialValue = null, key1 = photoUri) {
         value = if (photoUri.isBlank()) null else withContext(Dispatchers.IO) {
-            runCatching {
-                context.contentResolver.openInputStream(Uri.parse(photoUri))?.use(BitmapFactory::decodeStream)
-            }.getOrNull()
+            runCatching { FriendPhotoLoader.load(context, photoUri) }.getOrNull()
         }
     }
     Box(

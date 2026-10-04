@@ -41,9 +41,9 @@ class OpenRouterClient {
             "mistralai/mistral-medium-3", "mistralai/mistral-small-3.1-24b-instruct",
             "x-ai/grok-3-mini", "perplexity/sonar", "cohere/command-a"
         )).distinct()
-        private const val MAX_HISTORY_MESSAGES = 30
-        private const val MAX_MEMORY_ITEMS = 100
-        private const val MAX_SUMMARY_MESSAGES = 60
+        private const val MAX_MEMORY_ITEMS = 200
+        private const val MAX_SUMMARY_MESSAGES = 100
+        private const val MAX_SESSION_SUMMARY_ITEMS = 7
     }
 
     suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false): AiReply = withContext(Dispatchers.IO) {
@@ -95,7 +95,7 @@ class OpenRouterClient {
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
         val friendDateTime = ZonedDateTime.now(validZoneId(friend.timeZoneId)).format(formatter)
         val memoryContext = userMemories.takeLast(MAX_MEMORY_ITEMS).joinToString("\n") { "- [${it.category}] ${it.fact}" }.ifBlank { "No stored information yet." }
-        val sessionSummaryContext = sessionSummaries.takeLast(3).joinToString("\n\n") {
+        val sessionSummaryContext = sessionSummaries.takeLast(MAX_SESSION_SUMMARY_ITEMS).joinToString("\n\n") {
             "Session summary: ${it.summary}"
         }.ifBlank { "No previous session summaries yet." }
         val profileContext = listOf(
@@ -104,6 +104,37 @@ class OpenRouterClient {
             "Financial condition: ${friend.financialCondition}", "Address: ${friend.address}", "Height: ${friend.height}",
             "Weight: ${friend.weight}", "Facial features: ${friend.facialFeatures}", "Body features: ${friend.bodyFeatures}"
         ).joinToString("\n")
+        val questionGuidance = if (forceFollowUp) {
+            "This is a scheduled check-in. Choose exactly one: ask one relevant follow-up question about the conversation, or add useful relevant information to your previous answer. Do not do both. Prefer adding information when the previous answer can be usefully expanded; otherwise ask one question. Do not repeat answered questions or invent information. If the user seemed uncomfortable, do not ask a question."
+        } else {
+            "This is a regular reply. Do not ask the user a counter-question or any other question. Do not put a question in reply, and leave follow_up_question empty."
+        }
+        val memoryExtractionGuidance = """
+            MANDATORY FORENSIC MEMORY EXTRACTION: This is a critical, comprehensive extraction task, not an optional summary. Before composing a reply, meticulously inspect every user-authored message in the current turn. Use the conversation history solely to resolve pronouns and references, but do not duplicate previously saved facts.
+            
+            ATOMIZE FACTS: Save every distinct, explicitly stated detail as an independent, standalone memory item. Do not impose item limits, and never omit details to shorten the output. Atomize compound sentences and lists: each extracted memory must contain only one core fact with its full context so it makes sense in isolation. 
+            
+            EXPANDED CATEGORICAL COVERAGE: Scan for and extract details across all life domains:
+            - Identity & Demographics: Names, ages, birthdays, languages, cultural background, pronouns.
+            - Relationships: Family, friends, partners, colleagues, enemies, and pets (include names, species/breed, dynamics, and individual facts about these third parties).
+            - Location & Housing: Current/past cities, travel plans, living situations, roommates, homeownership.
+            - Career & Education: Jobs, roles, degrees, schools, projects, skills, tech stacks, workplace frustrations or ambitions.
+            - Lifestyle & Preferences: Hobbies, media consumption (books, games, movies), dietary restrictions, favorite foods/drinks, routines, sleep habits, daily schedules.
+            - Health & Well-being: explicitly stated medical conditions, fitness routines, mental health states, physical traits.
+            - Psychology & Values: Core beliefs, political/philosophical leanings, fears, worries, goals, constraints, and communication preferences (e.g., "be blunt with me").
+            - Finances & Assets: Vehicles owned, technology/devices used, financial goals, or constraints.
+            
+            EMOTIONAL VALENCE & TIMELINES: Do not just capture the sterile fact; capture the user's relationship to it. Record whether they love, hate, or are anxious about a specific thing. Explicitly tag whether a fact is in the past, currently happening, or a future intention/goal.
+            
+            EXAMPLE EXTRACTION: 
+            From: "I live in a tiny apartment in Sylhet, teach high school math because I love kids, drink green tea every morning, and my younger brother Rafi is struggling with med school in Dhaka."
+            Extract separate items: 
+            1) User lives in Sylhet. 2) User lives in a small apartment. 3) User teaches high school math. 4) User loves children. 5) User drinks green tea. 6) User drinks green tea in the mornings. 7) User has a younger brother named Rafi. 8) Rafi is in medical school. 9) Rafi goes to school in Dhaka. 10) Rafi is struggling with his medical studies.
+            
+            PRECISION & CONFLICT RESOLUTION: Preserve exact quantities, dates, specific names, and constraints. Preserve negation (e.g., "User does not eat pork") and uncertainty (e.g., "User is unsure if they will quit their job"). If the user updates a detail (e.g., moving to a new city), explicitly format it as an update so it overrides older context. Never infer, invent, or guess details.
+            
+            SECURITY: Never store passwords, API keys, or authentication secrets. Store ordinary sensitive details (like health or finances) ONLY if explicitly volunteered by the user. Return an empty array only if the user explicitly provided zero new personal data in the current turn.
+        """.trimIndent()
         val system = """
             You are ${friend.name}, a fictional friend in the Dost app. Age: ${friend.age}. Gender: ${friend.gender}. Personality: ${friend.personality}. Interests: ${friend.interests.ifBlank { "not known yet" }}. Memories: ${friend.memories.ifBlank { "none yet" }}. Conversation style: ${friend.conversationStyle}. Your daily busy time is for ${friend.busyReason.lowercase(Locale.ROOT)}; when it naturally fits, you may mention that you were at ${friend.busyReason.lowercase(Locale.ROOT)}.
             Full fictional character profile:
@@ -113,21 +144,23 @@ class OpenRouterClient {
             Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Stay in character, never claim to be a real person, and answer naturally.
             The following are facts the user explicitly shared in earlier conversations. Use them only when relevant:
             $memoryContext
-            Summaries of the three most recently ended sessions, for continuity:
+            $memoryExtractionGuidance
+            Summaries of up to the seven most recently ended sessions, for continuity:
             $sessionSummaryContext
 
             Return only valid JSON with this exact shape:
             {"reply":"your natural response","memories":[{"category":"family|relatives|address|contact|profile|preferences|interests|goals|routines|important_dates|relationships|health|work_or_study|education|finances|travel|other","fact":"one explicitly stated personal fact"}],"follow_up_question":"one optional friendly question, or an empty string","follow_up_delay_minutes":null,"friendship_impact":0,"love_impact":0}
+            Never include internal safety, moderation, or classifier metadata (for example, "User Safety: safe") in reply or follow_up_question.
             Extract every explicit personal detail the user gives in their latest messages, including seemingly small details and details about family members or other people they mention. For example, save separate facts for having three brothers, a father's workplace, a mother's age, and an address. Never infer or invent facts. Do not store passwords, API keys, security codes, or other authentication secrets. Store ordinary sensitive personal details only because the user explicitly gave them, and use them discreetly. Use an empty memories array when there is nothing personal to save.
             Before replying, do a detail pass over the user's latest messages. Save one concise fact per memory item; preserve exact names, who each person is to the user, quantities, dates, time periods, locations, preferences, reasons, plans, constraints, and whether something is current, past, or only intended. Keep facts about the user distinct from facts about relatives, friends, coworkers, and other people. Preserve meaningful negation and uncertainty instead of turning it into certainty. If the user corrects a prior detail, save the correction explicitly without erasing the historical detail. Do not merge unrelated facts or infer missing links.
-            The combined reply and follow_up_question may contain at most one question total. Never ask stacked questions or put one question in each field. In roughly half of regular replies ask exactly one light, friendly question; in the others ask none. For a requested check-in, ask at most one question. Do not interrogate, repeat a question already answered, or ask for secrets. Make it playful or gently funny when it fits, while remaining respectful. If the user seems uncomfortable or asks not to share, ask no question.
+            The combined reply and follow_up_question may contain at most one question total. Never ask stacked questions or put one question in each field. $questionGuidance Do not interrogate, repeat a question already answered, or ask for secrets. Make it playful or gently funny when it fits, while remaining respectful. If the user seems uncomfortable or asks not to share, ask no question.
             Set follow_up_delay_minutes to an integer from 1 to 1440 only when the user explicitly asks for a future check-in after a duration; otherwise set it to null. When a delay is requested, do not ask an immediate follow-up question.
             Rate the latest conversation's relationship impact. friendship_impact must be an integer from -1 to 2. love_impact must be an integer from -1 to 2 only when friendship is above 70 and the conversation is clearly flirty or romantic; otherwise use 0. Apply friendship impact to warmth, trust, respectful openness, and shared conversation. A private question from a complete stranger should be met with a gentle boundary such as "Whoa, we just met" rather than a direct answer, and should not earn positive points. Do not unlock private or intimate talk early. Personal talk becomes more open around friendship 41+, private talk around 61+, and romantic/intimate-but-non-explicit talk only when friendship is above 70 and love is above 30. Never generate explicit sexual content.
         """.trimIndent()
         val imageMessages = history.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
         val messages = JSONArray().apply {
             put(JSONObject().apply { put("role", "system"); put("content", system) })
-            history.takeLast(MAX_HISTORY_MESSAGES).forEach { message -> put(JSONObject().apply {
+            history.forEach { message -> put(JSONObject().apply {
                 put("role", message.role)
                 put("content", message.content)
                 put("message_id", message.messageId)
@@ -178,7 +211,7 @@ class OpenRouterClient {
 
     private fun requestSessionSummary(model: String, apiKey: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String {
         val connection = openConnection(apiKey)
-        val transcript = messages.takeLast(MAX_SUMMARY_MESSAGES).joinToString("\n") { message ->
+        val transcript = messages.takeLast(MAX_SESSION_SUMMARY_ITEMS).joinToString("\n") { message ->
             "${if (message.role == "user") "User" else friendName}: ${message.content}"
         }
         val system = "Summarize this complete conversation in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Preserve important topics, decisions, emotions, plans, and explicitly stated personal details. Do not infer or invent facts. Return only the summary."
@@ -194,7 +227,7 @@ class OpenRouterClient {
     }
 
     private fun parseReply(raw: String, serverMessageId: String?): AiReply {
-        val cleaned = raw.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val cleaned = removeSafetyMetadata(raw).removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         return runCatching {
             val json = JSONObject(cleaned)
             val memories = json.optJSONArray("memories") ?: JSONArray()
@@ -206,16 +239,22 @@ class OpenRouterClient {
                 if (fact.isNotBlank()) extracted.add(UserMemory(category, fact))
             }
             AiReply(
-                text = json.optString("reply", cleaned).trim(),
+                text = removeSafetyMetadata(json.optString("reply", cleaned)),
                 memories = extracted,
-                followUpQuestion = json.optString("follow_up_question").trim(),
+                followUpQuestion = removeSafetyMetadata(json.optString("follow_up_question")),
                 followUpDelayMinutes = (json.opt("follow_up_delay_minutes") as? Number)?.toInt()?.coerceIn(1, 1440),
                 friendshipImpact = json.optInt("friendship_impact", 0).coerceIn(-1, 2),
                 loveImpact = json.optInt("love_impact", 0).coerceIn(-1, 2),
                 serverMessageId = serverMessageId
             )
-        }.getOrElse { AiReply(raw, serverMessageId = serverMessageId) }
+        }.getOrElse { AiReply(removeSafetyMetadata(raw), serverMessageId = serverMessageId) }
     }
+
+    private fun removeSafetyMetadata(text: String): String = text
+        .replace(Regex("(?im)^[ \\t]*(?:user[ \\t]+)?safety[ \\t]*:[ \\t]*safe[ \\t]*(?:\\r?\\n|$)"), "")
+        .replace(Regex("(?i)\\b(?:user\\s+)?safety\\s*:\\s*safe\\b"), "")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
 
     private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"

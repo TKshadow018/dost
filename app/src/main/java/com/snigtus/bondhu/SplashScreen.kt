@@ -25,11 +25,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
 @Composable
-fun DostSplashScreen(onFinished: () -> Unit) {
+fun DostSplashScreen(language: AppLanguage, onFinished: () -> Unit) {
     var showLetters by remember { mutableStateOf(false) }
     var fadeToBlack by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -46,11 +50,27 @@ fun DostSplashScreen(onFinished: () -> Unit) {
         label = "splashBackground"
     )
 
-    val letters = listOf(
-        "d" to Color(0xFF2563EB),
-        "o" to Color(0xFFEC4899),
-        "s" to Color(0xFFF59E0B),
-        "t" to Color(0xFF10B981)
+    val letters = when (language) {
+        AppLanguage.BANGLA -> listOf(
+            "দো" to Color(0xFF2563EB),
+            "স্ত" to Color(0xFFEC4899)
+        )
+        AppLanguage.HINDI -> listOf(
+            "दो" to Color(0xFF2563EB),
+            "स्त" to Color(0xFFEC4899)
+        )
+        AppLanguage.ENGLISH -> listOf(
+            "D" to Color(0xFF2563EB),
+            "O" to Color(0xFFEC4899),
+            "S" to Color(0xFFF59E0B),
+            "T" to Color(0xFF10B981)
+        )
+    }
+    val wordmarkStyle = MaterialTheme.typography.displaySmall.copy(
+        fontFamily = FontFamily.Cursive,
+        fontWeight = FontWeight.Bold,
+        fontStyle = FontStyle.Italic,
+        letterSpacing = 1.sp
     )
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Box(modifier = Modifier.fillMaxSize().background(backgroundColor))
@@ -73,7 +93,7 @@ fun DostSplashScreen(onFinished: () -> Unit) {
                         Text(
                             text = letter,
                             color = color,
-                            style = MaterialTheme.typography.displaySmall
+                            style = wordmarkStyle
                         )
                     }
                 }

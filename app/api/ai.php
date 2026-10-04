@@ -9,6 +9,59 @@ function respond($status, $payload)
     exit;
 }
 
+function conversation_storage_base_directory()
+{
+    $configured = getenv('DOST_CONVERSATION_STORAGE_DIR');
+    return is_string($configured) && trim($configured) !== ''
+        ? rtrim($configured, DIRECTORY_SEPARATOR)
+        : dirname(__DIR__) . DIRECTORY_SEPARATOR . 'log';
+}
+
+function write_ai_error_log($event, $details = array())
+{
+    $entry = array_merge(array(
+        'timestamp' => gmdate(DATE_ATOM),
+        'event' => $event
+    ), $details);
+    $encoded = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    $directory = conversation_storage_base_directory();
+    if (is_string($encoded)
+        && (is_dir($directory) || @mkdir($directory, 0700, true) || is_dir($directory))
+    ) {
+        $path = $directory . DIRECTORY_SEPARATOR . 'ai-errors.jsonl';
+        $handle = @fopen($path, 'ab');
+        if ($handle !== false) {
+            $saved = flock($handle, LOCK_EX)
+                && fwrite($handle, $encoded . "\n") === strlen($encoded) + 1
+                && fflush($handle);
+            if ($saved && function_exists('fsync')) {
+                $saved = fsync($handle);
+            }
+            if ($saved) {
+                @chmod($path, 0600);
+            }
+            flock($handle, LOCK_UN);
+            fclose($handle);
+            if ($saved) {
+                return;
+            }
+        }
+    }
+    error_log('Dost AI diagnostic log write failed for event: ' . $event);
+}
+
+function bounded_log_text($value, $maximumLength = 500, $secret = '')
+{
+    if (!is_string($value)) {
+        return '';
+    }
+    $value = preg_replace('/[\x00-\x1F\x7F]/', ' ', $value);
+    if (is_string($secret) && $secret !== '') {
+        $value = str_replace($secret, '[redacted]', $value);
+    }
+    return substr(is_string($value) ? $value : '', 0, $maximumLength);
+}
+
 function valid_uuid($value)
 {
     return is_string($value) && preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i', $value) === 1;
@@ -56,10 +109,7 @@ function safe_log_path_segment($value, $fallback)
 
 function conversation_storage_directory($userName, $clientIp, $friendName, $sessionId)
 {
-    $configured = getenv('DOST_CONVERSATION_STORAGE_DIR');
-    $baseDirectory = is_string($configured) && trim($configured) !== ''
-        ? rtrim($configured, DIRECTORY_SEPARATOR)
-        : dirname(__DIR__) . DIRECTORY_SEPARATOR . 'log';
+    $baseDirectory = conversation_storage_base_directory();
     $userSegment = safe_log_path_segment($userName, 'unknown-user');
     $ipSegment = safe_log_path_segment(str_replace(':', '-', $clientIp), 'unknown-ip');
     $friendSegment = safe_log_path_segment($friendName, 'unknown-friend');
@@ -348,6 +398,7 @@ if (!is_string($serverApiKey) || trim($serverApiKey) === '') {
 $usesClientKey = $clientApiKey !== '';
 $apiKey = $usesClientKey ? $clientApiKey : $serverApiKey;
 if (!is_string($apiKey) || trim($apiKey) === '') {
+    write_ai_error_log('missing_api_key', array('model' => bounded_log_text($request['model'] ?? '')));
     respond(503, array('error' => 'AI service is not configured on the server'));
 }
 
@@ -367,8 +418,8 @@ $validCustomModel = is_string($model)
 if (!$validCustomModel || (!$usesClientKey && !in_array($model, $allowedModels, true))) {
     respond(400, array('error' => 'Requested model is not allowed'));
 }
-if (count($messages) < 1 || count($messages) > 100) {
-    respond(400, array('error' => 'The request must contain between 1 and 100 messages'));
+if (count($messages) < 1) {
+    respond(400, array('error' => 'The request must contain at least one message'));
 }
 foreach ($messages as $message) {
     if (!is_array($message)
@@ -416,6 +467,7 @@ if ($operation === 'chat_reply') {
         $chatEvents[] = $chatEvent;
     }
     if (!append_conversation_events($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, $chatEvents)) {
+        write_ai_error_log('conversation_history_persist_failed', array('model' => bounded_log_text($model)));
         respond(503, array('error' => 'Could not persist conversation history'));
     }
 }
@@ -456,7 +508,15 @@ $upstreamBody = json_encode(array(
     'temperature' => $temperature
 ), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 
+$requestStartedAt = microtime(true);
 $curl = curl_init('https://openrouter.ai/api/v1/chat/completions');
+if ($curl === false) {
+    write_ai_error_log('curl_initialization_failed', array(
+        'model' => bounded_log_text($model),
+        'key_source' => $usesClientKey ? 'client' : 'server'
+    ));
+    respond(502, array('error' => 'Could not reach the AI provider'));
+}
 curl_setopt_array($curl, array(
     CURLOPT_POST => true,
     CURLOPT_POSTFIELDS => $upstreamBody,
@@ -473,10 +533,45 @@ curl_setopt_array($curl, array(
 $upstreamResponse = curl_exec($curl);
 $upstreamStatus = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
 $curlError = curl_errno($curl);
+$curlErrorMessage = curl_error($curl);
 curl_close($curl);
+$requestDurationMs = (int) round((microtime(true) - $requestStartedAt) * 1000);
 
 if ($upstreamResponse === false || $curlError !== 0) {
+    write_ai_error_log('provider_connection_failed', array(
+        'model' => bounded_log_text($model),
+        'key_source' => $usesClientKey ? 'client' : 'server',
+        'curl_errno' => $curlError,
+        'curl_error' => bounded_log_text($curlErrorMessage, 500, $apiKey),
+        'duration_ms' => $requestDurationMs
+    ));
     respond(502, array('error' => 'Could not reach the AI provider'));
+}
+if ($upstreamStatus < 200 || $upstreamStatus >= 300) {
+    $decodedError = json_decode($upstreamResponse, true);
+    $providerError = is_array($decodedError) && isset($decodedError['error']) ? $decodedError['error'] : null;
+    $errorDetails = array(
+        'model' => bounded_log_text($model),
+        'key_source' => $usesClientKey ? 'client' : 'server',
+        'http_status' => $upstreamStatus,
+        'duration_ms' => $requestDurationMs
+    );
+    if (is_array($providerError)) {
+        if (isset($providerError['message']) && is_string($providerError['message'])) {
+            $errorDetails['provider_error'] = bounded_log_text($providerError['message'], 500, $apiKey);
+        }
+        if (isset($providerError['code']) && (is_string($providerError['code']) || is_numeric($providerError['code']))) {
+            $errorDetails['provider_code'] = bounded_log_text((string) $providerError['code'], 100);
+        }
+        if (isset($providerError['metadata']) && is_array($providerError['metadata'])
+            && isset($providerError['metadata']['provider_name']) && is_string($providerError['metadata']['provider_name'])
+        ) {
+            $errorDetails['provider'] = bounded_log_text($providerError['metadata']['provider_name'], 100);
+        }
+    } elseif (is_string($providerError)) {
+        $errorDetails['provider_error'] = bounded_log_text($providerError, 500, $apiKey);
+    }
+    write_ai_error_log('provider_http_error', $errorDetails);
 }
 if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300) {
     $decodedResponse = json_decode($upstreamResponse, true);
@@ -485,6 +580,11 @@ if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300)
         ? $decodedResponse['choices'][0]['message']['content']
         : null;
     if ($assistantContent === null) {
+        write_ai_error_log('provider_invalid_response', array(
+            'model' => bounded_log_text($model),
+            'http_status' => $upstreamStatus,
+            'duration_ms' => $requestDurationMs
+        ));
         respond(502, array('error' => 'AI provider returned an invalid response'));
     }
     $cleanAssistantContent = preg_replace('/\A```(?:json)?\s*|\s*```\z/i', '', trim($assistantContent));
@@ -515,6 +615,10 @@ if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300)
         $chatLogContext[0], $chatLogContext[1], $chatLogContext[2],
         $chatLogContext[3], $chatLogContext[4], $chatLogContext[5], $assistantEvent
     )) {
+        write_ai_error_log('assistant_response_persist_failed', array(
+            'model' => bounded_log_text($model),
+            'http_status' => $upstreamStatus
+        ));
         respond(503, array('error' => 'Could not persist AI response'));
     }
     header('X-Dost-Message-ID: ' . $assistantMessageId);

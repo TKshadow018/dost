@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,6 +48,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,6 +56,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LinearProgressIndicator
@@ -85,6 +88,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import com.snigtus.dost.ui.theme.DostTheme
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -107,6 +111,10 @@ class MainActivity : ComponentActivity() {
         stopService(Intent(this, FloatingChatService::class.java))
     }
 }
+
+private const val MAX_CUSTOM_FRIENDS = 3
+private const val MAX_SYSTEM_FRIENDS = 7
+private const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 
 
 @Composable
@@ -170,7 +178,7 @@ fun DostApp() {
     
 
     fun addFriendWithProfile(friend: Friend) {
-        if (friends.size >= 5) return
+        if (friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS) return
         friends.add(friend)
         store.saveFriends(friends)
         ConversationWorkScheduler.scheduleMorningGreeting(context, friend, language)
@@ -190,6 +198,17 @@ fun DostApp() {
                     }
                 }
         }
+    }
+
+    fun addSystemFriend(friend: Friend) {
+        if (friend.catalogId.isBlank()
+            || friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS
+            || friends.any { it.catalogId == friend.catalogId }
+        ) return
+        val addedFriend = friend.copy(id = java.util.UUID.randomUUID().toString())
+        friends.add(addedFriend)
+        store.saveFriends(friends)
+        ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
     }
 
     fun updateRelationship(friendId: String, friendshipScore: Int, loveScore: Int) {
@@ -216,7 +235,7 @@ fun DostApp() {
         }
     ) { currentScreen ->
     when (currentScreen) {
-        AppScreen.SPLASH -> DostSplashScreen {
+        AppScreen.SPLASH -> DostSplashScreen(language) {
             screen = if (store.hasUserProfile()) AppScreen.HOME else AppScreen.REGISTER
         }
         AppScreen.REGISTER -> RegisterScreen(
@@ -243,6 +262,7 @@ fun DostApp() {
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
             friends = friends,
             onAddFriend = { addFriendWithProfile(it) },
+            onAddSystemFriend = { addSystemFriend(it) },
             onDeleteFriend = { friend ->
                 friends.remove(friend)
                 store.saveFriends(friends)
@@ -294,13 +314,64 @@ fun DostApp() {
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit) {
+private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit) {
     var showAddFriend by remember { mutableStateOf(false) }
+    var showAddOptions by remember { mutableStateOf(false) }
+    var showSystemFriendPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showAiSettings by remember { mutableStateOf(false) }
+    var systemFriendCatalog by remember { mutableStateOf(emptyList<SystemFriendListing>()) }
+    var catalogLoading by remember { mutableStateOf(false) }
+    var catalogError by remember { mutableStateOf<String?>(null) }
+    var addingCatalogId by remember { mutableStateOf<String?>(null) }
     val unreadCounts = ConversationManager.unread.collectAsState().value
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val systemFriendClient = remember { SystemFriendClient() }
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
+    val customFriendCount = friends.count { it.catalogId.isBlank() }
+    val systemFriendCount = friends.size - customFriendCount
+    val canAddCustomFriend = customFriendCount < MAX_CUSTOM_FRIENDS
+    val canAddAnyFriend = canAddCustomFriend || systemFriendCount < MAX_SYSTEM_FRIENDS
+    val addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet()
+
+    fun loadSystemFriendCatalog() {
+        catalogLoading = true
+        catalogError = null
+        scope.launch {
+            try {
+                systemFriendCatalog = systemFriendClient.getCatalog()
+            } catch (error: java.io.IOException) {
+                catalogError = error.message ?: "Could not load system friends."
+            } catch (error: org.json.JSONException) {
+                catalogError = "The system friend catalog returned invalid data."
+            } finally {
+                catalogLoading = false
+            }
+        }
+    }
+
+    fun addCatalogFriend(listing: SystemFriendListing) {
+        if (addingCatalogId != null || listing.id in addedCatalogIds || systemFriendCount >= MAX_SYSTEM_FRIENDS) return
+        addingCatalogId = listing.id
+        catalogError = null
+        scope.launch {
+            try {
+                val profile = systemFriendClient.getProfile(listing.id)
+                val friendWithCachedPhoto = systemFriendClient.savePhotoForOfflineUse(context, profile)
+                onAddSystemFriend(friendWithCachedPhoto)
+                showSystemFriendPicker = false
+            } catch (error: java.io.IOException) {
+                catalogError = error.message ?: "Could not add this system friend."
+            } catch (error: org.json.JSONException) {
+                catalogError = "This system friend profile is invalid."
+            } finally {
+                addingCatalogId = null
+            }
+        }
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentColor = MaterialTheme.colorScheme.onBackground,
@@ -309,26 +380,184 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
                 title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
                 actions = {
                     TextButton(onClick = { showSettings = true }) { Text(when { bangla -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) }
-                    TextButton(onClick = { if (friends.size < 5) showAddFriend = true }) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }
+                    TextButton(onClick = { showAddOptions = true }, enabled = canAddAnyFriend) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }
                 }
             )
         },
-        floatingActionButton = { FloatingActionButton(onClick = { if (friends.size < 5) showAddFriend = true }, containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+") } }
+        floatingActionButton = {
+            if (canAddAnyFriend) {
+                FloatingActionButton(onClick = { showAddOptions = true }, containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+") }
+            }
+        }
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding), verticalArrangement = Arrangement.spacedBy(0.dp)) {
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(when { bangla -> "বন্ধুরা"; hindi -> "दोस्त"; else -> "Friends" }, style = MaterialTheme.typography.titleMedium); Text("${friends.size}/5", style = MaterialTheme.typography.labelLarge) }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(when { bangla -> "বন্ধুরা"; hindi -> "दोस्त"; else -> "Friends" }, style = MaterialTheme.typography.titleMedium)
+                        Text("${friends.size}/$MAX_TOTAL_FRIENDS", style = MaterialTheme.typography.labelLarge)
+                    }
+                    Text(
+                        when {
+                            bangla -> "নিজস্ব $customFriendCount/$MAX_CUSTOM_FRIENDS · সিস্টেম $systemFriendCount/$MAX_SYSTEM_FRIENDS"
+                            hindi -> "कस्टम $customFriendCount/$MAX_CUSTOM_FRIENDS · सिस्टम $systemFriendCount/$MAX_SYSTEM_FRIENDS"
+                            else -> "Custom $customFriendCount/$MAX_CUSTOM_FRIENDS · System $systemFriendCount/$MAX_SYSTEM_FRIENDS"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
-            if (friends.isEmpty()) item { EmptyFriendsState(onAdd = { showAddFriend = true }, language = language) }
+            if (friends.isEmpty()) item { EmptyFriendsState(onAdd = { showAddOptions = true }, language = language) }
             items(friends) { friend -> FriendRow(friend, unread = unreadCounts[friend.id] ?: 0, onOpenChat = { onOpenChat(friend) }, onDelete = { onDeleteFriend(friend) }, language = language) }
         }
     }
     if (showAddFriend) AddFriendDialog(onDismiss = { showAddFriend = false }, onAdd = { onAddFriend(it); showAddFriend = false })
+    if (showAddOptions) AddFriendOptionsDialog(
+        language = language,
+        customCount = customFriendCount,
+        systemCount = systemFriendCount,
+        onCreateCustom = { showAddOptions = false; showAddFriend = true },
+        onBrowseSystem = {
+            showAddOptions = false
+            showSystemFriendPicker = true
+            loadSystemFriendCatalog()
+        },
+        onDismiss = { showAddOptions = false }
+    )
+    if (showSystemFriendPicker) SystemFriendPickerDialog(
+        language = language,
+        catalog = systemFriendCatalog,
+        isLoading = catalogLoading,
+        error = catalogError,
+        addedCatalogIds = addedCatalogIds,
+        addingCatalogId = addingCatalogId,
+        systemLimitReached = systemFriendCount >= MAX_SYSTEM_FRIENDS,
+        onRefresh = ::loadSystemFriendCatalog,
+        onSelect = ::addCatalogFriend,
+        onDismiss = { showSystemFriendPicker = false }
+    )
     if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() })
     if (showAiSettings) AiSettingsDialog(openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
+}
+
+@Composable
+private fun AddFriendOptionsDialog(
+    language: AppLanguage,
+    customCount: Int,
+    systemCount: Int,
+    onCreateCustom: () -> Unit,
+    onBrowseSystem: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(when (language) {
+                AppLanguage.BANGLA -> "বন্ধু যোগ করুন"
+                AppLanguage.HINDI -> "दोस्त जोड़ें"
+                AppLanguage.ENGLISH -> "Add a friend"
+            })
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(when (language) {
+                    AppLanguage.BANGLA -> "নিজস্ব $customCount/$MAX_CUSTOM_FRIENDS · সিস্টেম $systemCount/$MAX_SYSTEM_FRIENDS"
+                    AppLanguage.HINDI -> "कस्टम $customCount/$MAX_CUSTOM_FRIENDS · सिस्टम $systemCount/$MAX_SYSTEM_FRIENDS"
+                    AppLanguage.ENGLISH -> "Custom $customCount/$MAX_CUSTOM_FRIENDS · System $systemCount/$MAX_SYSTEM_FRIENDS"
+                })
+                Button(onClick = onCreateCustom, enabled = customCount < MAX_CUSTOM_FRIENDS, modifier = Modifier.fillMaxWidth()) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "নিজের বন্ধু তৈরি করুন"
+                        AppLanguage.HINDI -> "अपना दोस्त बनाएं"
+                        AppLanguage.ENGLISH -> "Create a custom friend"
+                    })
+                }
+                OutlinedButton(onClick = onBrowseSystem, modifier = Modifier.fillMaxWidth()) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "সিস্টেম বন্ধু বেছে নিন"
+                        AppLanguage.HINDI -> "सिस्टम दोस्त चुनें"
+                        AppLanguage.ENGLISH -> "Choose a system friend"
+                    })
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
+@Composable
+private fun SystemFriendPickerDialog(
+    language: AppLanguage,
+    catalog: List<SystemFriendListing>,
+    isLoading: Boolean,
+    error: String?,
+    addedCatalogIds: Set<String>,
+    addingCatalogId: String?,
+    systemLimitReached: Boolean,
+    onRefresh: () -> Unit,
+    onSelect: (SystemFriendListing) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(when { bangla -> "সিস্টেম বন্ধু"; hindi -> "सिस्टम दोस्त"; else -> "System friends" }) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    isLoading && catalog.isEmpty() -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Text(when { bangla -> "বন্ধুদের তালিকা আনা হচ্ছে..."; hindi -> "दोस्तों की सूची लोड हो रही है..."; else -> "Loading friends..." })
+                    }
+                    catalog.isEmpty() && error == null -> Text(when { bangla -> "এখনও কোনো সিস্টেম বন্ধু নেই।"; hindi -> "अभी कोई सिस्टम दोस्त उपलब्ध नहीं है।"; else -> "No system friends are available yet." })
+                    else -> LazyColumn(
+                        modifier = Modifier.heightIn(max = 420.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(catalog, key = { it.id }) { listing ->
+                            val alreadyAdded = listing.id in addedCatalogIds
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                FriendPhoto(listing.photoUrl, listing.name, Modifier.size(48.dp).clip(CircleShape))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(listing.name, style = MaterialTheme.typography.titleSmall)
+                                    Text("${listing.age} · ${listing.gender}", style = MaterialTheme.typography.bodySmall)
+                                    if (listing.interests.isNotBlank()) {
+                                        Text(listing.interests, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                                    }
+                                }
+                                TextButton(
+                                    onClick = { onSelect(listing) },
+                                    enabled = !alreadyAdded && !systemLimitReached && addingCatalogId == null
+                                ) {
+                                    Text(when {
+                                        addingCatalogId == listing.id -> if (bangla) "যোগ হচ্ছে" else if (hindi) "जोड़ रहे हैं" else "Adding"
+                                        alreadyAdded -> if (bangla) "যোগ হয়েছে" else if (hindi) "जोड़ा गया" else "Added"
+                                        bangla -> "যোগ করুন"
+                                        hindi -> "जोड़ें"
+                                        else -> "Add"
+                                    })
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+                if (systemLimitReached) {
+                    Text(when { bangla -> "সর্বোচ্চ ৭টি সিস্টেম বন্ধু যোগ করা যাবে।"; hindi -> "अधिकतम 7 सिस्टम दोस्त जोड़े जा सकते हैं।"; else -> "You can add up to 7 system friends." }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (error != null && catalog.isEmpty()) {
+                    TextButton(onClick = onRefresh, enabled = !isLoading) {
+                        Text(when { bangla -> "আবার চেষ্টা করুন"; hindi -> "फिर कोशिश करें"; else -> "Retry" })
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(when { bangla -> "বন্ধ করুন"; hindi -> "बंद करें"; else -> "Close" }) } }
+    )
 }
 
 @Composable
@@ -688,7 +917,19 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                         }
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { imagePicker.launch("image/*") }, enabled = !sending || waitingForSchedule) { Text("Photo") }
+                        IconButton(
+                            onClick = { imagePicker.launch("image/*") },
+                            enabled = !sending || waitingForSchedule
+                        ) {
+                            Icon(
+                                painter = painterResource(android.R.drawable.ic_menu_gallery),
+                                contentDescription = when {
+                                    bangla -> "ছবি সংযুক্ত করুন"
+                                    hindi -> "फ़ोटो जोड़ें"
+                                    else -> "Attach photo"
+                                }
+                            )
+                        }
                         OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f), placeholder = { Text(when { bangla -> "একটি মেসেজ লিখুন..."; hindi -> "संदेश लिखें..."; else -> "Write a message..." }) }, maxLines = 4)
                         Button(enabled = (draft.isNotBlank() || selectedImagePath.isNotBlank()) && (!sending || waitingForSchedule), onClick = {
                             val text = draft.trim()
@@ -704,7 +945,12 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
         }
     }
     if (showFriendInfo) FriendInfoDialog(friend, onTimeZoneChange = onFriendTimeZoneChange, onDismiss = { showFriendInfo = false })
-    if (showUserInfo) UserInfoDialog(store, onDismiss = { showUserInfo = false })
+    if (showUserInfo) ConversationProfileDialog(
+        friend = friend,
+        memories = store.loadUserMemories(friend.id),
+        language = language,
+        onDismiss = { showUserInfo = false }
+    )
     if (showSessionSummaries) SessionSummariesDialog(sessionSummaries, language, onDismiss = { showSessionSummaries = false })
 }
 
@@ -737,17 +983,44 @@ private fun FriendInfoDialog(friend: Friend, onTimeZoneChange: (String) -> Unit,
 }
 
 @Composable
-private fun UserInfoDialog(store: DostStore, onDismiss: () -> Unit) {
+private fun ConversationProfileDialog(friend: Friend, memories: List<UserMemory>, language: AppLanguage, onDismiss: () -> Unit) {
+    val profileFacts = memories.filter { it.fact.isNotBlank() }.asReversed()
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Your profile") },
+        title = {
+            Text(when (language) {
+                AppLanguage.BANGLA -> "${friend.name}-এর সঙ্গে আপনার পরিচিতি"
+                AppLanguage.HINDI -> "${friend.name} के साथ आपकी प्रोफ़ाइल"
+                AppLanguage.ENGLISH -> "Your profile with ${friend.name}"
+            })
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Name" to store.userName(), "Email" to store.userEmail(), "Age" to store.userAge(), "Gender" to store.userGender(), "Timezone" to store.userTimeZoneId())
-                    .forEach { (label, value) -> Text("$label: ${value.ifBlank { "Not provided" }}") }
+            if (profileFacts.isEmpty()) {
+                Text(when (language) {
+                    AppLanguage.BANGLA -> "এই কথোপকথন থেকে এখনও আপনার সম্পর্কে কোনো তথ্য শেখা হয়নি।"
+                    AppLanguage.HINDI -> "इस बातचीत से अभी तक आपके बारे में कोई जानकारी नहीं सीखी गई है।"
+                    AppLanguage.ENGLISH -> "No information about you has been learned from this conversation yet."
+                })
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(profileFacts) { memory ->
+                        Text("• ${memory.fact}")
+                    }
+                }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(when (language) {
+                    AppLanguage.BANGLA -> "বন্ধ করুন"
+                    AppLanguage.HINDI -> "बंद करें"
+                    AppLanguage.ENGLISH -> "Close"
+                })
+            }
+        }
     )
 }
 

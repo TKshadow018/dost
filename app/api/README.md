@@ -6,6 +6,14 @@ Upload `ai.php` and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hos
 
 The server needs PHP with the cURL extension and outbound HTTPS access.
 
+## System friend catalog
+
+Upload `friends.php` and the complete `system_friends/` directory to `public_html/api/` on Hostinger. Keep `system_friends/.htaccess` in place so profile JSON files and photo files cannot be fetched directly. Add one UTF-8 `.json` file per friend directly inside `public_html/api/system_friends/`; the filename (without `.json`) is its stable catalog ID and must contain only letters, numbers, `_`, or `-`. The catalog endpoint scans this directory on each request, so new profile JSON files appear without changing or redeploying the API.
+
+Each profile must include non-empty `name`, `age`, and `gender`. Optional string fields are `personality`, `interests`, `memories`, `conversationStyle`, `family`, `familyMembers`, `familyActivities`, `financialCondition`, `address`, `height`, `weight`, `facialFeatures`, `bodyFeatures`, `busyReason`, and `timeZoneId`. Optional schedule fields are `busyStartHour` (0–23) and `busyDurationHours` (4–8). The repository's `system_friends/sample-friend.json` shows the format. To add a photo, put a JPEG, PNG, or WebP file (up to 5 MB) in `system_friends/photos/` and set the profile's `photo` field to either its filename (`asha.jpg`) or `photos/asha.jpg`. Leave it empty for an initials avatar.
+
+`GET https://bisque-bear-900175.hostingersite.com/api/friends.php` lists profiles for the app; `GET .../friends.php?id=<catalog-id>` returns one complete profile. The `photo_url` in profile responses points back to the API, which validates and streams the associated image. A user can add up to seven catalog friends, in addition to up to three custom friends. The app stores an individual local copy with a unique ID and caches its photo for offline use; deleting it from the app does not remove the server catalog profile.
+
 ## Conversation archive
 
 Every user and assistant chat message is saved as JSON Lines on the server. Each entry records the selected model ID; API keys are never included in logs. The app queues events with WorkManager and retries when offline; chat requests also archive their history before reaching OpenRouter and store the assistant response before returning it. Records are organized under `username_ip/friend_name/session_id/YYYY-MM-DD_HH-MM-SS.jsonl`; path labels are sanitized, the IP comes from the server's `REMOTE_ADDR`, and the filename uses the earliest event timestamp in that session (UTC). Each session file is deduplicated by message ID. The logs are not exposed by an HTTP read endpoint. Existing flat hash-named logs are left in place; they cannot be reliably reorganized because their records do not contain the names needed for the new folder structure.
@@ -13,6 +21,10 @@ Every user and assistant chat message is saved as JSON Lines on the server. Each
 Chat accepts one compressed JPEG image per message (up to 300 KB from the app). The API saves it in the same session folder as `<message-id>.jpg` (or the detected PNG/WebP extension) and records the relative filename on that JSONL entry. Images are sent to OpenRouter as multimodal data URLs; choose a vision-capable model. The image files are private and are not embedded as base64 in the JSONL log.
 
 By default, files are written to `public_html/log/`, alongside this API directory. Before accepting chat requests, create that folder on Hostinger and upload `app/api/log/.htaccess` as `public_html/log/.htaccess`; it disables directory listings and denies HTTP access to the chat logs. The API creates directories with `0700` and files with `0600` permissions, and PHP must be allowed to write there. Because this location is inside the web root, verify that requests for a log file are denied. You can instead set `DOST_CONVERSATION_STORAGE_DIR` to a private writable directory outside the web root.
+
+## Diagnose AI request failures
+
+The API appends server-side request failures to `ai-errors.jsonl` in the same storage directory as the conversation archives: by default, `public_html/log/ai-errors.jsonl`, or the directory configured by `DOST_CONVERSATION_STORAGE_DIR`. Each JSON line includes a UTC timestamp and a failure event; provider failures also include the model, whether the server or client key was used, HTTP status, and (when OpenRouter supplies it) its error message/code and provider name. Connection failures include the cURL error and request duration. API keys, prompts, and chat message contents are not written to this diagnostic file. The file is created with `0600` permissions; keep the storage directory private and verify the `.htaccess` denial after upload. If PHP cannot write this file, it falls back to PHP's configured server error log. Only requests that reach `ai.php` can be logged here; if no corresponding entry appears, check the app's network connection and hosting access/PHP logs.
 
 ## Archive retention
 

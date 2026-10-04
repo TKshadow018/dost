@@ -33,6 +33,16 @@ data class Friend(
     ,val busyDurationHours: Int = if ((age.toIntOrNull() ?: 18) < 18) 6 else 8
     ,val busyReason: String = if ((age.toIntOrNull() ?: 18) < 18) "School" else "Work"
     ,val timeZoneId: String = ZoneId.systemDefault().id
+    ,val catalogId: String = ""
+)
+
+data class SystemFriendListing(
+    val id: String,
+    val name: String,
+    val age: String,
+    val gender: String,
+    val interests: String,
+    val photoUrl: String
 )
 
 fun validZoneId(timeZoneId: String): ZoneId = runCatching { ZoneId.of(timeZoneId) }.getOrDefault(ZoneId.systemDefault())

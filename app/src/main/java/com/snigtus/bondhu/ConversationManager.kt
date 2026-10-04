@@ -283,7 +283,7 @@ object ConversationManager {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id).takeLast(3), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
@@ -291,7 +291,7 @@ object ConversationManager {
             return client.reply(
                 apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id).takeLast(3), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
             )
         }
     }
