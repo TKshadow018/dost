@@ -29,7 +29,8 @@ class SessionSummaryInputTest {
     }
 
     @Test
-    fun storedSummaryInjectionCapStaysAtSeven() {
-        assertEquals(7, OpenRouterClient.MAX_SESSION_SUMMARY_ITEMS)
+    fun storedSummaryInjectionUsesTheSmallRelevantSetCap() {
+        assertEquals(MAX_RETRIEVED_SESSION_SUMMARIES, OpenRouterClient.MAX_SESSION_SUMMARY_ITEMS)
+        assertEquals(3, OpenRouterClient.MAX_SESSION_SUMMARY_ITEMS)
     }
 }

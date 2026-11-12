@@ -306,21 +306,26 @@ object ConversationManager {
             val existing = messagesForPrompt(outboundQueue.visibleHistory(friend.id, messagesFor(friend.id).filter { it.sessionId == sessionId }))
             if (seedMessage != null && existing.isEmpty()) listOf(seedMessage) else existing
         }
+        val memories = store.loadUserMemories(friend.id)
+        val sessionSummaries = store.loadSessionSummaries(friend.id)
+        val structuredUserProfile = store.loadStructuredUserProfile(friend.id, store.userName())
         try {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
-                store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
-                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge()
+                memories, friend.friendshipScore, friend.loveScore,
+                sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
+                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
+                structuredUserProfile = structuredUserProfile
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
             delay(1_500)
             return client.reply(
                 apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
-                store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
-                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge()
+                memories, friend.friendshipScore, friend.loveScore,
+                sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
+                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
+                structuredUserProfile = structuredUserProfile
             )
         }
     }
