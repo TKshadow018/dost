@@ -27,8 +27,11 @@ class ExampleUnitTest {
 
     @Test
     fun busyScheduleReturnsNullOutsideBusyHours() {
-        val friend = Friend(id = "work", name = "B", age = "30", gender = "male")
-        val now = ZonedDateTime.of(2025, 1, 2, 18, 0, 0, 0, ZoneId.of("Asia/Dhaka"))
+        // 18:00 is after the default 09:00–17:30 busy window. Pin the friend's zone so
+        // the JVM default (UTC on CI, Asia/Dhaka on a local machine) cannot move that instant inside the window.
+        val zone = ZoneId.of("Asia/Dhaka")
+        val friend = Friend(id = "work", name = "B", age = "30", gender = "male", timeZoneId = zone.id)
+        val now = ZonedDateTime.of(2025, 1, 2, 18, 0, 0, 0, zone)
 
         assertNull(friend.replyAvailableAt(now))
     }
