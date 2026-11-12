@@ -89,7 +89,7 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
         val itemCount = messages.size + (if (sending) 1 else 0) + (if (error != null) 1 else 0)
         if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
     }
-    Scaffold(topBar = { TopAppBar(title = { Row(modifier = Modifier.clickable { showFriendInfo = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { FriendPhoto(friend.photoUri, friend.name, Modifier.size(40.dp).clip(CircleShape)); Column { Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else ""); Text("${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100", style = MaterialTheme.typography.labelSmall); Text(if (busyUntil != null) "${friend.name} will reply at ${busyUntil.format(DateTimeFormatter.ofPattern("h:mm a"))}" else "Daily busy ${dailyBusyStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${dailyBusyEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${friend.timeZoneId})", style = MaterialTheme.typography.labelSmall) } } }, navigationIcon = { TextButton(onClick = onBack) { Text(when { bangla -> "ফিরুন"; hindi -> "वापस"; else -> "Back" }) } }, actions = { androidx.compose.foundation.layout.Box { IconButton(onClick = { showChatMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }; DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) { DropdownMenuItem(text = { Text("Search") }, onClick = { showChatMenu = false; showSearch = !showSearch; if (!showSearch) searchQuery = "" }); DropdownMenuItem(text = { Text("Export chat") }, onClick = { showChatMenu = false; exportChat(context, friend, messages) }); DropdownMenuItem(text = { Text("Your profile") }, onClick = { showChatMenu = false; showUserInfo = true }); DropdownMenuItem(text = { Text("Session summaries") }, onClick = { showChatMenu = false; sessionSummaries = store.loadSessionSummaries(friend.id).takeLast(10).reversed(); showSessionSummaries = true }); DropdownMenuItem(text = { Text("Minimize chat") }, onClick = { showChatMenu = false; onFloatingChat() }) } } }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Row(modifier = Modifier.clickable { showFriendInfo = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { FriendPhoto(friend.photoUri, friend.name, Modifier.size(40.dp).clip(CircleShape)); Column { Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else ""); Text("${friendshipLevel(friend.friendshipScore, language)} · ${friend.friendshipScore}/100", style = MaterialTheme.typography.labelSmall); Text(if (busyUntil != null) "${friend.name} will reply at ${busyUntil.format(DateTimeFormatter.ofPattern("h:mm a"))}" else "Daily busy ${dailyBusyStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${dailyBusyEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${friend.timeZoneId})", style = MaterialTheme.typography.labelSmall) } } }, navigationIcon = { TextButton(onClick = onBack) { Text(when { bangla -> "ফিরুন"; hindi -> "वापस"; else -> "Back" }) } }, actions = { androidx.compose.foundation.layout.Box { IconButton(onClick = { showChatMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }; DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) { DropdownMenuItem(text = { Text(LocalizedText.SEARCH.resolve(language)) }, onClick = { showChatMenu = false; showSearch = !showSearch; if (!showSearch) searchQuery = "" }); DropdownMenuItem(text = { Text(LocalizedText.EXPORT_CHAT.resolve(language)) }, onClick = { showChatMenu = false; exportChat(context, friend, messages) }); DropdownMenuItem(text = { Text(LocalizedText.YOUR_PROFILE.resolve(language)) }, onClick = { showChatMenu = false; showUserInfo = true }); DropdownMenuItem(text = { Text(LocalizedText.SESSION_SUMMARIES.resolve(language)) }, onClick = { showChatMenu = false; sessionSummaries = store.loadSessionSummaries(friend.id).takeLast(10).reversed(); showSessionSummaries = true }); DropdownMenuItem(text = { Text(LocalizedText.MINIMIZE_CHAT.resolve(language)) }, onClick = { showChatMenu = false; onFloatingChat() }) } } }) }) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             RelationshipMeters(friend = friend, language = language, userAge = store.userAge())
             if (showSearch) {
@@ -107,6 +107,7 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
                     MessageBubble(
                         message = message,
                         friendName = friend.name,
+                        language = language,
                         onRegenerate = if (message.role == "assistant" && message.messageId == displayedMessages.lastOrNull { it.role == "assistant" }?.messageId) {
                             { ConversationManager.regenerateReply(friend, language) }
                         } else null
@@ -265,7 +266,7 @@ private fun SessionSummariesDialog(summaries: List<SessionSummary>, language: Ap
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, friendName: String, onRegenerate: (() -> Unit)? = null) {
+private fun MessageBubble(message: ChatMessage, friendName: String, language: AppLanguage, onRegenerate: (() -> Unit)? = null) {
     val isUser = message.role == "user"
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -297,13 +298,13 @@ private fun MessageBubble(message: ChatMessage, friendName: String, onRegenerate
                 }
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { Text("Copy") }, onClick = {
+                DropdownMenuItem(text = { Text(LocalizedText.COPY.resolve(language)) }, onClick = {
                     menuOpen = false
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     clipboard.setPrimaryClip(android.content.ClipData.newPlainText("message", message.content))
                 })
                 if (!isUser && onRegenerate != null) {
-                    DropdownMenuItem(text = { Text("Reply differently") }, onClick = { menuOpen = false; onRegenerate() })
+                    DropdownMenuItem(text = { Text(LocalizedText.REPLY_DIFFERENTLY.resolve(language)) }, onClick = { menuOpen = false; onRegenerate() })
                 }
             }
         }
@@ -422,7 +423,7 @@ private fun RelationshipMeters(friend: Friend, language: AppLanguage, userAge: S
     val loveUnlocked = romance && friend.friendshipScore > 70
     val hindi = language == AppLanguage.HINDI
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(when { language == AppLanguage.BANGLA -> "বন্ধুত্ব: ${friendshipLevel(friend.friendshipScore)} (${friend.friendshipScore}/100)"; hindi -> "दोस्ती: ${friendshipLevel(friend.friendshipScore)} (${friend.friendshipScore}/100)"; else -> "Friendship: ${friendshipLevel(friend.friendshipScore)} (${friend.friendshipScore}/100)" }, style = MaterialTheme.typography.labelMedium)
+        Text(when { language == AppLanguage.BANGLA -> "বন্ধুত্ব: ${friendshipLevel(friend.friendshipScore, language)} (${friend.friendshipScore}/100)"; hindi -> "दोस्ती: ${friendshipLevel(friend.friendshipScore, language)} (${friend.friendshipScore}/100)"; else -> "Friendship: ${friendshipLevel(friend.friendshipScore, language)} (${friend.friendshipScore}/100)" }, style = MaterialTheme.typography.labelMedium)
         LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.fillMaxWidth())
         Text(when {
             !romance -> when (language) {

@@ -64,9 +64,9 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
             try {
                 systemFriendCatalog = systemFriendClient.getCatalog()
             } catch (error: java.io.IOException) {
-                catalogError = error.message ?: "Could not load system friends."
+                catalogError = LocalizedText.LOAD_FRIENDS_FAILED.resolve(language)
             } catch (error: org.json.JSONException) {
-                catalogError = "The system friend catalog returned invalid data."
+                catalogError = LocalizedText.INVALID_FRIEND_CATALOG.resolve(language)
             } finally {
                 catalogLoading = false
             }
@@ -84,9 +84,9 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
                 onAddSystemFriend(friendWithCachedPhoto)
                 showSystemFriendPicker = false
             } catch (error: java.io.IOException) {
-                catalogError = error.message ?: "Could not add this system friend."
+                catalogError = LocalizedText.ADD_SYSTEM_FRIEND_FAILED.resolve(language)
             } catch (error: org.json.JSONException) {
-                catalogError = "This system friend profile is invalid."
+                catalogError = LocalizedText.INVALID_SYSTEM_FRIEND.resolve(language)
             } finally {
                 addingCatalogId = null
             }
@@ -185,7 +185,7 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
         onDismiss = { showSystemFriendPicker = false }
     )
     if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() })
-    if (showAiSettings) AiSettingsDialog(openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
+    if (showAiSettings) AiSettingsDialog(language, openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
 }
 
 @Composable
@@ -229,7 +229,7 @@ private fun AddFriendOptionsDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text(LocalizedText.CLOSE.resolve(language)) } }
     )
 }
 
@@ -379,7 +379,7 @@ private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDel
             hindi -> "प्रोफ़ाइल नहीं बनी। फिर कोशिश के लिए खोलें।"
             else -> "Profile wasn't created. Open to retry."
         }
-        else -> lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100"
+        else -> lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore, language)} · ${friend.friendshipScore}/100"
     }
     androidx.compose.foundation.layout.Box {
         Row(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onOpenChat, onLongClick = { confirmDelete = true }).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -424,44 +424,44 @@ private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd:
             photoUri = it.toString()
         }
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add a friend") }, text = { Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedTextField(name, { name = it }, label = { Text("Name") })
-        OutlinedTextField(age, { age = it }, label = { Text("Age") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(LocalizedText.ADD_FRIEND_TITLE.resolve(language)) }, text = { Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(name, { name = it }, label = { Text(LocalizedText.FRIEND_NAME.resolve(language)) })
+        OutlinedTextField(age, { age = it }, label = { Text(LocalizedText.FRIEND_AGE.resolve(language)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         friendAgeError(age, language)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         friendUnder18RomanceNote(age, language)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        GenderField(gender, onValueChange = { gender = it })
-        TimeZonePicker("Friend timezone", friendTimeZoneId, onTimeZoneChange = { friendTimeZoneId = it })
-        Text("Daily busy schedule", style = MaterialTheme.typography.titleSmall)
+        GenderField(gender, onValueChange = { gender = it }, language = language)
+        TimeZonePicker(LocalizedText.FRIEND_TIMEZONE.resolve(language), friendTimeZoneId, onTimeZoneChange = { friendTimeZoneId = it })
+        Text(LocalizedText.DAILY_BUSY_SCHEDULE.resolve(language), style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!isWorkSchedule) Button(onClick = { workSchedule = false; customStartHour = null; customDurationHours = null }) { Text("School") }
-            else OutlinedButton(onClick = { workSchedule = false; customStartHour = null; customDurationHours = null }) { Text("School") }
-            if (isWorkSchedule) Button(onClick = { workSchedule = true; customStartHour = null; customDurationHours = null }) { Text("Work") }
-            else OutlinedButton(onClick = { workSchedule = true; customStartHour = null; customDurationHours = null }) { Text("Work") }
+            if (!isWorkSchedule) Button(onClick = { workSchedule = false; customStartHour = null; customDurationHours = null }) { Text(LocalizedText.SCHOOL.resolve(language)) }
+            else OutlinedButton(onClick = { workSchedule = false; customStartHour = null; customDurationHours = null }) { Text(LocalizedText.SCHOOL.resolve(language)) }
+            if (isWorkSchedule) Button(onClick = { workSchedule = true; customStartHour = null; customDurationHours = null }) { Text(LocalizedText.WORK.resolve(language)) }
+            else OutlinedButton(onClick = { workSchedule = true; customStartHour = null; customDurationHours = null }) { Text(LocalizedText.WORK.resolve(language)) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = {
                 android.app.TimePickerDialog(context, { _, hour, _ -> customStartHour = hour }, busyStartHour, 0, false).show()
-            }) { Text("Starts ${LocalTime.of(busyStartHour, 0).format(DateTimeFormatter.ofPattern("h:mm a"))}") }
+            }) { Text(LocalizedText.SCHEDULE_STARTS.resolve(language, LocalTime.of(busyStartHour, 0).format(DateTimeFormatter.ofPattern("h:mm a")))) }
             androidx.compose.foundation.layout.Box {
-                OutlinedButton(onClick = { durationMenuExpanded = true }) { Text("${busyDurationHours}h") }
+                OutlinedButton(onClick = { durationMenuExpanded = true }) { Text(LocalizedText.SCHEDULE_DURATION.resolve(language, busyDurationHours)) }
                 DropdownMenu(expanded = durationMenuExpanded, onDismissRequest = { durationMenuExpanded = false }) {
                     (4..8).forEach { hours ->
-                        DropdownMenuItem(text = { Text("$hours hours") }, onClick = { customDurationHours = hours; durationMenuExpanded = false })
+                        DropdownMenuItem(text = { Text(LocalizedText.SCHEDULE_HOURS.resolve(language, hours)) }, onClick = { customDurationHours = hours; durationMenuExpanded = false })
                     }
                 }
             }
-            Text("until ${busyEndTime.format(DateTimeFormatter.ofPattern("h:mm a"))}")
+            Text(LocalizedText.SCHEDULE_UNTIL.resolve(language, busyEndTime.format(DateTimeFormatter.ofPattern("h:mm a"))))
         }
-        Text("Busy times use ${friendTimeZoneId} local time. Replies resume 30 minutes after the busy window.", style = MaterialTheme.typography.bodySmall)
+        Text(LocalizedText.BUSY_SCHEDULE_NOTE.resolve(language, friendTimeZoneId), style = MaterialTheme.typography.bodySmall)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             FriendPhoto(photoUri, name.ifBlank { "?" }, Modifier.size(56.dp).clip(CircleShape))
             Column(modifier = Modifier.weight(1f)) {
-                Text(if (photoUri.isBlank()) "No photo selected" else "Photo selected")
-                OutlinedButton(onClick = { photoPicker.launch(arrayOf("image/*")) }) { Text(if (photoUri.isBlank()) "Choose photo" else "Change photo") }
+                Text(if (photoUri.isBlank()) LocalizedText.NO_PHOTO_SELECTED.resolve(language) else LocalizedText.PHOTO_SELECTED.resolve(language))
+                OutlinedButton(onClick = { photoPicker.launch(arrayOf("image/*")) }) { Text(if (photoUri.isBlank()) LocalizedText.CHOOSE_PHOTO.resolve(language) else LocalizedText.CHANGE_PHOTO.resolve(language)) }
             }
-            if (photoUri.isNotBlank()) TextButton(onClick = { photoUri = "" }) { Text("Remove") }
+            if (photoUri.isNotBlank()) TextButton(onClick = { photoUri = "" }) { Text(LocalizedText.REMOVE.resolve(language)) }
         }
-    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age.trim(), gender = gender, photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId)) }, enabled = name.isNotBlank() && friendAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) { Text("Add") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age.trim(), gender = gender, photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId)) }, enabled = name.isNotBlank() && friendAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) { Text(LocalizedText.ADD.resolve(language)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(LocalizedText.CANCEL.resolve(language)) } })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -510,10 +510,10 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
                     Button(onClick = { onLanguageChange(AppLanguage.HINDI) }, enabled = language != AppLanguage.HINDI) { Text("हिन्दी") }
                 }
                 HorizontalDivider()
-                TimeZonePicker("Your timezone", userTimeZoneId, onTimeZoneChange = onUserTimeZoneChange)
+                TimeZonePicker(LocalizedText.YOUR_TIMEZONE.resolve(language), userTimeZoneId, onTimeZoneChange = onUserTimeZoneChange)
                 HorizontalDivider()
-                Button(onClick = onAiSettings, modifier = Modifier.fillMaxWidth()) { Text("AI provider and model") }
-                Text("Chat messages and AI replies are saved in a private server archive.", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onAiSettings, modifier = Modifier.fillMaxWidth()) { Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) }
+                Text(LocalizedText.CHAT_ARCHIVE_NOTICE.resolve(language), style = MaterialTheme.typography.bodySmall)
                 HorizontalDivider()
                 Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {
                     Text(when { language == AppLanguage.BANGLA -> "আমার সম্পর্কে জানা তথ্য"; hindi -> "मेरे बारे में जानकारी"; else -> "Knowledge about me" })
@@ -533,7 +533,7 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
 }
 
 @Composable
-private fun AiSettingsDialog(apiKey: String, initialModel: String, onDismiss: () -> Unit, onSave: (String, String) -> Unit) {
+private fun AiSettingsDialog(language: AppLanguage, apiKey: String, initialModel: String, onDismiss: () -> Unit, onSave: (String, String) -> Unit) {
     var editedApiKey by remember { mutableStateOf(apiKey) }
     var model by remember { mutableStateOf(initialModel) }
     var modelSearch by remember { mutableStateOf("") }
@@ -544,16 +544,16 @@ private fun AiSettingsDialog(apiKey: String, initialModel: String, onDismiss: ()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("AI provider and model") },
+        title = { Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = editedApiKey,
                     onValueChange = { editedApiKey = it },
-                    label = { Text("Your OpenRouter API key") },
-                    placeholder = { Text("Leave blank to use the server key") },
+                    label = { Text(LocalizedText.OPENROUTER_API_KEY.resolve(language)) },
+                    placeholder = { Text(LocalizedText.SERVER_KEY_PLACEHOLDER.resolve(language)) },
                     visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = { TextButton(onClick = { showApiKey = !showApiKey }) { Text(if (showApiKey) "Hide" else "Show") } },
+                    trailingIcon = { TextButton(onClick = { showApiKey = !showApiKey }) { Text(if (showApiKey) LocalizedText.HIDE.resolve(language) else LocalizedText.SHOW.resolve(language)) } },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -565,22 +565,22 @@ private fun AiSettingsDialog(apiKey: String, initialModel: String, onDismiss: ()
                     OutlinedTextField(
                         value = if (modelMenuExpanded) modelSearch else model,
                         onValueChange = { modelSearch = it; model = it; modelMenuExpanded = true },
-                        label = { Text("Preferred OpenRouter model") },
+                        label = { Text(LocalizedText.PREFERRED_MODEL.resolve(language)) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelMenuExpanded) },
                         singleLine = true,
                         modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
                     ExposedDropdownMenu(expanded = modelMenuExpanded && matchingModels.isNotEmpty(), onDismissRequest = { modelMenuExpanded = false }) {
                         matchingModels.forEach { option ->
-                            DropdownMenuItem(text = { Text(if (OpenRouterClient.isUnstableFreeModel(option)) "$option (may be slow)" else option) }, onClick = { model = option; modelSearch = ""; modelMenuExpanded = false })
+                            DropdownMenuItem(text = { Text(if (OpenRouterClient.isUnstableFreeModel(option)) "$option ${LocalizedText.MODEL_MAY_BE_SLOW.resolve(language)}" else option) }, onClick = { model = option; modelSearch = ""; modelMenuExpanded = false })
                         }
                     }
                 }
-                Text("Choose a model from the list or type any OpenRouter model ID. Your choice is saved as the preferred model. Photos require a vision-capable model. Paid or custom models require your own key; the key is encrypted on this device and never written to logs.", style = MaterialTheme.typography.bodySmall)
-                if (!modelIsValid) Text("Enter a model ID in provider/model format.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Text(LocalizedText.MODEL_GUIDANCE.resolve(language), style = MaterialTheme.typography.bodySmall)
+                if (!modelIsValid) Text(LocalizedText.MODEL_FORMAT_ERROR.resolve(language), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         },
-        confirmButton = { Button(onClick = { onSave(editedApiKey.trim(), model.trim()) }, enabled = modelIsValid) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        confirmButton = { Button(onClick = { onSave(editedApiKey.trim(), model.trim()) }, enabled = modelIsValid) { Text(LocalizedText.SAVE.resolve(language)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(LocalizedText.CANCEL.resolve(language)) } }
     )
 }

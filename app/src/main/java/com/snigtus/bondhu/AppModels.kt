@@ -308,17 +308,19 @@ fun applyRegeneratedReply(
     @Suppress("UNUSED_PARAMETER") loveImpact: Int
 ): RelationshipScores = current
 
-fun friendshipLevel(score: Int): String = when (score.coerceIn(0, 100)) {
-    in 0..10 -> "Complete stranger"
-    in 11..20 -> "Stranger"
-    in 21..30 -> "Acquaintance"
-    in 31..40 -> "Casual friend"
-    in 41..50 -> "Friend"
-    in 51..60 -> "Good friend"
-    in 61..70 -> "Close friend"
-    in 71..80 -> "Trusted friend"
-    in 81..90 -> "Very close friend"
-    else -> "Best friend"
+fun friendshipLevel(score: Int): String = friendshipLevel(score, AppLanguage.ENGLISH)
+
+fun friendshipLevel(score: Int, language: AppLanguage): String = when (score.coerceIn(0, 100)) {
+    in 0..10 -> when (language) { AppLanguage.ENGLISH -> "Complete stranger"; AppLanguage.BANGLA -> "সম্পূর্ণ অপরিচিত"; AppLanguage.HINDI -> "बिल्कुल अजनबी" }
+    in 11..20 -> when (language) { AppLanguage.ENGLISH -> "Stranger"; AppLanguage.BANGLA -> "অপরিচিত"; AppLanguage.HINDI -> "अजनबी" }
+    in 21..30 -> when (language) { AppLanguage.ENGLISH -> "Acquaintance"; AppLanguage.BANGLA -> "পরিচিত"; AppLanguage.HINDI -> "जान-पहचान" }
+    in 31..40 -> when (language) { AppLanguage.ENGLISH -> "Casual friend"; AppLanguage.BANGLA -> "সাধারণ বন্ধু"; AppLanguage.HINDI -> "सामान्य दोस्त" }
+    in 41..50 -> when (language) { AppLanguage.ENGLISH -> "Friend"; AppLanguage.BANGLA -> "বন্ধু"; AppLanguage.HINDI -> "दोस्त" }
+    in 51..60 -> when (language) { AppLanguage.ENGLISH -> "Good friend"; AppLanguage.BANGLA -> "ভালো বন্ধু"; AppLanguage.HINDI -> "अच्छा दोस्त" }
+    in 61..70 -> when (language) { AppLanguage.ENGLISH -> "Close friend"; AppLanguage.BANGLA -> "ঘনিষ্ঠ বন্ধু"; AppLanguage.HINDI -> "करीबी दोस्त" }
+    in 71..80 -> when (language) { AppLanguage.ENGLISH -> "Trusted friend"; AppLanguage.BANGLA -> "বিশ্বস্ত বন্ধু"; AppLanguage.HINDI -> "भरोसेमंद दोस्त" }
+    in 81..90 -> when (language) { AppLanguage.ENGLISH -> "Very close friend"; AppLanguage.BANGLA -> "খুব ঘনিষ্ঠ বন্ধু"; AppLanguage.HINDI -> "बहुत करीबी दोस्त" }
+    else -> when (language) { AppLanguage.ENGLISH -> "Best friend"; AppLanguage.BANGLA -> "সবচেয়ে ভালো বন্ধু"; AppLanguage.HINDI -> "सबसे अच्छा दोस्त" }
 }
 
 fun loveLevel(score: Int): String = when (score.coerceIn(0, 100)) {
