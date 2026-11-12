@@ -215,13 +215,13 @@ fun DostApp() {
     fun updateRelationship(friendId: String, friendshipScore: Int, loveScore: Int) {
         val index = friends.indexOfFirst { it.id == friendId }
         if (index < 0) return
-        val current = friends[index]
+        val stored = store.loadFriends().firstOrNull { it.id == friendId }
+        val base = stored ?: friends[index]
         val friendship = friendshipScore.coerceIn(0, 100)
         val love = if (friendship > 70) loveScore.coerceIn(0, 100) else 0
-        val updated = current.copy(friendshipScore = friendship, loveScore = love)
+        val updated = base.copy(friendshipScore = friendship, loveScore = love)
         friends[index] = updated
-        selectedFriend = updated
-        store.saveFriends(friends)
+        if (selectedFriend?.id == friendId) selectedFriend = updated
     }
 
     androidx.compose.animation.AnimatedContent(
@@ -915,9 +915,15 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
             currentTime = ZonedDateTime.now(validZoneId(store.userTimeZoneId()))
         }
     }
+    val relationshipUpdate = ConversationManager.relationshipUpdates.collectAsState().value
     DisposableEffect(friend.id) {
         ConversationManager.openChat(friend.id)
         onDispose { ConversationManager.closeChat(friend.id) }
+    }
+    LaunchedEffect(relationshipUpdate) {
+        if (relationshipUpdate != null && relationshipUpdate.friendId == friend.id) {
+            onRelationshipUpdate(relationshipUpdate.friendshipScore, relationshipUpdate.loveScore)
+        }
     }
     LaunchedEffect(messages.size, sending, error) {
         val itemCount = messages.size + (if (sending) 1 else 0) + (if (error != null) 1 else 0)

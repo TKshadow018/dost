@@ -115,6 +115,17 @@ data class AiReply(
     val serverMessageId: String? = null
 )
 
+data class RelationshipScores(val friendship: Int, val love: Int)
+
+data class RelationshipUpdate(val friendId: String, val friendshipScore: Int, val loveScore: Int)
+
+/** Applies one reply's clamped delta (−1..2) to the scores currently stored for the friend. */
+fun applyRelationshipDelta(friendshipScore: Int, loveScore: Int, friendshipImpact: Int, loveImpact: Int): RelationshipScores {
+    val friendship = (friendshipScore + friendshipImpact.coerceIn(-1, 2)).coerceIn(0, 100)
+    val love = if (friendship > 70) (loveScore + loveImpact.coerceIn(-1, 2)).coerceIn(0, 100) else 0
+    return RelationshipScores(friendship, love)
+}
+
 fun friendshipLevel(score: Int): String = when (score.coerceIn(0, 100)) {
     in 0..10 -> "Complete stranger"
     in 11..20 -> "Stranger"
