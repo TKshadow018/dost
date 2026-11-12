@@ -32,6 +32,16 @@ class ReplyParseTest {
     }
 
     @Test
+    fun parsedRepliesKeepAgeGateAndParseFailure() {
+        val parsed = client.parseModelReply("""{"reply":"Hello","friendship_impact":2,"love_impact":2}""")
+        val minor = applyLoveImpactGate(parsed, "17", "25")
+        assertEquals(2, minor.friendshipImpact)
+        assertEquals(0, minor.loveImpact)
+        assertEquals(2, applyLoveImpactGate(parsed, "25", "25").loveImpact)
+        assertTrue(applyLoveImpactGate(client.parseModelReply("{invalid}"), "17", "25").parseFailed)
+    }
+
+    @Test
     fun invalidModelTextDoesNotBecomeTheReply() {
         val raw = "Sure! Here is some junk {not json} and a fence."
         val parsed = client.parseModelReply(raw, "server-id")
