@@ -92,6 +92,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import com.snigtus.dost.ui.theme.DostTheme
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.time.LocalTime
@@ -101,15 +103,29 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    private val openFriendRequests = MutableStateFlow<OpenFriendRequest?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) publishOpenFriend(intent)
         enableEdgeToEdge()
-        setContent { DostTheme { DostApp() } }
+        setContent { DostTheme { DostApp(openFriendRequests) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        publishOpenFriend(intent)
     }
 
     override fun onStart() {
         super.onStart()
         stopService(Intent(this, FloatingChatService::class.java))
+    }
+
+    private fun publishOpenFriend(intent: Intent?) {
+        val friendId = intent?.getStringExtra(ChatLaunch.EXTRA_FRIEND_ID)?.takeIf { it.isNotBlank() } ?: return
+        openFriendRequests.value = OpenFriendRequest(friendId, System.nanoTime())
     }
 }
 
@@ -119,7 +135,7 @@ private const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 
 
 @Composable
-fun DostApp() {
+fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow(null)) {
     val context = LocalContext.current
     val store = remember(context) { DostStore(context) }
     ConversationManager.initialize(context)
@@ -138,6 +154,18 @@ fun DostApp() {
     var closeAfterOverlayPermission by remember { mutableStateOf(false) }
     var bubbleFriendId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val openFriendRequest by openFriendRequests.collectAsState()
+
+    fun openRequestedFriend(friendId: String?) {
+        val resolved = ChatLaunch.friendToOpen(store.hasUserProfile(), friendId, friends.map { it.id }.toSet()) ?: return
+        selectedFriend = friends.first { it.id == resolved }
+        screen = AppScreen.CHAT
+    }
+
+    LaunchedEffect(openFriendRequest?.nonce) {
+        if (screen == AppScreen.SPLASH) return@LaunchedEffect
+        openRequestedFriend(openFriendRequest?.friendId)
+    }
 
     fun minimizeApp() {
         (context as? Activity)?.moveTaskToBack(true)
@@ -237,7 +265,14 @@ fun DostApp() {
     ) { currentScreen ->
     when (currentScreen) {
         AppScreen.SPLASH -> DostSplashScreen(language) {
-            screen = if (store.hasUserProfile()) AppScreen.HOME else AppScreen.REGISTER
+            val requestedId = openFriendRequests.value?.friendId
+            val resolved = ChatLaunch.friendToOpen(store.hasUserProfile(), requestedId, friends.map { it.id }.toSet())
+            if (resolved != null) {
+                selectedFriend = friends.first { it.id == resolved }
+                screen = AppScreen.CHAT
+            } else {
+                screen = if (store.hasUserProfile()) AppScreen.HOME else AppScreen.REGISTER
+            }
         }
         AppScreen.REGISTER -> RegisterScreen(
             language = language,

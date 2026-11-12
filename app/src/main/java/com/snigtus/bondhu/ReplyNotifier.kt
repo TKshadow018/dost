@@ -29,6 +29,7 @@ object ReplyNotifier {
         if (!canNotify(context)) return
         ensureChannel(context)
         val intent = Intent(context, MainActivity::class.java)
+            .putExtra(ChatLaunch.EXTRA_FRIEND_ID, friend.id)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending = PendingIntent.getActivity(context, friend.id.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
