@@ -1,6 +1,6 @@
 # Dost AI API (Hostinger)
 
-Upload `ai.php` and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
+Upload `ai.php`, `app_credential.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. `ai.php` loads `app_credential.php` from the same directory. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
 
 `https://bisque-bear-900175.hostingersite.com/api/ai.php`
 
@@ -34,9 +34,15 @@ Copy the plain-text contents of `privacy-policy.txt` into a public Google Sites 
 
 ## Configure the OpenRouter key
 
-Prefer setting the PHP/server environment variable `OPENROUTER_API_KEY`. If Hostinger does not expose environment variables to PHP, copy `config.example.php` to `config.php` on the server only and replace its placeholder with the key. Do not commit or distribute `config.php`. The included `.htaccess` denies direct HTTP access to it.
+Prefer setting the PHP/server environment variable `OPENROUTER_API_KEY`. If Hostinger does not expose environment variables to PHP, copy `config.example.php` to `config.php` on the server only and replace its placeholders. Do not commit or distribute `config.php`. The included `.htaccess` denies direct HTTP access to it.
 
-With no `X-OpenRouter-Key` request header, the endpoint uses the server key and only permits the app's listed `:free` models. If the app sends a user's own key in that HTTPS header, any syntactically valid OpenRouter `provider/model` ID is accepted and billed to that user's OpenRouter account. The endpoint does not store the custom key. AI requests are rate-limited per client IP to 30 per minute and message-log requests to 120 per minute. The URL is public; the rate limits are abuse guards, not proof that requests come from the app. Review usage and rotate the server key if it is exposed.
+Requests that would spend the server key must also send `X-Dost-App-Credential`. Generate a random secret of at least 16 characters and set it as `DOST_APP_CREDENTIAL_SECRET` (or `app_credential_secret` in `config.php`). Put that same value in `DostAppCredential.secret` in `OpenRouterClient.kt` for the release build only. Do not commit the production secret. The header value is `v1.<unix seconds>.<hmac-sha256>`, where the HMAC covers `v1`, the timestamp, and the trimmed `X-Dost-Install-ID` (or an empty installation id when that header is absent). The server accepts the timestamp within five minutes. When the secret is configured, a request with no credential, a bad credential, or a stale timestamp is rejected with HTTP 401 and does not call OpenRouter. If the secret is missing or shorter than 16 characters, those requests get HTTP 503 and the server key is still not used.
+
+`X-OpenRouter-Key` still selects the caller's own key. Those requests skip the credential gate because they do not spend the server key, and the key is still not written to the conversation archive or the diagnostic log. Message logging (`operation=log_message`) also does not spend the server key and does not require the credential. Per-IP limits stay in front of both paths: 30 AI requests per minute and 120 log requests per minute.
+
+Already-installed builds do not send `X-Dost-App-Credential`. After this API is deployed with the secret set, those builds cannot spend the server key until users update to a build that contains the matching secret. They can still chat if they enter their own OpenRouter key. To keep old builds on the server key during the rollout, set `DOST_ALLOW_LEGACY_SERVER_KEY=1`. That restores unauthenticated server-key spend. Turn it off once the updated app is out. The credential is an app-held HMAC secret, not Play Integrity. Someone who extracts it from the APK can still call the API. Play Integrity would need a Play Console project, a Google service account on this host, and a client attestation call.
+
+With no `X-OpenRouter-Key` request header, a request that passes the credential gate uses the server key and only permits the app's listed `:free` models. If the app sends a user's own key in that HTTPS header, any syntactically valid OpenRouter `provider/model` ID is accepted and billed to that user's OpenRouter account. The endpoint does not store the custom key. Review usage and rotate the server key if it is exposed.
 
 ## Verify after upload
 

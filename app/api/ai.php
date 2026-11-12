@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/app_credential.php';
+
 header('Content-Type: application/json; charset=utf-8');
 
 function respond($status, $payload)
@@ -396,6 +398,22 @@ if (!is_string($serverApiKey) || trim($serverApiKey) === '') {
     $serverApiKey = isset($config['openrouter_api_key']) ? $config['openrouter_api_key'] : '';
 }
 $usesClientKey = $clientApiKey !== '';
+$credentialPresented = isset($_SERVER['HTTP_X_DOST_APP_CREDENTIAL']) && is_string($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+    ? trim($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+    : '';
+$credentialInstall = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) && is_string($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+    ? trim($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+    : '';
+$serverKeyDecision = dost_server_key_decision($usesClientKey, $credentialPresented, $credentialInstall, time(), $config);
+if ($serverKeyDecision !== null) {
+    if ($serverKeyDecision['status'] === 503) {
+        write_ai_error_log('app_credential_not_configured', array(
+            'model' => bounded_log_text(isset($request['model']) && is_string($request['model']) ? $request['model'] : '', 160, $clientApiKey),
+            'key_source' => 'server'
+        ));
+    }
+    respond($serverKeyDecision['status'], array('error' => $serverKeyDecision['error']));
+}
 $apiKey = $usesClientKey ? $clientApiKey : $serverApiKey;
 if (!is_string($apiKey) || trim($apiKey) === '') {
     write_ai_error_log('missing_api_key', array('model' => bounded_log_text($request['model'] ?? '')));

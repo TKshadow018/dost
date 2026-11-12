@@ -10,6 +10,8 @@ import java.net.HttpURLConnection
 import java.io.IOException
 import java.net.URL
 import java.time.ZoneId
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -59,9 +61,7 @@ class OpenRouterClient {
     }
 
     fun logConversationMessage(installationId: String, userName: String, friendId: String, friendName: String, message: ChatMessage): Boolean {
-        val connection = openConnection("").apply {
-            setRequestProperty("X-Dost-Install-ID", installationId)
-        }
+        val connection = openConnection("", installationId)
         val body = JSONObject().apply {
             put("operation", "log_message")
             put("user_name", userName)
@@ -264,8 +264,38 @@ class OpenRouterClient {
         setRequestProperty("Content-Type", "application/json")
         setRequestProperty("Accept", "application/json")
         if (apiKey.isNotBlank()) setRequestProperty("X-OpenRouter-Key", apiKey.trim())
-        if (installationId != null) setRequestProperty("X-Dost-Install-ID", installationId)
+        val installHeader = installationId?.trim().orEmpty()
+        if (installationId != null) setRequestProperty("X-Dost-Install-ID", installHeader)
         if (friendId != null) setRequestProperty("X-Dost-Friend-ID", friendId)
         if (sessionId != null) setRequestProperty("X-Dost-Session-ID", sessionId)
+        val credential = dostAppCredentialValue(installHeader, System.currentTimeMillis() / 1000)
+        if (credential != null) setRequestProperty("X-Dost-App-Credential", credential)
     }
+}
+
+/**
+ * Shared with the server secret DOST_APP_CREDENTIAL_SECRET.
+ * Leave this empty in git. Set the same random value, at least 16 characters,
+ * in the release build only, and do not commit the production secret.
+ * An empty value omits X-Dost-App-Credential, and the server then rejects
+ * requests that would spend the server OpenRouter key.
+ */
+internal object DostAppCredential {
+    const val secret: String = ""
+}
+
+internal fun dostAppCredentialValue(
+    installationId: String?,
+    nowEpochSeconds: Long,
+    secret: String = DostAppCredential.secret
+): String? {
+    if (secret.isEmpty()) return null
+    val install = installationId?.trim().orEmpty()
+    val payload = "v1\n$nowEpochSeconds\n$install"
+    val mac = Mac.getInstance("HmacSHA256")
+    mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+    val hex = mac.doFinal(payload.toByteArray(Charsets.UTF_8)).joinToString("") { byte ->
+        "%02x".format(byte.toInt() and 0xff)
+    }
+    return "v1.$nowEpochSeconds.$hex"
 }
