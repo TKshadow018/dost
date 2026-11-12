@@ -20,6 +20,7 @@ object ConversationManager {
     private val unreadState = MutableStateFlow<Map<String, Int>>(emptyMap())
     private val sendingState = MutableStateFlow<Set<String>>(emptySet())
     private val waitingForScheduleState = MutableStateFlow<Set<String>>(emptySet())
+    private val relationshipState = MutableStateFlow<Map<String, RelationshipUpdate>>(emptyMap())
     private val jobs = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var activeFriendId: String? = null
     private lateinit var appContext: Context
@@ -29,6 +30,7 @@ object ConversationManager {
     val unread: StateFlow<Map<String, Int>> = unreadState.asStateFlow()
     val sending: StateFlow<Set<String>> = sendingState.asStateFlow()
     val waitingForSchedule: StateFlow<Set<String>> = waitingForScheduleState.asStateFlow()
+    val relationshipUpdates: StateFlow<Map<String, RelationshipUpdate>> = relationshipState.asStateFlow()
 
     fun initialize(context: Context) {
         if (!::appContext.isInitialized) {
@@ -107,17 +109,7 @@ object ConversationManager {
                 val answer = requestReply(friend, sessionId, language)
                 store.addUserMemories(friend.id, answer.memories)
                 updateMood(friend, answer.friendshipImpact, answer.loveImpact)
-                val friendship = (friend.friendshipScore + answer.friendshipImpact).coerceIn(0, 100)
-                val love = if (friendship > 70) (friend.loveScore + answer.loveImpact).coerceIn(0, 100) else 0
-                val currentFriend = store.loadFriends().firstOrNull { it.id == friend.id }
-                if (currentFriend != null) {
-                    val friends = store.loadFriends()
-                    val index = friends.indexOfFirst { it.id == friend.id }
-                    if (index >= 0) {
-                        friends[index] = currentFriend.copy(friendshipScore = friendship, loveScore = love)
-                        store.saveFriends(friends)
-                    }
-                }
+                updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
                 val response = listOf(
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
@@ -212,15 +204,10 @@ object ConversationManager {
             total >= 2 -> "😊"
             total == 1 -> "🙂"
             total <= -1 -> "😔"
-            else -> friend.mood
+            else -> return
         }
-        if (mood != friend.mood) {
-            val friends = store.loadFriends()
-            val index = friends.indexOfFirst { it.id == friend.id }
-            if (index >= 0) {
-                friends[index] = friends[index].copy(mood = mood)
-                store.saveFriends(friends)
-            }
+        store.updateFriend(friend.id) { current ->
+            if (current.mood == mood) current else current.copy(mood = mood)
         }
     }
 
@@ -256,7 +243,6 @@ object ConversationManager {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
                 store.addUserMemories(friend.id, answer.memories)
-                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
                 val response = listOf(
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
@@ -366,14 +352,11 @@ object ConversationManager {
     }
 
     private fun updateFriendship(friend: Friend, friendshipImpact: Int, loveImpact: Int) {
-        val friends = store.loadFriends()
-        val index = friends.indexOfFirst { it.id == friend.id }
-        if (index < 0) return
-        val currentFriend = friends[index]
-        val friendship = (currentFriend.friendshipScore + friendshipImpact).coerceIn(0, 100)
-        val love = if (friendship > 70) (currentFriend.loveScore + loveImpact).coerceIn(0, 100) else 0
-        friends[index] = currentFriend.copy(friendshipScore = friendship, loveScore = love)
-        store.saveFriends(friends)
+        val updated = store.updateFriend(friend.id) { current ->
+            val scores = applyRelationshipDelta(current.friendshipScore, current.loveScore, friendshipImpact, loveImpact)
+            current.copy(friendshipScore = scores.friendship, loveScore = scores.love)
+        } ?: return
+        relationshipState.update { it + (updated.id to RelationshipUpdate(updated.id, updated.friendshipScore, updated.loveScore)) }
     }
 
     private fun publish(friendId: String, messages: List<ChatMessage>) {
