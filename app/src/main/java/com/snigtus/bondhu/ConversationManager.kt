@@ -59,6 +59,7 @@ object ConversationManager {
                 messagesFor(friend.id).filterNot { store.isMessageLogged(it.messageId) }.forEach { message ->
                     ConversationWorkScheduler.scheduleMessageLog(appContext, friend.id, message.messageId)
                 }
+                publish(friend.id, messagesFor(friend.id))
             }
         }
     }

@@ -76,6 +76,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
@@ -124,7 +126,12 @@ fun DostApp() {
     val store = remember(context) { DostStore(context) }
     ConversationManager.initialize(context)
     var language by remember { mutableStateOf(store.language()) }
-    var screen by remember { mutableStateOf(AppScreen.SPLASH) }
+    var screen by rememberSaveable(
+        stateSaver = Saver<AppScreen, String>(
+            save = { it.name },
+            restore = { runCatching { AppScreen.valueOf(it) }.getOrDefault(AppScreen.SPLASH) }
+        )
+    ) { mutableStateOf(AppScreen.SPLASH) }
     var registerStep by remember { mutableStateOf(1) }
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
@@ -134,7 +141,13 @@ fun DostApp() {
     var openRouterApiKey by remember { mutableStateOf(store.openRouterApiKey()) }
     var aiModel by remember { mutableStateOf(store.aiModel()) }
     val friends = remember { mutableStateListOf<Friend>().apply { addAll(store.loadFriends()) } }
-    var selectedFriend by remember { mutableStateOf<Friend?>(null) }
+    val selectedFriendSaver = remember(store) {
+        Saver<Friend?, String>(
+            save = { friend -> friend?.id ?: "" },
+            restore = { id -> if (id.isBlank()) null else store.loadFriends().firstOrNull { it.id == id } }
+        )
+    }
+    var selectedFriend by rememberSaveable(stateSaver = selectedFriendSaver) { mutableStateOf<Friend?>(null) }
     var closeAfterOverlayPermission by remember { mutableStateOf(false) }
     var bubbleFriendId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
