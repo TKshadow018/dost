@@ -35,17 +35,74 @@ function dost_normalize_path($path)
     return $normalized;
 }
 
-function dost_web_root_directory()
+function dost_resolved_directory($path)
 {
+    $normalized = dost_normalize_path($path);
+    if ($normalized === '' || substr($normalized, 0, 1) !== '/') {
+        return $normalized;
+    }
+    if (file_exists($normalized) || is_link($normalized)) {
+        $real = realpath($normalized);
+        if (is_string($real) && $real !== '') {
+            return dost_normalize_path($real);
+        }
+    }
+    $suffix = array();
+    $cursor = $normalized;
+    while ($cursor !== '/' && !file_exists($cursor) && !is_link($cursor)) {
+        $base = basename($cursor);
+        if ($base === '' || $base === '.' || $base === '..') {
+            break;
+        }
+        array_unshift($suffix, $base);
+        $parent = dirname($cursor);
+        if ($parent === $cursor) {
+            break;
+        }
+        $cursor = $parent;
+    }
+    if (file_exists($cursor) || is_link($cursor)) {
+        $real = realpath($cursor);
+        if (is_string($real) && $real !== '') {
+            $prefix = dost_normalize_path($real);
+            return count($suffix) === 0 ? $prefix : $prefix . '/' . implode('/', $suffix);
+        }
+    }
+    return $normalized;
+}
+
+function dost_script_web_root()
+{
+    return dost_resolved_directory(dirname(__DIR__));
+}
+
+function dost_web_root_directories()
+{
+    $roots = array();
+    $scriptRoot = dost_script_web_root();
+    if ($scriptRoot !== '') {
+        $roots[] = $scriptRoot;
+    }
     $documentRoot = isset($_SERVER['DOCUMENT_ROOT']) ? $_SERVER['DOCUMENT_ROOT'] : '';
     if (is_string($documentRoot) && trim($documentRoot) !== '') {
-        return dost_normalize_path($documentRoot);
+        $resolved = dost_resolved_directory($documentRoot);
+        if ($resolved !== '') {
+            $roots[] = $resolved;
+        }
     }
     $override = getenv('DOST_WEB_ROOT');
     if (is_string($override) && trim($override) !== '') {
-        return dost_normalize_path($override);
+        $resolved = dost_resolved_directory($override);
+        if ($resolved !== '') {
+            $roots[] = $resolved;
+        }
     }
-    return dost_normalize_path(dirname(__DIR__));
+    return array_values(array_unique($roots));
+}
+
+function dost_web_root_directory()
+{
+    return dost_script_web_root();
 }
 
 function dost_path_is_inside($path, $root)
@@ -58,28 +115,44 @@ function dost_path_is_inside($path, $root)
     return $path === $root || strpos($path, $root . '/') === 0;
 }
 
+function dost_path_is_inside_web_root($path)
+{
+    $resolved = dost_resolved_directory($path);
+    foreach (dost_web_root_directories() as $root) {
+        if (dost_path_is_inside($resolved, $root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function dost_default_archive_beside($webRoot)
+{
+    $resolved = dost_resolved_directory($webRoot);
+    $parent = dirname($resolved);
+    if ($parent === '' || $parent === '/' || $parent === '.') {
+        return false;
+    }
+    return dost_resolved_directory($parent . '/dost-private-data/conversation-archive');
+}
+
 function dost_legacy_web_archive_directory()
 {
-    return dost_normalize_path(dost_web_root_directory() . '/log');
+    return dost_resolved_directory(dost_script_web_root() . '/log');
 }
 
 function conversation_storage_base_directory()
 {
     $configured = getenv('DOST_CONVERSATION_STORAGE_DIR');
     if (is_string($configured) && trim($configured) !== '') {
-        $directory = dost_normalize_path($configured);
+        $directory = dost_resolved_directory($configured);
     } else {
-        $webRoot = dost_web_root_directory();
-        $parent = dirname($webRoot);
-        if ($parent === '' || $parent === '/' || $parent === '.') {
-            return false;
-        }
-        $directory = dost_normalize_path($parent . '/dost-private-data/conversation-archive');
+        $directory = dost_default_archive_beside(dirname(__DIR__));
     }
-    if (substr($directory, 0, 1) !== '/') {
+    if (!is_string($directory) || substr($directory, 0, 1) !== '/') {
         return false;
     }
-    if (dost_path_is_inside($directory, dost_web_root_directory())) {
+    if (dost_path_is_inside_web_root($directory)) {
         return false;
     }
     return $directory;
@@ -90,17 +163,15 @@ function dost_prepare_storage_directory($directory)
     if (!is_string($directory) || $directory === '') {
         return false;
     }
-    $normalized = dost_normalize_path($directory);
-    if (substr($normalized, 0, 1) !== '/' || dost_path_is_inside($normalized, dost_web_root_directory())) {
+    $normalized = dost_resolved_directory($directory);
+    if (substr($normalized, 0, 1) !== '/' || dost_path_is_inside_web_root($normalized)) {
         return false;
     }
     if (!is_dir($normalized) && !is_link($normalized) && !@mkdir($normalized, 0700, true) && !is_dir($normalized)) {
         return false;
     }
     $real = realpath($normalized);
-    if ($real === false || is_link($real) || !is_dir($real)
-        || dost_path_is_inside(dost_normalize_path($real), dost_web_root_directory())
-    ) {
+    if ($real === false || is_link($real) || !is_dir($real) || dost_path_is_inside_web_root($real)) {
         return false;
     }
     @chmod($real, 0700);

@@ -10,7 +10,10 @@ Archives written after this change store installation_id on every JSONL line
 
   <archive-root>/_by_install/<lowercase-uuid>.txt
 
-Each line is a session directory relative to the archive root. There is no
+Each line is a session directory relative to the archive root. cleanup_logs.php
+removes a line when that session directory is gone and deletes an index file
+that becomes empty, so the index does not outlive the 3,650-day retention.
+There is no
 delete API. To honor a deletion request, an operator with shell access to the
 private archive deletes those session directories, including their chat-image
 files, and removes the index file. cleanup_logs.php does not do this. It only

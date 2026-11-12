@@ -105,6 +105,62 @@ function clean_archive_directories($directory, $root, $cutoff, &$deletedSessions
     }
 }
 
+function prune_install_index($storageRoot)
+{
+    $indexDirectory = $storageRoot . DIRECTORY_SEPARATOR . '_by_install';
+    if (!is_dir($indexDirectory) || is_link($indexDirectory)) {
+        return;
+    }
+    $indexFiles = glob($indexDirectory . DIRECTORY_SEPARATOR . '*.txt');
+    if (!is_array($indexFiles)) {
+        return;
+    }
+    $rootPrefix = rtrim(dost_normalize_path($storageRoot), '/');
+    foreach ($indexFiles as $indexFile) {
+        if (is_link($indexFile) || !is_file($indexFile)) {
+            continue;
+        }
+        $handle = @fopen($indexFile, 'c+');
+        if ($handle === false || !flock($handle, LOCK_EX)) {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+            continue;
+        }
+        $kept = array();
+        rewind($handle);
+        while (($line = fgets($handle)) !== false) {
+            $relative = str_replace('\\', '/', trim($line));
+            if ($relative === '' || $relative[0] === '/' || strpos($relative, '..') !== false) {
+                continue;
+            }
+            $session = $storageRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relative);
+            if (is_link($session) || !is_dir($session)) {
+                continue;
+            }
+            $real = realpath($session);
+            if ($real === false || !dost_path_is_inside(dost_normalize_path($real), $rootPrefix)) {
+                continue;
+            }
+            $kept[] = $relative;
+        }
+        if (count($kept) === 0) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+            @unlink($indexFile);
+            continue;
+        }
+        $payload = implode("\n", $kept) . "\n";
+        ftruncate($handle, 0);
+        rewind($handle);
+        fwrite($handle, $payload);
+        fflush($handle);
+        @chmod($indexFile, 0600);
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+}
+
 function run_conversation_archive_cleanup($storageDirectory, $writeHeartbeat)
 {
     if (!is_string($storageDirectory) || $storageDirectory === '' || !is_dir($storageDirectory)) {
@@ -137,6 +193,7 @@ function run_conversation_archive_cleanup($storageDirectory, $writeHeartbeat)
 
     $deletedSessions = 0;
     clean_archive_directories($storageRoot, $storageRoot, $cutoff, $deletedSessions);
+    prune_install_index($storageRoot);
 
     if ($writeHeartbeat) {
         $heartbeatPath = $storageRoot . DIRECTORY_SEPARATOR . '.cleanup-heartbeat.json';

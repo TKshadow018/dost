@@ -1,5 +1,10 @@
 <?php
 
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 /**
  * Local checks for the private conversation archive: location, installation id,
  * retention cleanup, and the legacy web-root move.
@@ -32,12 +37,29 @@ $_SERVER['DOCUMENT_ROOT'] = '';
 require_once __DIR__ . '/archive_store.php';
 
 $defaultDirectory = conversation_storage_base_directory();
-if ($defaultDirectory !== $private) {
-    dost_test_fail('Default archive directory was ' . var_export($defaultDirectory, true) . " expected {$private}.");
+$expectedDefault = dost_default_archive_beside(dirname(__DIR__));
+if ($defaultDirectory !== $expectedDefault || !is_string($expectedDefault)) {
+    dost_test_fail('Default archive directory was ' . var_export($defaultDirectory, true) . ' expected ' . var_export($expectedDefault, true) . '.');
 }
-if (dost_path_is_inside($defaultDirectory, dost_web_root_directory())) {
+if (dost_path_is_inside_web_root($defaultDirectory)) {
     dost_test_fail('Default archive directory is inside the web root.');
 }
+
+$realSite = $root . '/domains/site/public_html';
+$accountHome = $root . '/account';
+if (!mkdir($realSite . '/api', 0700, true) || !mkdir($accountHome, 0700, true) || !symlink($realSite, $accountHome . '/public_html')) {
+    dost_test_fail('Could not simulate a symlinked public_html.');
+}
+if (dost_default_archive_beside($accountHome . '/public_html') !== dost_default_archive_beside($realSite)) {
+    dost_test_fail('A symlinked public_html and its real path chose different archive directories.');
+}
+$_SERVER['DOCUMENT_ROOT'] = $accountHome . '/public_html';
+putenv('DOST_CONVERSATION_STORAGE_DIR=' . $accountHome . '/public_html/log');
+if (conversation_storage_base_directory() !== false) {
+    dost_test_fail('A storage path inside a symlinked web root was accepted.');
+}
+$_SERVER['DOCUMENT_ROOT'] = '';
+dost_test_unset('DOST_CONVERSATION_STORAGE_DIR');
 
 putenv('DOST_CONVERSATION_STORAGE_DIR=' . $web . '/log');
 if (conversation_storage_base_directory() !== false) {
@@ -132,6 +154,16 @@ file_put_contents($freshFile, "{\"installation_id\":\"fresh\"}\n");
 file_put_contents($expiredFile, "{\"installation_id\":\"expired\"}\n");
 touch($freshFile, time() - 86400);
 touch($expiredFile, time() - (3651 * 86400));
+$indexDirectory = $private . '/_by_install';
+if (!is_dir($indexDirectory) && !mkdir($indexDirectory, 0700, true)) {
+    dost_test_fail('Could not create an install index.');
+}
+$freshRelative = 'Fresh_203.0.113.9/Mina/' . $sessionId;
+$expiredRelative = 'Expired_198.51.100.4/Mina/55555555-5555-4555-8555-555555555555';
+$keptIndex = $indexDirectory . '/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.txt';
+$staleIndex = $indexDirectory . '/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.txt';
+file_put_contents($keptIndex, $expiredRelative . "\n" . $freshRelative . "\n");
+file_put_contents($staleIndex, $expiredRelative . "\n");
 
 $legacyDir = $web . '/log/Legacy_203.0.113.8/Old/66666666-6666-4666-8666-666666666666';
 if (!mkdir($legacyDir, 0700, true)) {
@@ -161,31 +193,60 @@ if (!is_array($heartbeat) || !isset($heartbeat['retention_days']) || $heartbeat[
 if (is_file($web . '/log/.cleanup-heartbeat.json')) {
     dost_test_fail('Cleanup wrote the heartbeat into the web root.');
 }
+$keptLines = is_file($keptIndex) ? file($keptIndex, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : false;
+if (!is_array($keptLines) || $keptLines !== array($freshRelative)) {
+    dost_test_fail('Cleanup left an index line for a deleted session.');
+}
+if (is_file($staleIndex)) {
+    dost_test_fail('Cleanup left an install index file whose sessions were all deleted.');
+}
 
 define('DOST_MIGRATE_LIBRARY_ONLY', true);
 require_once __DIR__ . '/migrate_conversation_archive.php';
-$remain = $web . '/log/Keep_203.0.113.7/Nila/77777777-7777-4777-8777-777777777777';
-if (!mkdir($remain, 0700, true)) {
+$sharedSession = '77777777-7777-4777-8777-777777777777';
+$remain = $web . '/log/Keep_203.0.113.7/Nila/' . $sharedSession;
+$onlyLegacy = $web . '/log/Keep_203.0.113.7/Nila/88888888-8888-4888-8888-888888888888';
+$destSession = $private . '/Keep_203.0.113.7/Nila/' . $sharedSession;
+if (!mkdir($remain, 0700, true) || !mkdir($onlyLegacy, 0700, true) || !mkdir($destSession, 0700, true)) {
     dost_test_fail('Could not create a migration fixture.');
 }
-file_put_contents($remain . '/2024-01-01_00-00-00.jsonl', "{\"installation_id\":\"move-me\"}\n");
+file_put_contents($remain . '/2024-01-01_00-00-00.jsonl', "{\"message_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"content\":\"legacy\"}\n{\"message_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"content\":\"extra\"}\n");
+file_put_contents($remain . '/pic.jpg', 'legacy-image');
+file_put_contents($onlyLegacy . '/2024-02-01_00-00-00.jsonl', "{\"message_id\":\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"content\":\"new-session\"}\n");
+file_put_contents($destSession . '/2026-01-01_00-00-00.jsonl', "{\"message_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"content\":\"already\"}\n");
+file_put_contents($destSession . '/pic.jpg', 'private-image');
 putenv('DOST_LEGACY_ARCHIVE_DIR=' . $web . '/log');
 $preview = dost_migrate_legacy_archive(false);
-if (empty($preview['ok']) || !in_array('Keep_203.0.113.7', isset($preview['moved']) ? $preview['moved'] : array(), true)) {
+$previewMoved = implode("\n", isset($preview['moved']) ? $preview['moved'] : array());
+if (empty($preview['ok']) || strpos($previewMoved, 'Keep_203.0.113.7') === false) {
     dost_test_fail('Dry-run did not plan to move the legacy archive out of the web root.');
 }
-if (!is_dir($remain)) {
+if (!is_file($remain . '/2024-01-01_00-00-00.jsonl')) {
     dost_test_fail('Dry-run moved files.');
 }
 $applied = dost_migrate_legacy_archive(true);
-if (empty($applied['ok']) || is_dir($remain) || !is_dir($private . '/Keep_203.0.113.7')) {
-    dost_test_fail('Apply did not move the legacy archive out of the web root.');
+$merged = is_file($destSession . '/2026-01-01_00-00-00.jsonl') ? file_get_contents($destSession . '/2026-01-01_00-00-00.jsonl') : '';
+$mergedCount = substr_count($merged, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+if (empty($applied['ok']) || is_dir($remain) || !is_dir($private . '/Keep_203.0.113.7')
+    || $mergedCount !== 1 || strpos($merged, 'extra') === false || strpos($merged, 'already') === false
+    || !is_dir($private . '/Keep_203.0.113.7/Nila/88888888-8888-4888-8888-888888888888')
+    || file_get_contents($destSession . '/pic.jpg') !== 'private-image'
+    || file_get_contents($destSession . '/migrated-1-pic.jpg') !== 'legacy-image'
+) {
+    dost_test_fail('Apply did not merge a session that already existed in the private archive.');
 }
 if (!is_file($web . '/log/.htaccess')) {
     dost_test_fail('Migration removed the legacy .htaccess deny rule.');
 }
 if (dost_path_is_inside($private . '/Keep_203.0.113.7', $web)) {
     dost_test_fail('Moved archive is still inside the web root.');
+}
+if (!symlink($web . '/log/.htaccess', $web . '/log/leftover-link')) {
+    dost_test_fail('Could not create a leftover symlink.');
+}
+$blocked = dost_migrate_legacy_archive(true);
+if (!empty($blocked['ok']) || empty($blocked['left_behind'])) {
+    dost_test_fail('Migration reported success while a file was still inside the web root.');
 }
 
 $note = file_get_contents(__DIR__ . '/deletion-lookup.txt');
