@@ -195,9 +195,8 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
             settingsNotice = "Importing local data…"
             try {
                 withContext(Dispatchers.IO) {
-                    store.importLocalData(JSONObject(readLocalBackup(context, uri)))
+                    ConversationManager.importLocalData(JSONObject(readLocalBackup(context, uri)))
                 }
-                ConversationManager.refreshAfterDataImport()
                 language = store.language()
                 name = store.userName()
                 email = store.userEmail()

@@ -311,7 +311,87 @@ function dost_remember_install_session($baseDirectory, $installationId, $session
     return $saved;
 }
 
+function dost_acquire_install_archive_lock($baseDirectory, $installationId)
+{
+    if (!valid_uuid($installationId) || !is_string($baseDirectory)) {
+        return false;
+    }
+    $resolvedBase = realpath($baseDirectory);
+    if (!is_string($resolvedBase) || $resolvedBase === '') {
+        return false;
+    }
+    $indexDirectory = $resolvedBase . DIRECTORY_SEPARATOR . '_by_install';
+    if (is_link($indexDirectory)
+        || (!is_dir($indexDirectory) && !@mkdir($indexDirectory, 0700, true) && !is_dir($indexDirectory))
+    ) {
+        return false;
+    }
+    @chmod($indexDirectory, 0700);
+    $resolvedIndexDirectory = realpath($indexDirectory);
+    if (!is_string($resolvedIndexDirectory) || !dost_path_is_inside($resolvedIndexDirectory, $resolvedBase)) {
+        return false;
+    }
+    $lockPath = $resolvedIndexDirectory . DIRECTORY_SEPARATOR . hash('sha256', strtolower($installationId)) . '.lock';
+    if (is_link($lockPath)) {
+        return false;
+    }
+    $handle = @fopen($lockPath, 'c+');
+    if ($handle === false || !flock($handle, LOCK_EX)) {
+        if (is_resource($handle)) {
+            fclose($handle);
+        }
+        return false;
+    }
+    $resolvedLockPath = realpath($lockPath);
+    if (is_link($lockPath) || !is_string($resolvedLockPath)
+        || !dost_path_is_inside($resolvedLockPath, $resolvedIndexDirectory)
+    ) {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        return false;
+    }
+    @chmod($lockPath, 0600);
+    return $handle;
+}
+
+function dost_release_install_archive_lock($handle)
+{
+    if (!is_resource($handle)) {
+        return;
+    }
+    flock($handle, LOCK_UN);
+    fclose($handle);
+}
+
 function append_conversation_events($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, $events)
+{
+    if (!valid_uuid($installationId)) {
+        return false;
+    }
+    $baseDirectory = dost_prepare_storage_directory(conversation_storage_base_directory());
+    if ($baseDirectory === false) {
+        return false;
+    }
+    $installLock = dost_acquire_install_archive_lock($baseDirectory, $installationId);
+    if ($installLock === false) {
+        return false;
+    }
+    try {
+        return dost_append_conversation_events_under_install_lock(
+            $installationId,
+            $userName,
+            $clientIp,
+            $friendName,
+            $friendId,
+            $sessionId,
+            $events
+        );
+    } finally {
+        dost_release_install_archive_lock($installLock);
+    }
+}
+
+function dost_append_conversation_events_under_install_lock($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, $events)
 {
     if (!valid_uuid($installationId) || !valid_uuid($friendId) || !valid_uuid($sessionId) || !is_array($events)) {
         return false;
@@ -531,6 +611,26 @@ function dost_write_install_archive_deletion_marker($baseDirectory, $installatio
 }
 
 function dost_delete_installation_archive($installationId)
+{
+    if (!valid_uuid($installationId)) {
+        return false;
+    }
+    $baseDirectory = dost_prepare_storage_directory(conversation_storage_base_directory());
+    if ($baseDirectory === false) {
+        return false;
+    }
+    $installLock = dost_acquire_install_archive_lock($baseDirectory, $installationId);
+    if ($installLock === false) {
+        return false;
+    }
+    try {
+        return dost_delete_installation_archive_under_install_lock($installationId);
+    } finally {
+        dost_release_install_archive_lock($installLock);
+    }
+}
+
+function dost_delete_installation_archive_under_install_lock($installationId)
 {
     if (!valid_uuid($installationId)) {
         return false;
