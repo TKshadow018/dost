@@ -64,6 +64,17 @@ class MemoryMergeTest {
     }
 
     @Test
+    fun promptUsesOnlyTheLastTwoHundredMemories() {
+        val memories = List(250) { index -> UserMemory("other", "Fact $index") }
+
+        val included = userMemoriesForPrompt(memories)
+
+        assertEquals(MAX_INJECTED_USER_MEMORIES, included.size)
+        assertEquals("Fact 50", included.first().fact)
+        assertEquals("Fact 249", included.last().fact)
+    }
+
+    @Test
     fun userCanReplaceAndDeleteAFact() {
         val math = UserMemory("work_or_study", "User teaches math")
         val replaced = replaceUserMemory(listOf(sylhet, math), math, UserMemory("education", "User teaches physics"))

@@ -7,6 +7,10 @@ import java.time.ZonedDateTime
 enum class AppScreen { SPLASH, REGISTER, HOME, CHAT, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
 
+internal const val MAX_CUSTOM_FRIENDS = 3
+internal const val MAX_SYSTEM_FRIENDS = 7
+internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
+
 data class Friend(
     val id: String,
     val name: String,
@@ -193,6 +197,9 @@ fun mergeUserMemories(
     }
     return memories.takeLast(limit)
 }
+
+internal fun userMemoriesForPrompt(memories: List<UserMemory>): List<UserMemory> =
+    memories.takeLast(MAX_INJECTED_USER_MEMORIES)
 
 fun replaceUserMemory(existing: List<UserMemory>, original: UserMemory, updated: UserMemory): List<UserMemory> {
     val index = existing.indexOfFirst { sameUserMemory(it, original) }

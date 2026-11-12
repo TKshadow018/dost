@@ -43,7 +43,6 @@ class OpenRouterClient {
             "mistralai/mistral-medium-3", "mistralai/mistral-small-3.1-24b-instruct",
             "x-ai/grok-3-mini", "perplexity/sonar", "cohere/command-a"
         )).distinct()
-        private const val MAX_MEMORY_ITEMS = MAX_INJECTED_USER_MEMORIES
         internal const val MODEL_REPLY_LOG_LIMIT = 200
         internal const val MAX_SUMMARY_MESSAGES = 100
         internal const val MAX_SESSION_SUMMARY_ITEMS = 7
@@ -98,7 +97,7 @@ class OpenRouterClient {
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
         val friendDateTime = ZonedDateTime.now(validZoneId(friend.timeZoneId)).format(formatter)
-        val memoryContext = userMemories.takeLast(MAX_MEMORY_ITEMS).joinToString("\n") { "- [${it.category}] ${it.fact}" }.ifBlank { "No stored information yet." }
+        val memoryContext = userMemoriesForPrompt(userMemories).joinToString("\n") { "- [${it.category}] ${it.fact}" }.ifBlank { "No stored information yet." }
         val sessionSummaryContext = sessionSummaries.takeLast(MAX_SESSION_SUMMARY_ITEMS).joinToString("\n\n") {
             "Session summary: ${it.summary}"
         }.ifBlank { "No previous session summaries yet." }
