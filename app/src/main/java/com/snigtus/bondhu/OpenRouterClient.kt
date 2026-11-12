@@ -42,8 +42,12 @@ class OpenRouterClient {
             "x-ai/grok-3-mini", "perplexity/sonar", "cohere/command-a"
         )).distinct()
         private const val MAX_MEMORY_ITEMS = 200
-        private const val MAX_SUMMARY_MESSAGES = 100
-        private const val MAX_SESSION_SUMMARY_ITEMS = 7
+        internal const val MAX_SUMMARY_MESSAGES = 100
+        internal const val MAX_SESSION_SUMMARY_ITEMS = 7
+
+        /** Messages fed to the session-summary prompt. The injection cap for stored summaries stays separate. */
+        internal fun summaryMessages(messages: List<ChatMessage>): List<ChatMessage> =
+            messages.takeLast(MAX_SUMMARY_MESSAGES)
     }
 
     suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false): AiReply = withContext(Dispatchers.IO) {
@@ -211,7 +215,7 @@ class OpenRouterClient {
 
     private fun requestSessionSummary(model: String, apiKey: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String {
         val connection = openConnection(apiKey)
-        val transcript = messages.takeLast(MAX_SESSION_SUMMARY_ITEMS).joinToString("\n") { message ->
+        val transcript = summaryMessages(messages).joinToString("\n") { message ->
             "${if (message.role == "user") "User" else friendName}: ${message.content}"
         }
         val system = "Summarize this complete conversation in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Preserve important topics, decisions, emotions, plans, and explicitly stated personal details. Do not infer or invent facts. Return only the summary."
