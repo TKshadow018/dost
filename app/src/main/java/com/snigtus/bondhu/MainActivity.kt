@@ -1188,7 +1188,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
                             onClick = { imagePicker.launch("image/*") },
-                            enabled = !profileBlocked && (!sending || waitingForSchedule)
+                            enabled = !profileBlocked
                         ) {
                             Icon(
                                 painter = painterResource(android.R.drawable.ic_menu_gallery),
@@ -1200,7 +1200,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                             )
                         }
                         OutlinedTextField(draft, { draft = it }, enabled = !profileBlocked, modifier = Modifier.weight(1f), placeholder = { Text(when { bangla -> "একটি মেসেজ লিখুন..."; hindi -> "संदेश लिखें..."; else -> "Write a message..." }) }, maxLines = 4)
-                        Button(enabled = !profileBlocked && (draft.isNotBlank() || selectedImagePath.isNotBlank()) && (!sending || waitingForSchedule), onClick = {
+                        Button(enabled = !profileBlocked && (draft.isNotBlank() || selectedImagePath.isNotBlank()), onClick = {
                             if (friend.profilePending) return@Button
                             val text = draft.trim()
                             val imagePath = selectedImagePath
