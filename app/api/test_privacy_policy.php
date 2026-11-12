@@ -27,7 +27,9 @@ $forbidden = array(
     '/removal does not erase/i' => 'says removal does not erase local history',
     '/does not currently erase that friend/i' => 'says friend removal keeps local chat',
     '/Google Play requires/i' => 'states a third-party store rule in the user-facing policy',
-    '/not configured to exclude/i' => 'says chat photos are included in backup'
+    '/not configured to exclude/i' => 'says chat photos are included in backup',
+    '/does not check the value/i' => 'says registration does not validate age',
+    '/meter is not turned off because of the age/i' => 'says romance is not age-gated'
 );
 foreach ($forbidden as $pattern => $reason) {
     if (preg_match($pattern, $text) === 1) {
@@ -41,8 +43,8 @@ $required = array(
     'chat transcript file' => 'states that friend removal deletes the local transcript',
     'learned memories' => 'states that friend removal deletes local memories',
     'session summaries' => 'states that friend removal deletes local summaries',
-    'does not check the value' => 'states that registration does not validate age',
-    'under 13 or under 18' => 'states that neither 13 nor 18 is enforced',
+    'whole-number age from 13 through 120' => 'states the registration age requirement',
+    'user or friend is under 18' => 'states the romance age gate',
     'child-directed service' => 'states that Dost is not a child-directed service',
     'tushartk018@gmail.com' => 'keeps the archive-request contact address',
     'November 12, 2026' => 'uses the revised effective date',
@@ -69,4 +71,4 @@ if (count($failures) > 0) {
     exit(1);
 }
 
-fwrite(STDOUT, "PASS: privacy policy matches local deletion, 3,650-day retention, and the unimplemented age gate.\n");
+fwrite(STDOUT, "PASS: privacy policy matches local deletion, 3,650-day retention, and the age gate.\n");

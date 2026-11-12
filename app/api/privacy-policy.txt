@@ -2,7 +2,7 @@ DOST PRIVACY POLICY
 Effective date: November 12, 2026
 
 ABOUT THIS POLICY
-Dost is an AI companion application for Android. This policy describes the information the current app stores on the device, what it sends to Dost's API server and to AI providers, how long the server archive is kept, and what is deleted when you remove a friend or remove the app. It matches this version of the app. It does not create a minimum age, a children's mode, or an in-app control that deletes the server archive. Those are separate product decisions and are not built in this version.
+Dost is an AI companion application for Android. This policy describes the information the current app stores on the device, what it sends to Dost's API server and to AI providers, how long the server archive is kept, and what is deleted when you remove a friend or remove the app. It matches this version of the app. There is no children's mode or in-app control that deletes the server archive.
 
 1. INFORMATION STORED ON YOUR DEVICE
 Dost stores the following information in the app's private storage on your Android device:
@@ -67,9 +67,9 @@ The optional floating chat feature requires Android's draw-over-other-apps permi
 Dost does not operate its own advertising, analytics, or tracking service. Chat and profile-generation data is shared with Dost's API host, OpenRouter, and the model provider selected for the request to provide AI functionality. The API host also receives the network address of the connecting device as part of normal HTTP requests.
 
 7. AGE AND AUDIENCE
-Registration asks for an age and stores the text you enter when that field is not empty. This version does not check the value, does not reject an age under 13 or under 18, and does not ask for parental consent. There is no children's mode and no parental controls. A friend age under 18 only changes that fictional friend's default busy hours to a school-day schedule. The romantic relationship meter is not turned off because of the age you enter or the friend's age.
+Registration requires a whole-number age from 13 through 120 and rejects ages under 13. Ages 13 through 17 may use the app. The romantic relationship meter and romantic prompts are turned off when the user or friend is under 18, or when either age is missing or unusable. The app does not verify the age entered or ask for parental consent. There is no children's mode and no parental controls.
 
-Dost does not provide a child-directed service. This policy does not state a minimum age. Choosing a minimum age for distribution, and choosing whether romance features are available under that age, is a product and store-policy decision that this version of the app does not implement. Do not read this policy as saying Dost is intended for children.
+Dost does not provide a child-directed service.
 
 8. CHANGES TO THIS POLICY
 We may update this Privacy Policy when the app or its data practices change. We will post the updated policy at the published policy location and revise the effective date.
