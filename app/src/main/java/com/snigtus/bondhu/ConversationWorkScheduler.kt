@@ -14,6 +14,14 @@ import java.time.Duration
 import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
+internal fun nextMorningGreetingAt(now: ZonedDateTime, friend: Friend): ZonedDateTime {
+    val friendNow = now.withZoneSameInstant(validZoneId(friend.timeZoneId))
+    var target = friendNow.withHour(8).withMinute(0).withSecond(0).withNano(0)
+    if (!friendNow.isBefore(target)) target = target.plusDays(1)
+    // Don't greet during busy hours; push to after the busy window if needed.
+    return friend.replyAvailableAt(target) ?: target
+}
+
 internal object ConversationWorkScheduler {
     private const val BUSY_REPLY = "busy_reply"
     private const val CHECK_IN = "check_in"
@@ -48,13 +56,8 @@ internal object ConversationWorkScheduler {
     }
 
     fun scheduleMorningGreeting(context: Context, friend: Friend, language: AppLanguage) {
-        val zone = validZoneId(friend.timeZoneId)
-        val now = ZonedDateTime.now(zone)
-        var target = now.withHour(8).withMinute(0).withSecond(0).withNano(0)
-        if (!now.isBefore(target)) target = target.plusDays(1)
-        // Don't greet during busy hours; push to after the busy window if needed.
-        val availableAt = friend.replyAvailableAt(target) ?: target
-        val delayMillis = Duration.between(ZonedDateTime.now(zone), availableAt).toMillis().coerceAtLeast(0L)
+        val availableAt = nextMorningGreetingAt(ZonedDateTime.now(), friend)
+        val delayMillis = Duration.between(ZonedDateTime.now(), availableAt).toMillis().coerceAtLeast(0L)
         val sessionId = java.util.UUID.randomUUID().toString()
         enqueue(context, "morning_${friend.id}", ExistingWorkPolicy.REPLACE, MORNING_GREETING, friend.id, sessionId, language, delayMillis)
     }

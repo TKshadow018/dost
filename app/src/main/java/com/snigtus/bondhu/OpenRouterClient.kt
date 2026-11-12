@@ -46,8 +46,8 @@ class OpenRouterClient {
         private const val MAX_SESSION_SUMMARY_ITEMS = 7
     }
 
-    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false): AiReply = withContext(Dispatchers.IO) {
-        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp)
+    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = ""): AiReply = withContext(Dispatchers.IO) {
+        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction)
     }
 
     suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
@@ -88,9 +88,9 @@ class OpenRouterClient {
         return false
     }
 
-    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean): AiReply {
-        val sessionId = history.lastOrNull()?.sessionId.orEmpty()
-        val connection = openConnection(apiKey, installationId, friend.id, sessionId)
+    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = ""): AiReply {
+        val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
+        val connection = openConnection(apiKey, installationId, friend.id, resolvedSessionId)
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
         val friendDateTime = ZonedDateTime.now(validZoneId(friend.timeZoneId)).format(formatter)
@@ -156,7 +156,9 @@ class OpenRouterClient {
             The combined reply and follow_up_question may contain at most one question total. Never ask stacked questions or put one question in each field. $questionGuidance Do not interrogate, repeat a question already answered, or ask for secrets. Make it playful or gently funny when it fits, while remaining respectful. If the user seems uncomfortable or asks not to share, ask no question.
             Set follow_up_delay_minutes to an integer from 1 to 1440 only when the user explicitly asks for a future check-in after a duration; otherwise set it to null. When a delay is requested, do not ask an immediate follow-up question.
             Rate the latest conversation's relationship impact. friendship_impact must be an integer from -1 to 2. love_impact must be an integer from -1 to 2 only when friendship is above 70 and the conversation is clearly flirty or romantic; otherwise use 0. Apply friendship impact to warmth, trust, respectful openness, and shared conversation. A private question from a complete stranger should be met with a gentle boundary such as "Whoa, we just met" rather than a direct answer, and should not earn positive points. Do not unlock private or intimate talk early. Personal talk becomes more open around friendship 41+, private talk around 61+, and romantic/intimate-but-non-explicit talk only when friendship is above 70 and love is above 30. Never generate explicit sexual content.
-        """.trimIndent()
+        """.trimIndent().let { prompt ->
+            if (ephemeralInstruction.isBlank()) prompt else prompt + "\n\n" + ephemeralInstruction.trim()
+        }
         val imageMessages = history.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
         val messages = JSONArray().apply {
             put(JSONObject().apply { put("role", "system"); put("content", system) })
