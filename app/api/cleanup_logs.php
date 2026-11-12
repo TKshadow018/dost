@@ -5,6 +5,8 @@ if (PHP_SAPI !== 'cli') {
     exit;
 }
 
+require_once __DIR__ . '/archive_store.php';
+
 define('DOST_RETENTION_DAYS', 3650);
 
 function is_within_storage_root($path, $root)
@@ -103,47 +105,95 @@ function clean_archive_directories($directory, $root, $cutoff, &$deletedSessions
     }
 }
 
-$configuredDirectory = getenv('DOST_CONVERSATION_STORAGE_DIR');
-$storageDirectory = is_string($configuredDirectory) && trim($configuredDirectory) !== ''
-    ? rtrim($configuredDirectory, DIRECTORY_SEPARATOR)
-    : dirname(__DIR__) . DIRECTORY_SEPARATOR . 'log';
+function run_conversation_archive_cleanup($storageDirectory, $writeHeartbeat)
+{
+    if (!is_string($storageDirectory) || $storageDirectory === '' || !is_dir($storageDirectory)) {
+        return array(
+            'ok' => true,
+            'skipped' => true,
+            'deleted_sessions' => 0,
+            'deleted_legacy_files' => 0
+        );
+    }
+    if (is_link($storageDirectory)) {
+        return array('ok' => false, 'error' => 'Could not safely resolve the conversation archive directory.');
+    }
+    $storageRoot = realpath($storageDirectory);
+    if ($storageRoot === false) {
+        return array('ok' => false, 'error' => 'Could not safely resolve the conversation archive directory.');
+    }
 
-if (!is_dir($storageDirectory)) {
+    $cutoff = time() - (DOST_RETENTION_DAYS * 24 * 60 * 60);
+    $deletedLegacyFiles = 0;
+    foreach (glob($storageRoot . DIRECTORY_SEPARATOR . '*.jsonl') ?: array() as $archiveFile) {
+        if (is_link($archiveFile)) {
+            continue;
+        }
+        $modifiedAt = @filemtime($archiveFile);
+        if ($modifiedAt !== false && $modifiedAt < $cutoff && @unlink($archiveFile)) {
+            $deletedLegacyFiles++;
+        }
+    }
+
+    $deletedSessions = 0;
+    clean_archive_directories($storageRoot, $storageRoot, $cutoff, $deletedSessions);
+
+    if ($writeHeartbeat) {
+        $heartbeatPath = $storageRoot . DIRECTORY_SEPARATOR . '.cleanup-heartbeat.json';
+        $heartbeat = json_encode(array(
+            'last_run' => gmdate(DATE_ATOM),
+            'retention_days' => DOST_RETENTION_DAYS,
+            'storage_directory' => $storageRoot,
+            'deleted_sessions' => $deletedSessions,
+            'deleted_legacy_files' => $deletedLegacyFiles
+        ));
+        if (is_string($heartbeat)) {
+            @file_put_contents($heartbeatPath, $heartbeat . "\n", LOCK_EX);
+            @chmod($heartbeatPath, 0600);
+        }
+    }
+
+    return array(
+        'ok' => true,
+        'skipped' => false,
+        'deleted_sessions' => $deletedSessions,
+        'deleted_legacy_files' => $deletedLegacyFiles
+    );
+}
+
+if (defined('DOST_CLEANUP_LIBRARY_ONLY')) {
+    return;
+}
+
+$storageDirectory = conversation_storage_base_directory();
+if ($storageDirectory === false) {
+    fwrite(STDERR, "Conversation archive directory is inside the web root or is not an absolute path. Set DOST_CONVERSATION_STORAGE_DIR outside the web root.\n");
+    exit(1);
+}
+
+$primary = run_conversation_archive_cleanup($storageDirectory, true);
+if (!isset($primary['ok']) || $primary['ok'] !== true) {
+    fwrite(STDERR, isset($primary['error']) ? $primary['error'] . "\n" : "Cleanup failed.\n");
+    exit(1);
+}
+
+$legacyDirectory = dost_legacy_web_archive_directory();
+$legacy = array('skipped' => true, 'deleted_sessions' => 0, 'deleted_legacy_files' => 0);
+if (dost_normalize_path($legacyDirectory) !== dost_normalize_path($storageDirectory)) {
+    $legacy = run_conversation_archive_cleanup($legacyDirectory, false);
+    if (!isset($legacy['ok']) || $legacy['ok'] !== true) {
+        fwrite(STDERR, isset($legacy['error']) ? $legacy['error'] . "\n" : "Legacy cleanup failed.\n");
+        exit(1);
+    }
+}
+
+if (!empty($primary['skipped']) && !empty($legacy['skipped'])) {
     fwrite(STDOUT, "No conversation archive directory exists; nothing to clean.\n");
     exit(0);
 }
 
-$storageRoot = realpath($storageDirectory);
-if ($storageRoot === false || is_link($storageDirectory)) {
-    fwrite(STDERR, "Could not safely resolve the conversation archive directory.\n");
-    exit(1);
-}
-
-$cutoff = time() - (DOST_RETENTION_DAYS * 24 * 60 * 60);
-$deletedLegacyFiles = 0;
-foreach (glob($storageRoot . DIRECTORY_SEPARATOR . '*.jsonl') ?: array() as $archiveFile) {
-    if (is_link($archiveFile)) {
-        continue;
-    }
-    $modifiedAt = @filemtime($archiveFile);
-    if ($modifiedAt !== false && $modifiedAt < $cutoff && @unlink($archiveFile)) {
-        $deletedLegacyFiles++;
-    }
-}
-
-$deletedSessions = 0;
-clean_archive_directories($storageRoot, $storageRoot, $cutoff, $deletedSessions);
-
-$heartbeatPath = $storageRoot . DIRECTORY_SEPARATOR . '.cleanup-heartbeat.json';
-$heartbeat = json_encode(array(
-    'last_run' => gmdate(DATE_ATOM),
-    'retention_days' => DOST_RETENTION_DAYS,
-    'deleted_sessions' => $deletedSessions,
-    'deleted_legacy_files' => $deletedLegacyFiles
-));
-if (is_string($heartbeat)) {
-    @file_put_contents($heartbeatPath, $heartbeat . "\n", LOCK_EX);
-    @chmod($heartbeatPath, 0600);
-}
-
+$deletedSessions = (isset($primary['deleted_sessions']) ? $primary['deleted_sessions'] : 0)
+    + (isset($legacy['deleted_sessions']) ? $legacy['deleted_sessions'] : 0);
+$deletedLegacyFiles = (isset($primary['deleted_legacy_files']) ? $primary['deleted_legacy_files'] : 0)
+    + (isset($legacy['deleted_legacy_files']) ? $legacy['deleted_legacy_files'] : 0);
 fwrite(STDOUT, "Deleted {$deletedSessions} expired session archive(s) and {$deletedLegacyFiles} expired legacy archive file(s).\n");
