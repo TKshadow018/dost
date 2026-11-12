@@ -28,6 +28,19 @@ class DostStore(context: Context) {
     fun hasUserProfile(): Boolean = preferences.getBoolean("user_profile_saved", false) || runCatching {
         JSONArray(preferences.getString("friends", "[]")).length() > 0
     }.getOrDefault(false)
+
+    /** Saved profile whose age meets [MINIMUM_ACCOUNT_AGE]. Friends alone do not count. */
+    fun hasEligibleAccount(): Boolean =
+        preferences.getBoolean("user_profile_saved", false) && accountAgeResult(userAge()) == AccountAgeResult.VALID
+
+    /** Writes love scores back as 0 when romance is locked for this user or friend. */
+    fun clearLockedLoveScores() {
+        val age = userAge()
+        val friends = loadFriends()
+        if (friends.any { !romanceAllowed(age, it.age) && it.loveScore != 0 }) {
+            saveFriends(friends)
+        }
+    }
     fun saveUserProfile(name: String, email: String, age: String, gender: String) {
         preferences.edit().putBoolean("user_profile_saved", true).putString("user_name", name).putString("user_email", email).putString("user_age", age).putString("user_gender", gender).apply()
     }
@@ -98,6 +111,7 @@ class DostStore(context: Context) {
     }.getOrDefault(mutableListOf())
 
     fun saveFriends(friends: List<Friend>) {
+        val userAge = userAge()
         val json = JSONArray()
         friends.forEach { friend ->
             json.put(JSONObject().apply {
@@ -106,7 +120,7 @@ class DostStore(context: Context) {
                 put("family", friend.family); put("familyMembers", friend.familyMembers); put("familyActivities", friend.familyActivities)
                 put("financialCondition", friend.financialCondition); put("address", friend.address); put("height", friend.height); put("weight", friend.weight)
                 put("facialFeatures", friend.facialFeatures); put("bodyFeatures", friend.bodyFeatures)
-                put("friendshipScore", friend.friendshipScore); put("loveScore", friend.loveScore)
+                put("friendshipScore", friend.friendshipScore); put("loveScore", friend.withLoveMeterGated(userAge).loveScore)
                 put("mood", friend.mood)
                 put("photoUri", friend.photoUri)
                 put("busyStartHour", friend.busyStartHour); put("busyDurationHours", friend.busyDurationHours)

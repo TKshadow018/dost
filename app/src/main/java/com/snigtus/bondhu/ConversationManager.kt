@@ -106,9 +106,9 @@ object ConversationManager {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
                 store.addUserMemories(friend.id, answer.memories)
-                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
+                updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
                 val friendship = (friend.friendshipScore + answer.friendshipImpact).coerceIn(0, 100)
-                val love = if (friendship > 70) (friend.loveScore + answer.loveImpact).coerceIn(0, 100) else 0
+                val love = nextLoveScore(friend.loveScore, answer.loveImpact, friendship, store.userAge(), friend.age)
                 val currentFriend = store.loadFriends().firstOrNull { it.id == friend.id }
                 if (currentFriend != null) {
                     val friends = store.loadFriends()
@@ -257,7 +257,7 @@ object ConversationManager {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
                 store.addUserMemories(friend.id, answer.memories)
-                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
+                updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
                 val response = listOf(
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
@@ -283,7 +283,7 @@ object ConversationManager {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp, userAge = store.userAge()
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
@@ -291,7 +291,7 @@ object ConversationManager {
             return client.reply(
                 apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp, userAge = store.userAge()
             )
         }
     }
@@ -367,13 +367,16 @@ object ConversationManager {
         return true
     }
 
+    private fun gatedLoveImpact(friend: Friend, loveImpact: Int): Int =
+        if (romanceAllowed(store.userAge(), friend.age)) loveImpact else 0
+
     private fun updateFriendship(friend: Friend, friendshipImpact: Int, loveImpact: Int) {
         val friends = store.loadFriends()
         val index = friends.indexOfFirst { it.id == friend.id }
         if (index < 0) return
         val currentFriend = friends[index]
         val friendship = (currentFriend.friendshipScore + friendshipImpact).coerceIn(0, 100)
-        val love = if (friendship > 70) (currentFriend.loveScore + loveImpact).coerceIn(0, 100) else 0
+        val love = nextLoveScore(currentFriend.loveScore, loveImpact, friendship, store.userAge(), currentFriend.age)
         friends[index] = currentFriend.copy(friendshipScore = friendship, loveScore = love)
         store.saveFriends(friends)
     }
