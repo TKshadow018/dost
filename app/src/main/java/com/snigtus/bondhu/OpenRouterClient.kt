@@ -180,8 +180,14 @@ class OpenRouterClient {
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-        return parseReply(raw, connection.getHeaderField("X-Dost-Message-ID"))
+        val parsed = parseReply(raw, connection.getHeaderField("X-Dost-Message-ID"))
+        if (parsed.parseFailed) {
+            android.util.Log.w("OpenRouterClient", "Unparseable model reply: $raw")
+        }
+        return parsed
     }
+
+    internal fun parseModelReply(raw: String, serverMessageId: String? = null): AiReply = parseReply(raw, serverMessageId)
 
     private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile {
         val connection = openConnection(apiKey)
@@ -247,7 +253,9 @@ class OpenRouterClient {
                 loveImpact = json.optInt("love_impact", 0).coerceIn(-1, 2),
                 serverMessageId = serverMessageId
             )
-        }.getOrElse { AiReply(removeSafetyMetadata(raw), serverMessageId = serverMessageId) }
+        }.getOrElse {
+            AiReply(text = "", memories = emptyList(), friendshipImpact = 0, loveImpact = 0, parseFailed = true, serverMessageId = serverMessageId)
+        }
     }
 
     private fun removeSafetyMetadata(text: String): String = text

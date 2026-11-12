@@ -105,6 +105,10 @@ object ConversationManager {
             try {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
+                if (answer.parseFailed) {
+                    appendAssistant(friend.id, unreadableReply(language), modelId = selectedModel, category = "error")
+                    return@launch
+                }
                 store.addUserMemories(friend.id, answer.memories)
                 updateMood(friend, answer.friendshipImpact, answer.loveImpact)
                 val friendship = (friend.friendshipScore + answer.friendshipImpact).coerceIn(0, 100)
@@ -189,10 +193,10 @@ object ConversationManager {
         ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, userMessage.messageId)
     }
 
-    private fun appendAssistant(friendId: String, response: String, messageId: String? = null, modelId: String = store.aiModel()) {
+    private fun appendAssistant(friendId: String, response: String, messageId: String? = null, modelId: String = store.aiModel(), category: String = "conversation") {
         val sessionId = store.currentSessionId(friendId) ?: java.util.UUID.randomUUID().toString()
         store.saveCurrentSessionId(friendId, sessionId)
-        val assistantMessage = ChatMessage("assistant", response, sessionId = sessionId, messageId = messageId ?: java.util.UUID.randomUUID().toString(), modelId = modelId)
+        val assistantMessage = ChatMessage("assistant", response, category = category, sessionId = sessionId, messageId = messageId ?: java.util.UUID.randomUUID().toString(), modelId = modelId)
         val saved = messagesFor(friendId).toMutableList().apply { add(assistantMessage) }
         publish(friendId, saved)
         store.saveMessages(friendId, saved)
@@ -231,6 +235,12 @@ object ConversationManager {
         AppLanguage.ENGLISH -> "Sorry, I couldn't reply just now. Please try again in a moment."
     }
 
+    private fun unreadableReply(language: AppLanguage): String = when (language) {
+        AppLanguage.BANGLA -> "এই উত্তরটা পড়া যায়নি। মেসেজ চেপে ধরে Reply differently বেছে আবার চেষ্টা করো।"
+        AppLanguage.HINDI -> "यह जवाब पढ़ा नहीं जा सका। संदेश को दबाकर Reply differently चुनें और फिर कोशिश करें।"
+        AppLanguage.ENGLISH -> "I couldn't read that reply. Touch and hold this message and choose Reply differently to try again."
+    }
+
     private fun connectionIssueReply(language: AppLanguage): String = when (language) {
         AppLanguage.BANGLA -> "এই মুহূর্তে সংযোগে সমস্যা হচ্ছে। কিছুক্ষণ পর আবার চেষ্টা করলে আমি উত্তর দেব।"
         AppLanguage.HINDI -> "अभी कनेक्शन में समस्या है। थोड़ी देर बाद फिर कोशिश करें, मैं जवाब दे दूँगा।"
@@ -256,6 +266,10 @@ object ConversationManager {
             try {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
+                if (answer.parseFailed) {
+                    appendAssistant(friend.id, unreadableReply(language), modelId = store.aiModel(), category = "error")
+                    return@launch
+                }
                 store.addUserMemories(friend.id, answer.memories)
                 updateMood(friend, answer.friendshipImpact, answer.loveImpact)
                 val response = listOf(
@@ -321,6 +335,11 @@ object ConversationManager {
         sendingState.update { it + friendId }
         try {
             val answer = requestReply(friend, sessionId, language, forceFollowUp)
+            if (answer.parseFailed) {
+                appendAssistant(friendId, unreadableReply(language), modelId = selectedModel, category = "error")
+                store.setScheduledReply(friendId, false)
+                return true
+            }
             store.addUserMemories(friendId, answer.memories)
             updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
             val response = listOf(

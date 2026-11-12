@@ -112,7 +112,8 @@ data class AiReply(
     val followUpDelayMinutes: Int? = null,
     val friendshipImpact: Int = 0,
     val loveImpact: Int = 0,
-    val serverMessageId: String? = null
+    val serverMessageId: String? = null,
+    val parseFailed: Boolean = false
 )
 
 fun friendshipLevel(score: Int): String = when (score.coerceIn(0, 100)) {
