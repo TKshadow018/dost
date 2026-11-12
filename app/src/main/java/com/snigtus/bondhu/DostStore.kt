@@ -106,7 +106,7 @@ class DostStore(context: Context) {
         val json = JSONArray(preferences.getString("friends", "[]"))
         MutableList(json.length()) { index ->
             val item = json.getJSONObject(index)
-            Friend(item.getString("id"), item.getString("name"), item.getString("age"), item.getString("gender"), item.optString("personality", "Friendly and curious"), item.optString("interests"), item.optString("memories"), item.optString("conversationStyle", "Warm, natural, and concise"), item.optString("family"), item.optString("familyMembers"), item.optString("familyActivities"), item.optString("financialCondition"), item.optString("address"), item.optString("height"), item.optString("weight"), item.optString("facialFeatures"), item.optString("bodyFeatures"), item.optInt("friendshipScore", 0).coerceIn(0, 100), item.optInt("loveScore", 0).coerceIn(0, 100), item.optString("mood"), item.optString("photoUri"), item.optInt("busyStartHour", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 8 else 9), item.optInt("busyDurationHours", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 6 else 8), item.optString("busyReason", if ((item.optString("age").toIntOrNull() ?: 18) < 18) "School" else "Work"), validZoneId(item.optString("timeZoneId", ZoneId.systemDefault().id)).id, item.optString("catalogId"), item.optBoolean("profilePending", false))
+            Friend(item.getString("id"), item.getString("name"), item.getString("age"), item.getString("gender"), item.optString("personality", "Friendly and curious"), item.optString("interests"), item.optString("memories"), item.optString("conversationStyle", "Warm, natural, and concise"), item.optString("family"), item.optString("familyMembers"), item.optString("familyActivities"), item.optString("financialCondition"), item.optString("address"), item.optString("height"), item.optString("weight"), item.optString("facialFeatures"), item.optString("bodyFeatures"), item.optInt("friendshipScore", 0).coerceIn(0, 100), item.optInt("loveScore", 0).coerceIn(0, 100), item.optString("mood"), item.optString("photoUri"), item.optInt("busyStartHour", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 8 else 9), item.optInt("busyDurationHours", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 6 else 8), item.optString("busyReason", if ((item.optString("age").toIntOrNull() ?: 18) < 18) "School" else "Work"), validZoneId(item.optString("timeZoneId", ZoneId.systemDefault().id)).id, item.optString("catalogId"), item.optBoolean("profilePending", false), item.optString("greeting"), item.optString("relationship"))
         }
     }.getOrDefault(mutableListOf())
 
@@ -138,6 +138,8 @@ class DostStore(context: Context) {
                 put("timeZoneId", friend.timeZoneId)
                 put("catalogId", friend.catalogId)
                 put("profilePending", friend.profilePending)
+                put("greeting", friend.greeting)
+                put("relationship", friend.relationship)
             })
         }
         preferences.edit().putString("friends", json.toString()).apply()

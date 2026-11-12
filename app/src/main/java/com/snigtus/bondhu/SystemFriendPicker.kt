@@ -447,7 +447,7 @@ private fun CharacterCard(
 
 @Composable
 private fun CharacterCardFront(listing: SystemFriendListing, language: AppLanguage) {
-    val interests = listing.interests.split(Regex("[,;|•\\n]+")).map(String::trim).filter(String::isNotBlank).take(4)
+    val interests = listing.tags.split(Regex("[,;|•\\n]+")).map(String::trim).filter(String::isNotBlank).take(4)
     Box(modifier = Modifier.fillMaxSize()) {
         FriendPhoto(listing.photoUrl, listing.name, Modifier.fillMaxSize())
         Box(
@@ -469,7 +469,7 @@ private fun CharacterCardFront(listing: SystemFriendListing, language: AppLangua
             )
             Text(listing.gender, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.85f))
             Text(
-                listing.personality.ifBlank { localizedText(language, "A new friend to meet", "एक नए दोस्त से मिलें", "নতুন একজন বন্ধুর সঙ্গে পরিচিত হন") }.take(120),
+                listing.description.ifBlank { localizedText(language, "A new friend to meet", "एक नए दोस्त से मिलें", "নতুন একজন বন্ধুর সঙ্গে পরিচিত হন") }.take(120),
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White
             )
@@ -494,25 +494,12 @@ private fun CharacterCardFront(listing: SystemFriendListing, language: AppLangua
 private fun CharacterCardBack(listing: SystemFriendListing, language: AppLanguage) {
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
-    val scheduleStart = java.time.LocalTime.of(listing.busyStartHour.coerceIn(0, 23), 0)
-    val scheduleEnd = scheduleStart.plusHours(listing.busyDurationHours.coerceIn(4, 8).toLong())
     val details = listOf(
-        (when { bangla -> "ব্যক্তিত্ব"; hindi -> "व्यक्तित्व"; else -> "Personality" }) to listing.personality,
-        (when { bangla -> "আগ্রহ"; hindi -> "रुचियाँ"; else -> "Interests" }) to listing.interests,
-        (when { bangla -> "স্মৃতি"; hindi -> "यादें"; else -> "Memories" }) to listing.memories,
-        (when { bangla -> "কথোপকথনের ধরন"; hindi -> "बातचीत की शैली"; else -> "Conversation style" }) to listing.conversationStyle,
-        (when { bangla -> "পরিবার"; hindi -> "परिवार"; else -> "Family" }) to listing.family,
-        (when { bangla -> "পরিবারের সদস্য"; hindi -> "परिवार के सदस्य"; else -> "Family members" }) to listing.familyMembers,
-        (when { bangla -> "পারিবারিক কাজকর্ম"; hindi -> "पारिवारिक गतिविधियाँ"; else -> "Family activities" }) to listing.familyActivities,
-        (when { bangla -> "আর্থিক অবস্থা"; hindi -> "आर्थिक स्थिति"; else -> "Financial condition" }) to listing.financialCondition,
-        (when { bangla -> "ঠিকানা"; hindi -> "पता"; else -> "Address" }) to listing.address,
-        (when { bangla -> "উচ্চতা"; hindi -> "कद"; else -> "Height" }) to listing.height,
-        (when { bangla -> "ওজন"; hindi -> "वज़न"; else -> "Weight" }) to listing.weight,
-        (when { bangla -> "মুখের বৈশিষ্ট্য"; hindi -> "चेहरे की विशेषताएँ"; else -> "Facial features" }) to listing.facialFeatures,
-        (when { bangla -> "শারীরিক গঠন"; hindi -> "शारीरिक बनावट"; else -> "Body features" }) to listing.bodyFeatures,
-        (when { bangla -> "ব্যস্ততার কারণ"; hindi -> "व्यस्त रहने का कारण"; else -> "Busy with" }) to listing.busyReason,
-        (when { bangla -> "দৈনিক সময়সূচি"; hindi -> "दैनिक समय-सारणी"; else -> "Daily schedule" }) to "${scheduleStart.format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))}–${scheduleEnd.format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))} (${listing.timeZoneId})",
-        (when { bangla -> "সময় অঞ্চল"; hindi -> "समय क्षेत्र"; else -> "Time zone" }) to listing.timeZoneId
+        localizedText(language, "Category", "श्रेणी", "ধরন") to listing.category,
+        localizedText(language, "About", "परिचय", "পরিচিতি") to listing.description,
+        localizedText(language, "Interests", "रुचियाँ", "আগ্রহ") to listing.tags,
+        localizedText(language, "How you met", "आपकी पहचान", "তোমাদের পরিচয়") to listing.relationship,
+        localizedText(language, "First message", "पहला संदेश", "প্রথম বার্তা") to listing.greeting
     )
     Column(
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).verticalScroll(rememberScrollState())

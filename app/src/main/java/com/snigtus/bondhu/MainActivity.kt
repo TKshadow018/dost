@@ -33,6 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
@@ -245,7 +246,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
         scope.launch {
             try {
                 val profile = OpenRouterClient().generateFriendProfile(
-                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, requestLanguage
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, friend.personality, requestLanguage
                 )
                 val index = friends.indexOfFirst { it.id == friendId }
                 if (index >= 0 && friends[index].profilePending) {
@@ -678,6 +679,8 @@ private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd:
     var name by remember { mutableStateOf("") }
     var age by remember { mutableStateOf("") }
     var gender by remember { mutableStateOf("") }
+    var personality by remember { mutableStateOf("") }
+    var greeting by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf("") }
     var workSchedule by remember { mutableStateOf<Boolean?>(null) }
     var customStartHour by remember { mutableStateOf<Int?>(null) }
@@ -701,6 +704,20 @@ private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd:
         friendAgeError(age, language)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         friendUnder18RomanceNote(age, language)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         GenderField(gender, onValueChange = { gender = it })
+        OutlinedTextField(
+            value = personality,
+            onValueChange = { personality = it },
+            label = { Text(when (language) { AppLanguage.BANGLA -> "ব্যক্তিত্ব"; AppLanguage.HINDI -> "व्यक्तित्व"; AppLanguage.ENGLISH -> "Personality" }) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2
+        )
+        OutlinedTextField(
+            value = greeting,
+            onValueChange = { greeting = it },
+            label = { Text(when (language) { AppLanguage.BANGLA -> "প্রথম বার্তা"; AppLanguage.HINDI -> "पहला संदेश"; AppLanguage.ENGLISH -> "First message" }) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2
+        )
         TimeZonePicker("Friend timezone", friendTimeZoneId, onTimeZoneChange = { friendTimeZoneId = it })
         Text("Daily busy schedule", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -732,7 +749,7 @@ private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd:
             }
             if (photoUri.isNotBlank()) TextButton(onClick = { photoUri = "" }) { Text("Remove") }
         }
-    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age.trim(), gender = gender, photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId)) }, enabled = name.isNotBlank() && friendAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) { Text("Add") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age.trim(), gender = gender, personality = personality.trim(), photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId, greeting = greeting.trim())) }, enabled = name.isNotBlank() && friendAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank() && personality.isNotBlank() && greeting.isNotBlank()) { Text("Add") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1029,6 +1046,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
     }
     DisposableEffect(friend.id) {
         ConversationManager.openChat(friend.id)
+        ConversationManager.seedInitialGreeting(friend)
         onDispose { ConversationManager.closeChat(friend.id) }
     }
     LaunchedEffect(messages.size, sending, error) {
@@ -1128,6 +1146,7 @@ private fun FriendInfoDialog(friend: Friend, userAge: String, onTimeZoneChange: 
                 TimeZonePicker("Friend timezone", friend.timeZoneId, onTimeZoneChange)
                 listOf(
                     "Age" to friend.age, "Gender" to friend.gender, "Personality" to friend.personality,
+                    "How you met" to friend.relationship, "First message" to friend.greeting,
                     "Interests" to friend.interests, "Memories" to friend.memories, "Conversation style" to friend.conversationStyle,
                     "Family" to friend.family, "Family members" to friend.familyMembers, "Family activities" to friend.familyActivities,
                     "Financial condition" to friend.financialCondition, "Address" to friend.address, "Height" to friend.height,

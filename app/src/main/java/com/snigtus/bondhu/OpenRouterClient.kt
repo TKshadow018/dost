@@ -57,8 +57,8 @@ class OpenRouterClient {
         request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction, userAge)
     }
 
-    suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
-        requestProfile(model, apiKey, name, age, gender, language)
+    suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
+        requestProfile(model, apiKey, name, age, gender, personality, language)
     }
 
     suspend fun summarizeSession(apiKey: String, model: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String = withContext(Dispatchers.IO) {
@@ -103,7 +103,8 @@ class OpenRouterClient {
             "Session summary: ${it.summary}"
         }.ifBlank { "No previous session summaries yet." }
         val profileContext = listOf(
-            "Personality: ${friend.personality}", "Busy with: ${friend.busyReason}", "Interests: ${friend.interests}", "Family: ${friend.family}",
+            "Personality: ${friend.personality}", "How you know each other: ${friend.relationship}",
+            "Busy with: ${friend.busyReason}", "Interests: ${friend.interests}", "Family: ${friend.family}",
             "Family members: ${friend.familyMembers}", "Family activities: ${friend.familyActivities}",
             "Financial condition: ${friend.financialCondition}", "Address: ${friend.address}", "Height: ${friend.height}",
             "Weight: ${friend.weight}", "Facial features: ${friend.facialFeatures}", "Body features: ${friend.bodyFeatures}"
@@ -140,7 +141,7 @@ class OpenRouterClient {
             SECURITY: Never store passwords, API keys, or authentication secrets. Store ordinary sensitive details (like health or finances) ONLY if explicitly volunteered by the user. Return an empty array only if the user explicitly provided zero new personal data in the current turn.
         """.trimIndent()
         val system = """
-            You are ${friend.name}, a fictional friend in the Dost app. Age: ${friend.age}. Gender: ${friend.gender}. Personality: ${friend.personality}. Interests: ${friend.interests.ifBlank { "not known yet" }}. Memories: ${friend.memories.ifBlank { "none yet" }}. Conversation style: ${friend.conversationStyle}. Your daily busy time is for ${friend.busyReason.lowercase(Locale.ROOT)}; when it naturally fits, you may mention that you were at ${friend.busyReason.lowercase(Locale.ROOT)}.
+            You are ${friend.name}, a fictional friend in the Dost app. Age: ${friend.age}. Gender: ${friend.gender}. Personality: ${friend.personality}. How you know the user: ${friend.relationship.ifBlank { "You are just getting to know each other." }}. Interests: ${friend.interests.ifBlank { "not known yet" }}. Memories: ${friend.memories.ifBlank { "none yet" }}. Conversation style: ${friend.conversationStyle}. Your daily busy time is for ${friend.busyReason.lowercase(Locale.ROOT)}; when it naturally fits, you may mention that you were at ${friend.busyReason.lowercase(Locale.ROOT)}.
             Full fictional character profile:
             $profileContext
             Current date and time for the user: $userDateTime (time zone: $userTimeZoneId). Current date and time for you: $friendDateTime (time zone: ${friend.timeZoneId}). Use the relevant clock for relative dates and schedules, distinguish the user's time from yours, and do not imply access to live events beyond this context.
@@ -203,9 +204,9 @@ class OpenRouterClient {
         return '{' !in trimmed && '}' !in trimmed
     }
 
-    private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile {
+    private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, personality: String, language: AppLanguage): FriendProfile {
         val system = """
-            Create a complete fictional friend character for a social chat app. The user provided only name, age, and gender. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
+            Create a complete fictional friend character for a social chat app. The user provided this personality and it must remain consistent: $personality. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
             Return only valid JSON with these exact string fields: personality, interests, family, familyMembers, familyActivities, financialCondition, address, height, weight, facialFeatures, bodyFeatures, conversationStyle.
             Include family, what the family members do, personality, interests, a modest non-stereotyping financial description, a fictional Bangladesh address, height, weight, facial features, body features, and conversation style. Keep details friendly and suitable for ongoing conversation. Do not create secrets, criminal history, medical diagnoses, or sexual content.${profileRomanceClause(age)}
         """.trimIndent()
