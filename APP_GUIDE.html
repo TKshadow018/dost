@@ -242,7 +242,7 @@
         <h3>Images</h3>
         <p>Images are resized to a maximum dimension of 1,280 pixels and compressed as JPEG to a maximum of 300 KB. The compressed copy is stored in the app's private files directory. The API forwards image data as a multimodal data URL; a vision-capable selected model is needed for useful image analysis.</p>
         <h3>Follow-ups and errors</h3>
-        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 30 seconds. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
+        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 1 minute. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
       </section>
 
       <section id="schedule">
@@ -274,7 +274,7 @@
           </div>
         </div>
         <h3>Conversation sessions</h3>
-        <p>A session remains active while messages continue. Five minutes after the latest activity, the session-summary worker can summarize it, store the summary locally, and clear the current session ID. The next message then begins a new session. The chat menu exposes recent summaries, while up to seven recent summaries are provided to the AI for continuity.</p>
+        <p>A session remains active while messages continue. Sixty minutes after the latest activity, the session-summary worker can summarize it, store the summary locally, and clear the current session ID. The next message then begins a new session. The chat menu exposes recent summaries, while up to seven recent summaries are provided to the AI for continuity.</p>
         <p>The app keeps message history locally for display. Session summaries and learned facts are also stored locally, separately per friend. The server archive is an additional copy; it is not the source used to render the chat UI.</p>
       </section>
 
@@ -311,7 +311,7 @@
         <ul>
           <li>User profile fields, friends, schedules, time zones, scores, and selected model are stored in app preferences.</li>
           <li>Conversation messages, session summaries, learned memories, unread counts, and message-log status are stored locally by friend.</li>
-          <li>Compressed chat images are stored under the app-private <code>files/chat_images</code> directory.</li>
+          <li>Compressed chat images are stored under the app-private <code>files/chat_images</code> directory. Downloaded system-friend photos are stored under <code>files/system-friend-photos</code>. A temporary copy may sit in the cache while a photo downloads; Android does not include cache in auto-backup.</li>
           <li>The optional OpenRouter API key is encrypted; other profile and conversation values are not encrypted by the app's own storage layer.</li>
         </ul>
         <h3>Sent to the service</h3>
@@ -320,7 +320,7 @@
           <h3>Retention and access</h3>
           <p>The API README states that server logs have no automatic deletion or retention period and are not exposed through an HTTP read endpoint. Operators must protect the storage directory, define retention, and secure backups. The documented default is a <code>log</code> directory beside the API; a private directory outside the web root can be configured with <code>DOST_CONVERSATION_STORAGE_DIR</code>.</p>
         </div>
-        <p>The Android manifest enables backup and references backup-rule files that currently contain only sample/commented rules. Review Android backup behavior and server retention settings before distributing the app with real personal data.</p>
+        <p>The Android manifest keeps auto-backup enabled, and both <code>backup_rules.xml</code> and <code>data_extraction_rules.xml</code> exclude <code>dost_local_data.xml</code>, <code>messages/</code>, <code>chat_images/</code>, and <code>system-friend-photos/</code> from cloud backup and device-to-device transfer. Chat transcripts and photos stay on the device. Server retention is still an operator setting; see the API README.</p>
       </section>
 
       <section id="backend">
