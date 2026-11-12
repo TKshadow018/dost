@@ -480,7 +480,16 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
                 title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
                 actions = {
                     TextButton(onClick = { showSettings = true }) { Text(when { bangla -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) }
-                    TextButton(onClick = { showAddOptions = true }, enabled = canAddAnyFriend) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }
+                    TextButton(onClick = { if (canAddAnyFriend) showAddOptions = true else showSettings = true }) {
+                        Text(when {
+                            !canAddAnyFriend && bangla -> "বন্ধু পরিচালনা"
+                            !canAddAnyFriend && hindi -> "दोस्त प्रबंधित करें"
+                            !canAddAnyFriend -> "Manage friends"
+                            bangla -> "নতুন চ্যাট"
+                            hindi -> "नई चैट"
+                            else -> "New chat"
+                        })
+                    }
                 }
             )
         },
@@ -561,6 +570,7 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
         systemLimitReached = systemFriendCount >= MAX_SYSTEM_FRIENDS,
         onRefresh = ::loadSystemFriendCatalog,
         onSelect = ::addCatalogFriend,
+        onManageFriends = { showSystemFriendPicker = false; showSettings = true },
         onDismiss = { showSystemFriendPicker = false }
     )
     if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() })
@@ -609,124 +619,6 @@ private fun AddFriendOptionsDialog(
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
-    )
-}
-
-@Composable
-private fun SystemFriendPickerDialog(
-    language: AppLanguage,
-    catalog: List<SystemFriendListing>,
-    isLoading: Boolean,
-    error: String?,
-    addedCatalogIds: Set<String>,
-    addingCatalogId: String?,
-    systemLimitReached: Boolean,
-    onRefresh: () -> Unit,
-    onSelect: (SystemFriendListing) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val bangla = language == AppLanguage.BANGLA
-    val hindi = language == AppLanguage.HINDI
-    val notProvided = when {
-        bangla -> "দেওয়া হয়নি"
-        hindi -> "उपलब्ध नहीं"
-        else -> "Not provided"
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(when { bangla -> "সিস্টেম বন্ধু"; hindi -> "सिस्टम दोस्त"; else -> "System friends" }) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                when {
-                    isLoading && catalog.isEmpty() -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                        Text(when { bangla -> "বন্ধুদের তালিকা আনা হচ্ছে..."; hindi -> "दोस्तों की सूची लोड हो रही है..."; else -> "Loading friends..." })
-                    }
-                    catalog.isEmpty() && error == null -> Text(when { bangla -> "এখনও কোনো সিস্টেম বন্ধু নেই।"; hindi -> "अभी कोई सिस्टम दोस्त उपलब्ध नहीं है।"; else -> "No system friends are available yet." })
-                    else -> LazyColumn(
-                        modifier = Modifier.heightIn(max = 540.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        items(catalog, key = { it.id }) { listing ->
-                            val alreadyAdded = listing.id in addedCatalogIds
-                            val scheduleStart = LocalTime.of(listing.busyStartHour.coerceIn(0, 23), 0)
-                            val scheduleEnd = scheduleStart.plusHours(listing.busyDurationHours.coerceIn(4, 8).toLong())
-                            val details = listOf(
-                                (when { bangla -> "ব্যক্তিত্ব"; hindi -> "व्यक्तित्व"; else -> "Personality" }) to listing.personality,
-                                (when { bangla -> "আগ্রহ"; hindi -> "रुचियाँ"; else -> "Interests" }) to listing.interests,
-                                (when { bangla -> "স্মৃতি"; hindi -> "यादें"; else -> "Memories" }) to listing.memories,
-                                (when { bangla -> "কথোপকথনের ধরন"; hindi -> "बातचीत की शैली"; else -> "Conversation style" }) to listing.conversationStyle,
-                                (when { bangla -> "পরিবার"; hindi -> "परिवार"; else -> "Family" }) to listing.family,
-                                (when { bangla -> "পরিবারের সদস্য"; hindi -> "परिवार के सदस्य"; else -> "Family members" }) to listing.familyMembers,
-                                (when { bangla -> "পারিবারিক কাজকর্ম"; hindi -> "पारिवारिक गतिविधियाँ"; else -> "Family activities" }) to listing.familyActivities,
-                                (when { bangla -> "আর্থিক অবস্থা"; hindi -> "आर्थिक स्थिति"; else -> "Financial condition" }) to listing.financialCondition,
-                                (when { bangla -> "ঠিকানা"; hindi -> "पता"; else -> "Address" }) to listing.address,
-                                (when { bangla -> "উচ্চতা"; hindi -> "कद"; else -> "Height" }) to listing.height,
-                                (when { bangla -> "ওজন"; hindi -> "वज़न"; else -> "Weight" }) to listing.weight,
-                                (when { bangla -> "মুখের বৈশিষ্ট্য"; hindi -> "चेहरे की विशेषताएँ"; else -> "Facial features" }) to listing.facialFeatures,
-                                (when { bangla -> "শারীরিক গঠন"; hindi -> "शारीरिक बनावट"; else -> "Body features" }) to listing.bodyFeatures,
-                                (when { bangla -> "ব্যস্ততার কারণ"; hindi -> "व्यस्त रहने का कारण"; else -> "Busy with" }) to listing.busyReason,
-                                (when { bangla -> "দৈনিক সময়সূচি"; hindi -> "दैनिक समय-सारणी"; else -> "Daily schedule" }) to "${scheduleStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${scheduleEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${listing.timeZoneId})",
-                                (when { bangla -> "সময় অঞ্চল"; hindi -> "समय क्षेत्र"; else -> "Time zone" }) to listing.timeZoneId
-                            )
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(20.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    FriendPhoto(
-                                        listing.photoUrl,
-                                        listing.name,
-                                        Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(14.dp))
-                                    )
-                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Text(listing.name, style = MaterialTheme.typography.headlineSmall)
-                                        Text(
-                                            "${listing.age} · ${listing.gender}",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    HorizontalDivider()
-                                    details.forEach { (label, value) ->
-                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                                            Text(value.ifBlank { notProvided }, style = MaterialTheme.typography.bodyMedium)
-                                        }
-                                    }
-                                    Button(
-                                        onClick = { onSelect(listing) },
-                                        enabled = !alreadyAdded && !systemLimitReached && addingCatalogId == null,
-                                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                                    ) {
-                                        Text(when {
-                                            addingCatalogId == listing.id -> if (bangla) "যোগ হচ্ছে..." else if (hindi) "जोड़ा जा रहा है..." else "Adding..."
-                                            alreadyAdded -> if (bangla) "যোগ হয়েছে" else if (hindi) "जोड़ा गया" else "Added"
-                                            bangla -> "এই বন্ধুকে যোগ করুন"
-                                            hindi -> "इस दोस्त को जोड़ें"
-                                            else -> "Add this friend"
-                                        })
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (systemLimitReached) {
-                    Text(when { bangla -> "সর্বোচ্চ ৭টি সিস্টেম বন্ধু যোগ করা যাবে।"; hindi -> "अधिकतम 7 सिस्टम दोस्त जोड़े जा सकते हैं।"; else -> "You can add up to 7 system friends." }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                if (error != null && catalog.isEmpty()) {
-                    TextButton(onClick = onRefresh, enabled = !isLoading) {
-                        Text(when { bangla -> "আবার চেষ্টা করুন"; hindi -> "फिर कोशिश करें"; else -> "Retry" })
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(when { bangla -> "বন্ধ করুন"; hindi -> "बंद करें"; else -> "Close" }) } }
     )
 }
 

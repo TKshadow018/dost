@@ -91,6 +91,9 @@ data class SystemFriendListing(
     val photoUrl: String
 )
 
+fun availableSystemFriendDeck(catalog: List<SystemFriendListing>, addedCatalogIds: Set<String>): List<SystemFriendListing> =
+    catalog.filterNot { it.id in addedCatalogIds }
+
 fun validZoneId(timeZoneId: String): ZoneId = runCatching { ZoneId.of(timeZoneId) }.getOrDefault(ZoneId.systemDefault())
 
 fun Friend.replyAvailableAt(now: ZonedDateTime): ZonedDateTime? {
