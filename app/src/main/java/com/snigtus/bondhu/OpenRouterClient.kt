@@ -51,8 +51,8 @@ class OpenRouterClient {
             messages.takeLast(MAX_SUMMARY_MESSAGES)
     }
 
-    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false): AiReply = withContext(Dispatchers.IO) {
-        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp)
+    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, userAge: String = ""): AiReply = withContext(Dispatchers.IO) {
+        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, userAge)
     }
 
     suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
@@ -93,7 +93,7 @@ class OpenRouterClient {
         return false
     }
 
-    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean): AiReply {
+    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, userAge: String): AiReply {
         val sessionId = history.lastOrNull()?.sessionId.orEmpty()
         val connection = openConnection(apiKey, installationId, friend.id, sessionId)
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
@@ -145,7 +145,7 @@ class OpenRouterClient {
             Full fictional character profile:
             $profileContext
             Current date and time for the user: $userDateTime (time zone: $userTimeZoneId). Current date and time for you: $friendDateTime (time zone: ${friend.timeZoneId}). Use the relevant clock for relative dates and schedules, distinguish the user's time from yours, and do not imply access to live events beyond this context.
-            Relationship state: friendship ${friendshipScore.coerceIn(0, 100)}/100 (${friendshipLevel(friendshipScore)}). Love meter: ${if (friendshipScore > 70) "$loveScore/100 (${loveLevel(loveScore)})" else "locked until friendship is above 70"}.
+            ${relationshipStatePrompt(friendshipScore, loveScore, userAge, friend.age)}
             Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Stay in character, never claim to be a real person, and answer naturally.
             The following are facts the user explicitly shared in earlier conversations. Use them only when relevant:
             $memoryContext
@@ -160,7 +160,7 @@ class OpenRouterClient {
             Before replying, do a detail pass over the user's latest messages. Save one concise fact per memory item; preserve exact names, who each person is to the user, quantities, dates, time periods, locations, preferences, reasons, plans, constraints, and whether something is current, past, or only intended. Keep facts about the user distinct from facts about relatives, friends, coworkers, and other people. Preserve meaningful negation and uncertainty instead of turning it into certainty. If the user corrects a prior detail, set replaces to the old fact text so the stored fact is replaced instead of keeping both. Do not merge unrelated facts or infer missing links.
             The combined reply and follow_up_question may contain at most one question total. Never ask stacked questions or put one question in each field. $questionGuidance Do not interrogate, repeat a question already answered, or ask for secrets. Make it playful or gently funny when it fits, while remaining respectful. If the user seems uncomfortable or asks not to share, ask no question.
             Set follow_up_delay_minutes to an integer from 1 to 1440 only when the user explicitly asks for a future check-in after a duration; otherwise set it to null. When a delay is requested, do not ask an immediate follow-up question.
-            Rate the latest conversation's relationship impact. friendship_impact must be an integer from -1 to 2. love_impact must be an integer from -1 to 2 only when friendship is above 70 and the conversation is clearly flirty or romantic; otherwise use 0. Apply friendship impact to warmth, trust, respectful openness, and shared conversation. A private question from a complete stranger should be met with a gentle boundary such as "Whoa, we just met" rather than a direct answer, and should not earn positive points. Do not unlock private or intimate talk early. Personal talk becomes more open around friendship 41+, private talk around 61+, and romantic/intimate-but-non-explicit talk only when friendship is above 70 and love is above 30. Never generate explicit sexual content.
+            ${relationshipImpactPrompt(userAge, friend.age)}
         """.trimIndent()
         val imageMessages = history.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
         val messages = JSONArray().apply {
@@ -189,7 +189,7 @@ class OpenRouterClient {
         if (parsed.parseFailed && BuildConfig.DEBUG) {
             android.util.Log.w("OpenRouterClient", "Unparseable model reply: ${modelReplyDebugSnippet(raw)}")
         }
-        return parsed
+        return applyLoveImpactGate(parsed, userAge, friend.age)
     }
 
     internal fun modelReplyDebugSnippet(raw: String): String = raw.take(MODEL_REPLY_LOG_LIMIT)
@@ -207,7 +207,7 @@ class OpenRouterClient {
         val system = """
             Create a complete fictional friend character for a social chat app. The user provided only name, age, and gender. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
             Return only valid JSON with these exact string fields: personality, interests, family, familyMembers, familyActivities, financialCondition, address, height, weight, facialFeatures, bodyFeatures, conversationStyle.
-            Include family, what the family members do, personality, interests, a modest non-stereotyping financial description, a fictional Bangladesh address, height, weight, facial features, body features, and conversation style. Keep details friendly and suitable for ongoing conversation. Do not create secrets, criminal history, medical diagnoses, or sexual content.
+            Include family, what the family members do, personality, interests, a modest non-stereotyping financial description, a fictional Bangladesh address, height, weight, facial features, body features, and conversation style. Keep details friendly and suitable for ongoing conversation. Do not create secrets, criminal history, medical diagnoses, or sexual content.${profileRomanceClause(age)}
         """.trimIndent()
         val user = "Create the profile for name=$name, age=$age, gender=$gender."
         val messages = JSONArray().apply {

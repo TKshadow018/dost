@@ -113,7 +113,7 @@ object ConversationManager {
                     return@launch
                 }
                 store.addUserMemories(friend.id, answer.memories)
-                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
+                updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
                 updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
                 val response = listOf(
                     answer.text,
@@ -284,7 +284,7 @@ object ConversationManager {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp, userAge = store.userAge()
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
@@ -292,7 +292,7 @@ object ConversationManager {
             return client.reply(
                 apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp, userAge = store.userAge()
             )
         }
     }
@@ -379,10 +379,12 @@ object ConversationManager {
         return true
     }
 
+    private fun gatedLoveImpact(friend: Friend, loveImpact: Int): Int =
+        if (romanceAllowed(store.userAge(), friend.age)) loveImpact else 0
+
     private fun updateFriendship(friend: Friend, friendshipImpact: Int, loveImpact: Int) {
         val updated = store.updateFriend(friend.id) { current ->
-            val scores = applyRelationshipDelta(current.friendshipScore, current.loveScore, friendshipImpact, loveImpact)
-            current.copy(friendshipScore = scores.friendship, loveScore = scores.love)
+            current.withRelationshipDelta(friendshipImpact, loveImpact, store.userAge())
         } ?: return
         relationshipState.update { it + (updated.id to RelationshipUpdate(updated.id, updated.friendshipScore, updated.loveScore)) }
     }
