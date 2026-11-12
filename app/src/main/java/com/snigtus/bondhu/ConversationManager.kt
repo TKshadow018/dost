@@ -118,7 +118,6 @@ object ConversationManager {
                         store.saveFriends(friends)
                     }
                 }
-                val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
                 val response = listOf(
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
@@ -126,7 +125,7 @@ object ConversationManager {
                 appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
                 when {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
-                    !hasQuestion -> scheduleInactivityQuestion(friend, language, sessionId)
+                    shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
                 }
             } catch (_: Throwable) {
                 appendAssistant(friend.id, connectionIssueReply(language), modelId = selectedModel)
@@ -330,10 +329,9 @@ object ConversationManager {
             appendAssistant(friendId, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
             store.setScheduledReply(friendId, false)
             if (!forceFollowUp) {
-                val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
                 when {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
-                    !hasQuestion -> scheduleInactivityQuestion(friend, language, sessionId)
+                    shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
                 }
             }
             return true
@@ -382,8 +380,12 @@ object ConversationManager {
         messageState.update { it + (friendId to messages) }
     }
 
-    private const val DEFAULT_FOLLOW_UP_MILLIS = 30_000L //will be 1 minutes later
-    private const val SESSION_INACTIVITY_MILLIS = 5 * 60 * 1000L // will be 60 minutes later
+    internal const val DEFAULT_FOLLOW_UP_MILLIS = 60_000L // 1 minute
+    internal const val SESSION_INACTIVITY_MILLIS = 60 * 60 * 1000L // 60 minutes
+
+    /** Default check-in only when the reply did not already ask something. */
+    internal fun shouldScheduleDefaultFollowUp(replyText: String, followUpQuestion: String): Boolean =
+        followUpQuestion.isBlank() && !replyText.contains("?")
 
     suspend fun runMorningGreeting(friendId: String, sessionId: String, language: AppLanguage): Boolean {
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true

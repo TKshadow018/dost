@@ -242,7 +242,7 @@
         <h3>Images</h3>
         <p>Images are resized to a maximum dimension of 1,280 pixels and compressed as JPEG to a maximum of 300 KB. The compressed copy is stored in the app's private files directory. The API forwards image data as a multimodal data URL; a vision-capable selected model is needed for useful image analysis.</p>
         <h3>Follow-ups and errors</h3>
-        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 30 seconds. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
+        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 1 minute. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
       </section>
 
       <section id="schedule">
@@ -274,7 +274,7 @@
           </div>
         </div>
         <h3>Conversation sessions</h3>
-        <p>A session remains active while messages continue. Five minutes after the latest activity, the session-summary worker can summarize it, store the summary locally, and clear the current session ID. The next message then begins a new session. The chat menu exposes recent summaries, while up to three recent summaries are provided to the AI for continuity.</p>
+        <p>A session remains active while messages continue. Sixty minutes after the latest activity, the session-summary worker can summarize it, store the summary locally, and clear the current session ID. The next message then begins a new session. The chat menu exposes recent summaries, while up to three recent summaries are provided to the AI for continuity.</p>
         <p>The app keeps message history locally for display. Session summaries and learned facts are also stored locally, separately per friend. The server archive is an additional copy; it is not the source used to render the chat UI.</p>
       </section>
 
