@@ -163,10 +163,11 @@ class OpenRouterClient {
         """.trimIndent().let { prompt ->
             if (ephemeralInstruction.isBlank()) prompt else prompt + "\n\n" + ephemeralInstruction.trim()
         }
-        val imageMessages = history.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
+        val promptHistory = messagesForPrompt(history)
+        val imageMessages = promptHistory.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
         val messages = JSONArray().apply {
             put(JSONObject().apply { put("role", "system"); put("content", system) })
-            history.forEach { message -> put(JSONObject().apply {
+            promptHistory.forEach { message -> put(JSONObject().apply {
                 put("role", message.role)
                 put("content", message.content)
                 put("message_id", message.messageId)
