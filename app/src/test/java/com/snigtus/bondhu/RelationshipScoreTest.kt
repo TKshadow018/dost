@@ -2,6 +2,7 @@ package com.snigtus.dost
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RelationshipScoreTest {
@@ -58,6 +59,29 @@ class RelationshipScoreTest {
         assertEquals(100, applyRelationshipDelta(99, 0, 2, 0).friendship)
         assertEquals(0, applyRelationshipDelta(0, 0, -1, 0).friendship)
         assertEquals(100, applyRelationshipDelta(90, 99, 0, 2).love)
+    }
+
+    @Test
+    fun twoRegeneratesEqualOneApplication() {
+        val opening = RelationshipScores(68, 0)
+        val afterLive = applyRelationshipDelta(opening.friendship, opening.love, 2, 2)
+        val afterTwoRegenerates = applyRegeneratedReply(
+            applyRegeneratedReply(afterLive, 2, 2),
+            2,
+            2
+        )
+        assertEquals(afterLive, afterTwoRegenerates)
+        assertEquals(70, afterTwoRegenerates.friendship)
+        assertEquals(0, afterTwoRegenerates.love)
+        val farmed = applyRelationshipDelta(
+            applyRelationshipDelta(afterLive.friendship, afterLive.love, 2, 2).friendship,
+            applyRelationshipDelta(afterLive.friendship, afterLive.love, 2, 2).love,
+            2,
+            2
+        )
+        assertEquals(74, farmed.friendship)
+        assertTrue(farmed.friendship > 70)
+        assertTrue(farmed.love > 0)
     }
 
     @Test

@@ -154,6 +154,17 @@ fun DostApp() {
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val relationshipUpdates = ConversationManager.relationshipUpdates.collectAsState().value
+    LaunchedEffect(relationshipUpdates) {
+        if (relationshipUpdates.isEmpty()) return@LaunchedEffect
+        val storedFriends = store.loadFriends()
+        relationshipUpdates.keys.forEach { friendId ->
+            val stored = storedFriends.firstOrNull { it.id == friendId } ?: return@forEach
+            val index = friends.indexOfFirst { it.id == friendId }
+            if (index >= 0) friends[index] = stored
+            if (selectedFriend?.id == friendId) selectedFriend = stored
+        }
+    }
     LaunchedEffect(screen) {
         if (screen == AppScreen.HOME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ReplyNotifier.ensureChannel(context)
@@ -188,14 +199,16 @@ fun DostApp() {
                 .onSuccess { profile ->
                     val index = friends.indexOfFirst { it.id == friend.id }
                     if (index >= 0) {
-                        friends[index] = friend.copy(
-                            personality = profile.personality, interests = profile.interests, family = profile.family,
-                            familyMembers = profile.familyMembers, familyActivities = profile.familyActivities,
-                            financialCondition = profile.financialCondition, address = profile.address, height = profile.height,
-                            weight = profile.weight, facialFeatures = profile.facialFeatures, bodyFeatures = profile.bodyFeatures,
-                            conversationStyle = profile.conversationStyle
-                        )
-                        store.saveFriends(friends)
+                        val updated = store.updateFriend(friend.id) { current ->
+                            current.copy(
+                                personality = profile.personality, interests = profile.interests, family = profile.family,
+                                familyMembers = profile.familyMembers, familyActivities = profile.familyActivities,
+                                financialCondition = profile.financialCondition, address = profile.address, height = profile.height,
+                                weight = profile.weight, facialFeatures = profile.facialFeatures, bodyFeatures = profile.bodyFeatures,
+                                conversationStyle = profile.conversationStyle
+                            )
+                        }
+                        if (updated != null) friends[index] = updated
                     }
                 }
         }
@@ -210,18 +223,6 @@ fun DostApp() {
         friends.add(addedFriend)
         store.saveFriends(friends)
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
-    }
-
-    fun updateRelationship(friendId: String, friendshipScore: Int, loveScore: Int) {
-        val index = friends.indexOfFirst { it.id == friendId }
-        if (index < 0) return
-        val stored = store.loadFriends().firstOrNull { it.id == friendId }
-        val base = stored ?: friends[index]
-        val friendship = friendshipScore.coerceIn(0, 100)
-        val love = if (friendship > 70) loveScore.coerceIn(0, 100) else 0
-        val updated = base.copy(friendshipScore = friendship, loveScore = love)
-        friends[index] = updated
-        if (selectedFriend?.id == friendId) selectedFriend = updated
     }
 
     androidx.compose.animation.AnimatedContent(
@@ -292,16 +293,16 @@ fun DostApp() {
                 language = language,
                 onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) },
                 onFriendTimeZoneChange = { timeZoneId ->
-                    val index = friends.indexOfFirst { it.id == friend.id }
-                    if (index >= 0) {
-                        val updated = friends[index].copy(timeZoneId = validZoneId(timeZoneId).id)
-                        friends[index] = updated
+                    val updated = store.updateFriend(friend.id) { current ->
+                        current.copy(timeZoneId = validZoneId(timeZoneId).id)
+                    }
+                    if (updated != null) {
+                        val index = friends.indexOfFirst { it.id == friend.id }
+                        if (index >= 0) friends[index] = updated
                         selectedFriend = updated
-                        store.saveFriends(friends)
                         ConversationManager.refreshBusyReply(updated)
                     }
-                },
-                onRelationshipUpdate = { friendship, love -> updateRelationship(friend.id, friendship, love) }
+                }
             )
         }
         AppScreen.KNOWLEDGE -> KnowledgeScreen(
@@ -870,7 +871,7 @@ private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store:
 }
 
 @Composable
-private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onRelationshipUpdate: (Int, Int) -> Unit) {
+private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit) {
     val context = LocalContext.current
     val messageMap = ConversationManager.messages.collectAsState().value
     val messages = messageMap[friend.id] ?: store.loadMessages(friend.id)
@@ -915,15 +916,9 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
             currentTime = ZonedDateTime.now(validZoneId(store.userTimeZoneId()))
         }
     }
-    val relationshipUpdate = ConversationManager.relationshipUpdates.collectAsState().value
     DisposableEffect(friend.id) {
         ConversationManager.openChat(friend.id)
         onDispose { ConversationManager.closeChat(friend.id) }
-    }
-    LaunchedEffect(relationshipUpdate) {
-        if (relationshipUpdate != null && relationshipUpdate.friendId == friend.id) {
-            onRelationshipUpdate(relationshipUpdate.friendshipScore, relationshipUpdate.loveScore)
-        }
     }
     LaunchedEffect(messages.size, sending, error) {
         val itemCount = messages.size + (if (sending) 1 else 0) + (if (error != null) 1 else 0)

@@ -126,6 +126,13 @@ fun applyRelationshipDelta(friendshipScore: Int, loveScore: Int, friendshipImpac
     return RelationshipScores(friendship, love)
 }
 
+/** Regenerating replaces the reply text. The new impacts are not applied again. */
+fun applyRegeneratedReply(
+    current: RelationshipScores,
+    @Suppress("UNUSED_PARAMETER") friendshipImpact: Int,
+    @Suppress("UNUSED_PARAMETER") loveImpact: Int
+): RelationshipScores = current
+
 fun friendshipLevel(score: Int): String = when (score.coerceIn(0, 100)) {
     in 0..10 -> "Complete stranger"
     in 11..20 -> "Stranger"

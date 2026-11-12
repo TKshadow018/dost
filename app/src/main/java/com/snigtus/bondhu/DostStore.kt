@@ -97,7 +97,17 @@ class DostStore(context: Context) {
         }
     }.getOrDefault(mutableListOf())
 
-    fun saveFriends(friends: List<Friend>) {
+    fun updateFriend(friendId: String, transform: (Friend) -> Friend): Friend? = synchronized(preferences) {
+        val friends = loadFriends()
+        val index = friends.indexOfFirst { it.id == friendId }
+        if (index < 0) return null
+        val updated = transform(friends[index])
+        friends[index] = updated
+        saveFriends(friends)
+        updated
+    }
+
+    fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
         val json = JSONArray()
         friends.forEach { friend ->
             json.put(JSONObject().apply {
