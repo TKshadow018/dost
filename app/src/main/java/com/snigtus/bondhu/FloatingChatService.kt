@@ -297,8 +297,19 @@ class FloatingChatService : Service() {
     private fun sendMessage() {
         val text = input?.text?.toString()?.trim().orEmpty()
         if (text.isBlank()) return
+        val current = store.loadFriends().firstOrNull { it.id == friend.id } ?: friend
+        if (current.profilePending) {
+            val language = store.language()
+            Toast.makeText(this, when (language) {
+                AppLanguage.BANGLA -> "এখনও প্রোফাইল তৈরি হচ্ছে"
+                AppLanguage.HINDI -> "प्रोफ़ाइल अभी बन रही है"
+                AppLanguage.ENGLISH -> "Still creating their profile"
+            }, Toast.LENGTH_SHORT).show()
+            return
+        }
+        friend = current
         input?.setText("")
-        ConversationManager.send(friend, text, store.language())
+        ConversationManager.send(current, text, store.language())
     }
 
     private fun collapsePanel() {

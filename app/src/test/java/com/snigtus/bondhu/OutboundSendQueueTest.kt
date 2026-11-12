@@ -19,6 +19,20 @@ class OutboundSendQueueTest {
     }
 
     @Test
+    fun promptExcludesErrorsAndPendingMessagesUntilQueueDrains() {
+        val queue = OutboundSendQueue()
+        val first = message("m1", "session-a", "Hello")
+        val error = message("error", "session-a", "Unreadable reply").copy(role = "assistant", category = ERROR_MESSAGE_CATEGORY)
+        val second = message("m2", "session-a", "Still here")
+        val transcript = listOf(first, error, second)
+        queue.enqueue("friend", second.messageId, second.sessionId, AppLanguage.ENGLISH)
+
+        assertEquals(listOf(first), messagesForPrompt(queue.visibleHistory("friend", transcript)))
+        queue.takeReady("friend")
+        assertEquals(listOf(first, second), messagesForPrompt(queue.visibleHistory("friend", transcript)))
+    }
+
+    @Test
     fun queuedMessagesArePersistedInArrivalOrderAndSentOnce() {
         val queue = OutboundSendQueue()
         assertTrue(queue.enqueue("friend", "m2", "session-a", AppLanguage.ENGLISH))
