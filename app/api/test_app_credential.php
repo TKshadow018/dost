@@ -1,5 +1,10 @@
 <?php
 
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 /**
  * Checks the server-key credential gate, including one HTTP request that must
  * stop before OpenRouter is called.
@@ -45,7 +50,7 @@ if (!is_array($unconfigured) || $unconfigured['status'] !== 503 || strpos(json_e
 
 $missing = dost_server_key_decision(false, '', $install, $timestamp, $config);
 $bad = dost_server_key_decision(false, 'v1.' . $timestamp . '.' . str_repeat('ab', 32), $install, $timestamp, $config);
-$expired = dost_server_key_decision(false, $token, $install, $timestamp + 301, $config);
+$expired = dost_server_key_decision(false, $token, $install, $timestamp + 901, $config);
 $wrongInstall = dost_server_key_decision(false, $token, '22222222-2222-4222-8222-222222222222', $timestamp, $config);
 foreach (array($missing, $bad, $expired, $wrongInstall) as $rejected) {
     $encoded = json_encode($rejected);
@@ -59,8 +64,11 @@ foreach (array($missing, $bad, $expired, $wrongInstall) as $rejected) {
 if (dost_server_key_decision(false, $token, $install, $timestamp, $config) !== null) {
     dost_cred_fail('A valid credential was rejected.');
 }
-if (dost_server_key_decision(false, $token, '  ' . $install . '  ', $timestamp + 300, $config) !== null) {
-    dost_cred_fail('A credential inside the five-minute window was rejected.');
+if (dost_server_key_decision(false, $token, '  ' . $install . '  ', $timestamp + 900, $config) !== null) {
+    dost_cred_fail('A credential inside the fifteen-minute window was rejected.');
+}
+if (dost_server_key_decision(false, $token, $install, $timestamp + 901, $config) === null) {
+    dost_cred_fail('A credential outside the fifteen-minute window was accepted.');
 }
 if (dost_server_key_decision(true, '', '', $timestamp, $config) !== null) {
     dost_cred_fail('A caller-supplied OpenRouter key was forced through the server-key gate.');
@@ -81,12 +89,16 @@ if (dost_server_key_decision(false, $token, $install, $timestamp, $config) === n
 dost_cred_unset('DOST_APP_CREDENTIAL_SECRET');
 
 $client = file_get_contents(dirname(__DIR__) . '/src/main/java/com/snigtus/bondhu/OpenRouterClient.kt');
-if (!is_string($client)
+$gradle = file_get_contents(dirname(__DIR__) . '/build.gradle');
+if (!is_string($client) || !is_string($gradle)
     || strpos($client, 'X-Dost-App-Credential') === false
-    || strpos($client, 'const val secret: String = ""') === false
+    || strpos($client, 'BuildConfig.DOST_APP_CREDENTIAL_SECRET') === false
     || strpos($client, $secret) !== false
+    || strpos($gradle, 'DOST_APP_CREDENTIAL_SECRET') === false
+    || strpos($gradle, $secret) !== false
+    || strpos($gradle, '?: ""') === false
 ) {
-    dost_cred_fail('The client header is missing, or a test/production secret was committed in OpenRouterClient.kt.');
+    dost_cred_fail('The client header is missing, or a test/production secret was committed in source.');
 }
 
 if (filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN) !== true && ini_get('allow_url_fopen') !== '1') {

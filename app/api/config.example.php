@@ -7,7 +7,8 @@
  *
  * Prefer OPENROUTER_API_KEY and DOST_APP_CREDENTIAL_SECRET in the environment.
  * Both secrets below must be replaced. The credential secret must be at least
- * 16 characters and must match the release build's DostAppCredential.secret.
+ * 16 characters and must be the same value passed to the release build as
+ * DOST_APP_CREDENTIAL_SECRET. The app reads it from BuildConfig.
  */
 return array(
     'openrouter_api_key' => 'REPLACE_WITH_SERVER_OPENROUTER_KEY',

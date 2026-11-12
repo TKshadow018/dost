@@ -7,7 +7,7 @@
  * X-Dost-App-Credential: v1.<unix-seconds>.<hex hmac-sha256>.
  * The HMAC payload is "v1\n<unix-seconds>\n<installation id>" using the
  * trimmed X-Dost-Install-ID value, or an empty installation id when that
- * header is absent. The timestamp must be within five minutes of the server clock.
+ * header is absent. The timestamp must be within fifteen minutes of the server clock.
  *
  * A caller's own X-OpenRouter-Key does not spend the server key, so it skips
  * this gate. DOST_ALLOW_LEGACY_SERVER_KEY=1 also skips it so already-installed
@@ -50,7 +50,7 @@ function dost_app_credential_status($presented, $installationId, $now, $config)
         return 'missing';
     }
     $timestamp = (int) $matches[1];
-    if ($timestamp < 1 || abs($now - $timestamp) > 300) {
+    if ($timestamp < 1 || abs($now - $timestamp) > 900) {
         return 'expired';
     }
     $install = is_string($installationId) ? trim($installationId) : '';

@@ -61,7 +61,6 @@ class OpenRouterClient {
     }
 
     fun logConversationMessage(installationId: String, userName: String, friendId: String, friendName: String, message: ChatMessage): Boolean {
-        val connection = openConnection("", installationId)
         val body = JSONObject().apply {
             put("operation", "log_message")
             put("user_name", userName)
@@ -79,7 +78,7 @@ class OpenRouterClient {
                 put("image_data", Base64.encodeToString(imageFile.readBytes(), Base64.NO_WRAP))
             }
         }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post("", installationId, null, null, body.toString().toByteArray())
         val statusCode = connection.responseCode
         val responseStream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
         responseStream?.bufferedReader()?.use { it.readText() }
@@ -90,7 +89,6 @@ class OpenRouterClient {
 
     private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean): AiReply {
         val sessionId = history.lastOrNull()?.sessionId.orEmpty()
-        val connection = openConnection(apiKey, installationId, friend.id, sessionId)
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
         val friendDateTime = ZonedDateTime.now(validZoneId(friend.timeZoneId)).format(formatter)
@@ -176,7 +174,7 @@ class OpenRouterClient {
             }) }
         }
         val body = JSONObject().apply { put("operation", "chat_reply"); put("user_name", userName); put("friend_name", friend.name); put("model", model); put("messages", messages); put("temperature", 0.8) }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post(apiKey, installationId, friend.id, sessionId, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -184,7 +182,6 @@ class OpenRouterClient {
     }
 
     private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile {
-        val connection = openConnection(apiKey)
         val system = """
             Create a complete fictional friend character for a social chat app. The user provided only name, age, and gender. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
             Return only valid JSON with these exact string fields: personality, interests, family, familyMembers, familyActivities, financialCondition, address, height, weight, facialFeatures, bodyFeatures, conversationStyle.
@@ -196,7 +193,7 @@ class OpenRouterClient {
             put(JSONObject().apply { put("role", "user"); put("content", user) })
         }
         val body = JSONObject().apply { put("model", model); put("messages", messages); put("temperature", 0.9) }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post(apiKey, null, null, null, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Profile request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -210,7 +207,6 @@ class OpenRouterClient {
     }
 
     private fun requestSessionSummary(model: String, apiKey: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String {
-        val connection = openConnection(apiKey)
         val transcript = messages.takeLast(MAX_SESSION_SUMMARY_ITEMS).joinToString("\n") { message ->
             "${if (message.role == "user") "User" else friendName}: ${message.content}"
         }
@@ -220,7 +216,7 @@ class OpenRouterClient {
             put(JSONObject().apply { put("role", "user"); put("content", transcript) })
         }
         val body = JSONObject().apply { put("model", model); put("messages", requestMessages); put("temperature", 0.2) }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post(apiKey, null, null, null, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Session summary request failed"))
         return JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -256,7 +252,7 @@ class OpenRouterClient {
         .replace(Regex("\\n{3,}"), "\n\n")
         .trim()
 
-    private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
+    private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null, nowEpochSeconds: Long = System.currentTimeMillis() / 1000): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
         doOutput = true
         connectTimeout = 15_000
@@ -268,20 +264,33 @@ class OpenRouterClient {
         if (installationId != null) setRequestProperty("X-Dost-Install-ID", installHeader)
         if (friendId != null) setRequestProperty("X-Dost-Friend-ID", friendId)
         if (sessionId != null) setRequestProperty("X-Dost-Session-ID", sessionId)
-        val credential = dostAppCredentialValue(installHeader, System.currentTimeMillis() / 1000)
+        val credential = dostAppCredentialValue(installHeader, nowEpochSeconds)
         if (credential != null) setRequestProperty("X-Dost-App-Credential", credential)
+    }
+
+    private fun post(apiKey: String, installationId: String?, friendId: String?, sessionId: String?, body: ByteArray): HttpURLConnection {
+        fun send(nowEpochSeconds: Long): HttpURLConnection {
+            val connection = openConnection(apiKey, installationId, friendId, sessionId, nowEpochSeconds)
+            connection.outputStream.use { it.write(body) }
+            return connection
+        }
+        val first = send(System.currentTimeMillis() / 1000)
+        if (first.responseCode != 401) return first
+        val serverMillis = first.getHeaderFieldDate("Date", -1L)
+        if (serverMillis < 0L) return first
+        val serverSeconds = serverMillis / 1000
+        if (kotlin.math.abs(serverSeconds - System.currentTimeMillis() / 1000) < 30) return first
+        first.disconnect()
+        return send(serverSeconds)
     }
 }
 
 /**
- * Shared with the server secret DOST_APP_CREDENTIAL_SECRET.
- * Leave this empty in git. Set the same random value, at least 16 characters,
- * in the release build only, and do not commit the production secret.
- * An empty value omits X-Dost-App-Credential, and the server then rejects
- * requests that would spend the server OpenRouter key.
+ * The release secret comes from DOST_APP_CREDENTIAL_SECRET in the environment
+ * or Gradle properties. An empty value omits X-Dost-App-Credential.
  */
 internal object DostAppCredential {
-    const val secret: String = ""
+    val secret: String get() = BuildConfig.DOST_APP_CREDENTIAL_SECRET
 }
 
 internal fun dostAppCredentialValue(
