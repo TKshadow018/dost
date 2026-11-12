@@ -35,15 +35,13 @@ The API server forwards AI prompts to OpenRouter, which routes them to the selec
 OpenRouter and the selected model provider may process request data under their own privacy policies and terms. Dost does not control their independent retention or deletion practices. Please do not share passwords, API keys, authentication codes, financial-account credentials, or other highly sensitive information in conversations.
 
 3. RETENTION AND DELETION
-Removing a friend in the app deletes that friend's local data. The app removes the friend from the on-device friend list and then deletes that friend's chat transcript file, learned memories, session summaries, unread count, current-session marker, and scheduled-reply flag. It also deletes chat-photo files that are still referenced by the message list loaded in memory for that friend, drops that friend's chat from memory, and cancels pending background work for that friend.
+Removing a friend in the app deletes that friend's local data. The app removes the friend from the on-device friend list, reads image paths from the saved transcript, then deletes that friend's chat transcript file, referenced chat-photo files, learned memories, session summaries, unread count, current-session marker, and scheduled-reply flag. It also deletes the friend's app-private catalog photo copy, drops that friend's chat from memory, and cancels pending background work for that friend.
 
 That deletion does not remove:
 - The server conversation archive described below.
 - Your profile (name, email, age, gender), installation id, language, model choice, or optional OpenRouter key.
-- Cached photos of system-friend catalog characters, or the original gallery photo you picked as an avatar. The app drops its reference to a gallery photo; it does not delete the gallery original.
+- The original gallery photo you picked as an avatar. The app does not delete the gallery original.
 - The shared system-friend catalog on the server. Removing a catalog friend deletes only your local copy of that character.
-
-Chat-photo files are stored in the app's chat_images directory. The transcript file is deleted before the app walks the message list to delete those photos. If that friend's messages are not already loaded in memory, the photo files can remain in app storage until you clear Dost's storage or uninstall the app.
 
 This version has no control that deletes your profile or all local Dost data at once. Clearing Dost's app storage or uninstalling the app removes the local profile, friend list, transcripts, memories, settings, and other files the app stored in its private directories. Uninstalling does not delete data already sent to the server.
 

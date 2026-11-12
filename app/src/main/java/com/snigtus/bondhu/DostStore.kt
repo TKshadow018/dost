@@ -2,6 +2,7 @@ package com.snigtus.dost
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -212,16 +213,46 @@ class DostStore(context: Context) {
         runCatching { writeMessagesFile(messageFile(friendId), messagesToJson(messages)) }
     }
 
-    fun deleteFriendData(friendId: String) {
-        messageFile(friendId).delete()
+    fun deleteFriendData(friend: Friend) {
+        loadMessages(friend.id).forEach { message ->
+            message.imagePath.takeIf { it.isNotBlank() }?.let(::deleteChatImage)
+        }
+        messageFile(friend.id).delete()
+        deleteFriendPhotos(friend)
         preferences.edit()
-            .remove("messages_$friendId")
-            .remove("user_memories_$friendId")
-            .remove("session_summaries_$friendId")
-            .remove("unread_$friendId")
-            .remove("current_session_$friendId")
-            .remove("scheduled_reply_$friendId")
+            .remove("messages_${friend.id}")
+            .remove("user_memories_${friend.id}")
+            .remove("session_summaries_${friend.id}")
+            .remove("unread_${friend.id}")
+            .remove("current_session_${friend.id}")
+            .remove("scheduled_reply_${friend.id}")
             .apply()
+    }
+
+    private fun deleteChatImage(path: String) {
+        runCatching {
+            val directory = File(context.filesDir, "chat_images").canonicalFile
+            val image = File(path).canonicalFile
+            if (image.parentFile == directory && image.isFile) image.delete()
+        }
+    }
+
+    private fun deleteFriendPhotos(friend: Friend) {
+        val directory = File(context.filesDir, "system-friend-photos")
+        val canonicalDirectory = runCatching { directory.canonicalFile }.getOrNull() ?: return
+        val photoUri = Uri.parse(friend.photoUri)
+        if (photoUri.scheme == "file") {
+            photoUri.path?.let { path ->
+                runCatching {
+                    val photo = File(path).canonicalFile
+                    if (photo.parentFile == canonicalDirectory) photo.delete()
+                }
+            }
+        }
+        if (friend.catalogId.isNotBlank()) {
+            val safeId = friend.catalogId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+            File(directory, "$safeId.image").delete()
+        }
     }
 
     fun currentSessionId(friendId: String): String? = preferences.getString("current_session_$friendId", null)?.takeIf { it.isNotBlank() }

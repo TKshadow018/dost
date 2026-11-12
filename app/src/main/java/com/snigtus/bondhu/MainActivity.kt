@@ -358,8 +358,8 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
             onDeleteFriend = { friend ->
                 friends.remove(friend)
                 store.saveFriends(friends)
-                store.deleteFriendData(friend.id)
                 ConversationManager.removeFriend(friend.id)
+                store.deleteFriendData(friend)
                 generatingProfileIds = generatingProfileIds - friend.id
                 profileErrors = profileErrors - friend.id
             },
