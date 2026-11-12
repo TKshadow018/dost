@@ -53,7 +53,7 @@ function load_system_friend($friendId, $catalogDirectory)
         'gender' => trim((string) $source['gender'])
     );
     $stringFields = array(
-        'personality', 'interests', 'memories', 'conversationStyle', 'family', 'familyMembers',
+        'category', 'description', 'relationship', 'greeting', 'personality', 'interests', 'memories', 'conversationStyle', 'family', 'familyMembers',
         'familyActivities', 'financialCondition', 'address', 'height', 'weight', 'facialFeatures',
         'bodyFeatures', 'busyReason', 'timeZoneId'
     );
@@ -109,6 +109,15 @@ function public_friend_profile($profile)
 {
     unset($profile['_photo_path']);
     return $profile;
+}
+
+function public_friend_listing($profile)
+{
+    $listing = array_intersect_key($profile, array_flip(array(
+        'id', 'name', 'age', 'gender', 'category', 'description', 'relationship', 'greeting', 'photo_url'
+    )));
+    $listing['tags'] = substr(isset($profile['interests']) ? $profile['interests'] : '', 0, 240);
+    return $listing;
 }
 
 if (!isset($_SERVER['REQUEST_METHOD']) || $_SERVER['REQUEST_METHOD'] !== 'GET') {
@@ -168,6 +177,6 @@ foreach ($files as $file) {
         error_log('Dost system friend catalog contains an invalid profile: ' . basename($file));
         respond_json(500, array('error' => 'Invalid system friend profile: ' . basename($file)));
     }
-    $profiles[] = public_friend_profile($loaded['profile']);
+    $profiles[] = public_friend_listing($loaded['profile']);
 }
 respond_json(200, array('profiles' => $profiles));

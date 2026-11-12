@@ -35,6 +35,8 @@ data class Friend(
     ,val timeZoneId: String = ZoneId.systemDefault().id
     ,val catalogId: String = ""
     ,val profilePending: Boolean = false
+    ,val greeting: String = ""
+    ,val relationship: String = ""
 )
 
 data class ProfileFailure(val message: String, val detail: String?)
@@ -51,7 +53,7 @@ fun profileFailureText(language: AppLanguage, causeMessage: String?, detailLimit
 }
 
 fun Friend.withGeneratedProfile(profile: FriendProfile): Friend = copy(
-    personality = profile.personality,
+    personality = personality.ifBlank { profile.personality },
     interests = profile.interests,
     family = profile.family,
     familyMembers = profile.familyMembers,
@@ -71,25 +73,19 @@ data class SystemFriendListing(
     val name: String,
     val age: String,
     val gender: String,
-    val personality: String,
-    val interests: String,
-    val memories: String,
-    val conversationStyle: String,
-    val family: String,
-    val familyMembers: String,
-    val familyActivities: String,
-    val financialCondition: String,
-    val address: String,
-    val height: String,
-    val weight: String,
-    val facialFeatures: String,
-    val bodyFeatures: String,
-    val busyStartHour: Int,
-    val busyDurationHours: Int,
-    val busyReason: String,
-    val timeZoneId: String,
+    val category: String,
+    val description: String,
+    val tags: String,
+    val relationship: String,
+    val greeting: String,
     val photoUrl: String
 )
+
+fun initialGreetingMessage(friend: Friend, history: List<ChatMessage>, sessionId: String): ChatMessage? {
+    val greeting = friend.greeting.trim()
+    if (greeting.isBlank() || history.isNotEmpty()) return null
+    return ChatMessage("assistant", greeting, category = "greeting", sessionId = sessionId)
+}
 
 fun validZoneId(timeZoneId: String): ZoneId = runCatching { ZoneId.of(timeZoneId) }.getOrDefault(ZoneId.systemDefault())
 

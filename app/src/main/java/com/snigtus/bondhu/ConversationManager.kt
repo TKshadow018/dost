@@ -154,6 +154,17 @@ object ConversationManager {
         clearUnread(friendId)
     }
 
+    fun seedInitialGreeting(friend: Friend) {
+        if (friend.greeting.isBlank()) return
+        synchronized(sendGuard(friend.id)) {
+            val history = messagesFor(friend.id)
+            val sessionId = store.currentSessionId(friend.id) ?: java.util.UUID.randomUUID().toString()
+            val greeting = initialGreetingMessage(friend, history, sessionId) ?: return
+            store.saveCurrentSessionId(friend.id, sessionId)
+            appendAssistant(friend.id, greeting.content, greeting.messageId, category = greeting.category)
+        }
+    }
+
     fun closeChat(friendId: String) {
         if (activeFriendId == friendId) activeFriendId = null
     }

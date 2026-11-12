@@ -33,6 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
@@ -245,7 +246,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
         scope.launch {
             try {
                 val profile = OpenRouterClient().generateFriendProfile(
-                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, requestLanguage
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, friend.personality, requestLanguage
                 )
                 val index = friends.indexOfFirst { it.id == friendId }
                 if (index >= 0 && friends[index].profilePending) {
@@ -627,48 +628,60 @@ private fun SystemFriendPickerDialog(
 ) {
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
-    val notProvided = when {
-        bangla -> "দেওয়া হয়নি"
-        hindi -> "उपलब्ध नहीं"
-        else -> "Not provided"
+    var search by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf("All") }
+    val categories = listOf("All") + catalog.map { it.category }.distinct().sorted()
+    val matchingFriends = catalog.filter { listing ->
+        (selectedCategory == "All" || listing.category == selectedCategory) &&
+            listOf(listing.name, listing.category, listing.description, listing.tags, listing.relationship)
+                .any { it.contains(search.trim(), ignoreCase = true) }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(when { bangla -> "সিস্টেম বন্ধু"; hindi -> "सिस्टम दोस्त"; else -> "System friends" }) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (catalog.isNotEmpty()) {
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = { search = it },
+                        placeholder = { Text(when { bangla -> "নাম, আগ্রহ বা শহর খুঁজুন"; hindi -> "नाम, रुचि या शहर खोजें"; else -> "Search name, interests, or city" }) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        categories.forEach { category ->
+                            val label = if (category == "All") when {
+                                bangla -> "সব"
+                                hindi -> "सभी"
+                                else -> "All"
+                            } else category
+                            if (selectedCategory == category) {
+                                Button(onClick = { selectedCategory = category }) { Text(label) }
+                            } else {
+                                OutlinedButton(onClick = { selectedCategory = category }) { Text(label) }
+                            }
+                        }
+                    }
+                }
                 when {
                     isLoading && catalog.isEmpty() -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         Text(when { bangla -> "বন্ধুদের তালিকা আনা হচ্ছে..."; hindi -> "दोस्तों की सूची लोड हो रही है..."; else -> "Loading friends..." })
                     }
                     catalog.isEmpty() && error == null -> Text(when { bangla -> "এখনও কোনো সিস্টেম বন্ধু নেই।"; hindi -> "अभी कोई सिस्टम दोस्त उपलब्ध नहीं है।"; else -> "No system friends are available yet." })
-                    else -> LazyColumn(
+                    catalog.isNotEmpty() -> LazyColumn(
                         modifier = Modifier.heightIn(max = 540.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        items(catalog, key = { it.id }) { listing ->
+                        if (matchingFriends.isEmpty()) {
+                            item { Text(when { bangla -> "কোনো বন্ধু মেলেনি।"; hindi -> "कोई दोस्त नहीं मिला।"; else -> "No friends match that search." }) }
+                        }
+                        items(matchingFriends, key = { it.id }) { listing ->
                             val alreadyAdded = listing.id in addedCatalogIds
-                            val scheduleStart = LocalTime.of(listing.busyStartHour.coerceIn(0, 23), 0)
-                            val scheduleEnd = scheduleStart.plusHours(listing.busyDurationHours.coerceIn(4, 8).toLong())
-                            val details = listOf(
-                                (when { bangla -> "ব্যক্তিত্ব"; hindi -> "व्यक्तित्व"; else -> "Personality" }) to listing.personality,
-                                (when { bangla -> "আগ্রহ"; hindi -> "रुचियाँ"; else -> "Interests" }) to listing.interests,
-                                (when { bangla -> "স্মৃতি"; hindi -> "यादें"; else -> "Memories" }) to listing.memories,
-                                (when { bangla -> "কথোপকথনের ধরন"; hindi -> "बातचीत की शैली"; else -> "Conversation style" }) to listing.conversationStyle,
-                                (when { bangla -> "পরিবার"; hindi -> "परिवार"; else -> "Family" }) to listing.family,
-                                (when { bangla -> "পরিবারের সদস্য"; hindi -> "परिवार के सदस्य"; else -> "Family members" }) to listing.familyMembers,
-                                (when { bangla -> "পারিবারিক কাজকর্ম"; hindi -> "पारिवारिक गतिविधियाँ"; else -> "Family activities" }) to listing.familyActivities,
-                                (when { bangla -> "আর্থিক অবস্থা"; hindi -> "आर्थिक स्थिति"; else -> "Financial condition" }) to listing.financialCondition,
-                                (when { bangla -> "ঠিকানা"; hindi -> "पता"; else -> "Address" }) to listing.address,
-                                (when { bangla -> "উচ্চতা"; hindi -> "कद"; else -> "Height" }) to listing.height,
-                                (when { bangla -> "ওজন"; hindi -> "वज़न"; else -> "Weight" }) to listing.weight,
-                                (when { bangla -> "মুখের বৈশিষ্ট্য"; hindi -> "चेहरे की विशेषताएँ"; else -> "Facial features" }) to listing.facialFeatures,
-                                (when { bangla -> "শারীরিক গঠন"; hindi -> "शारीरिक बनावट"; else -> "Body features" }) to listing.bodyFeatures,
-                                (when { bangla -> "ব্যস্ততার কারণ"; hindi -> "व्यस्त रहने का कारण"; else -> "Busy with" }) to listing.busyReason,
-                                (when { bangla -> "দৈনিক সময়সূচি"; hindi -> "दैनिक समय-सारणी"; else -> "Daily schedule" }) to "${scheduleStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${scheduleEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${listing.timeZoneId})",
-                                (when { bangla -> "সময় অঞ্চল"; hindi -> "समय क्षेत्र"; else -> "Time zone" }) to listing.timeZoneId
-                            )
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(20.dp)
@@ -680,23 +693,29 @@ private fun SystemFriendPickerDialog(
                                     FriendPhoto(
                                         listing.photoUrl,
                                         listing.name,
-                                        Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(14.dp))
+                                        Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(14.dp))
                                     )
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                         Text(listing.name, style = MaterialTheme.typography.headlineSmall)
                                         Text(
-                                            "${listing.age} · ${listing.gender}",
+                                            "${listing.category} · ${listing.age} · ${listing.gender}",
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    HorizontalDivider()
-                                    details.forEach { (label, value) ->
-                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                                            Text(value.ifBlank { notProvided }, style = MaterialTheme.typography.bodyMedium)
-                                        }
+                                    Text(listing.description, style = MaterialTheme.typography.bodyMedium)
+                                    if (listing.tags.isNotBlank()) {
+                                        Text(listing.tags, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                                     }
+                                    Text(
+                                        (when { bangla -> "তোমাদের পরিচয়"; hindi -> "आपकी पहचान"; else -> "How you met" }) + ": ${listing.relationship}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        (when { bangla -> "প্রথম বার্তা"; hindi -> "पहला संदेश"; else -> "First message" }) + ": “${listing.greeting}”",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
                                     Button(
                                         onClick = { onSelect(listing) },
                                         enabled = !alreadyAdded && !systemLimitReached && addingCatalogId == null,
@@ -786,6 +805,8 @@ private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd:
     var name by remember { mutableStateOf("") }
     var age by remember { mutableStateOf("") }
     var gender by remember { mutableStateOf("") }
+    var personality by remember { mutableStateOf("") }
+    var greeting by remember { mutableStateOf("") }
     var photoUri by remember { mutableStateOf("") }
     var workSchedule by remember { mutableStateOf<Boolean?>(null) }
     var customStartHour by remember { mutableStateOf<Int?>(null) }
@@ -809,6 +830,20 @@ private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd:
         friendAgeError(age, language)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         friendUnder18RomanceNote(age, language)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         GenderField(gender, onValueChange = { gender = it })
+        OutlinedTextField(
+            value = personality,
+            onValueChange = { personality = it },
+            label = { Text(when (language) { AppLanguage.BANGLA -> "ব্যক্তিত্ব"; AppLanguage.HINDI -> "व्यक्तित्व"; AppLanguage.ENGLISH -> "Personality" }) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2
+        )
+        OutlinedTextField(
+            value = greeting,
+            onValueChange = { greeting = it },
+            label = { Text(when (language) { AppLanguage.BANGLA -> "প্রথম বার্তা"; AppLanguage.HINDI -> "पहला संदेश"; AppLanguage.ENGLISH -> "First message" }) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2
+        )
         TimeZonePicker("Friend timezone", friendTimeZoneId, onTimeZoneChange = { friendTimeZoneId = it })
         Text("Daily busy schedule", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -840,7 +875,7 @@ private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd:
             }
             if (photoUri.isNotBlank()) TextButton(onClick = { photoUri = "" }) { Text("Remove") }
         }
-    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age.trim(), gender = gender, photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId)) }, enabled = name.isNotBlank() && friendAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) { Text("Add") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age.trim(), gender = gender, personality = personality.trim(), photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId, greeting = greeting.trim())) }, enabled = name.isNotBlank() && friendAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank() && personality.isNotBlank() && greeting.isNotBlank()) { Text("Add") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1137,6 +1172,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
     }
     DisposableEffect(friend.id) {
         ConversationManager.openChat(friend.id)
+        ConversationManager.seedInitialGreeting(friend)
         onDispose { ConversationManager.closeChat(friend.id) }
     }
     LaunchedEffect(messages.size, sending, error) {
@@ -1236,6 +1272,7 @@ private fun FriendInfoDialog(friend: Friend, userAge: String, onTimeZoneChange: 
                 TimeZonePicker("Friend timezone", friend.timeZoneId, onTimeZoneChange)
                 listOf(
                     "Age" to friend.age, "Gender" to friend.gender, "Personality" to friend.personality,
+                    "How you met" to friend.relationship, "First message" to friend.greeting,
                     "Interests" to friend.interests, "Memories" to friend.memories, "Conversation style" to friend.conversationStyle,
                     "Family" to friend.family, "Family members" to friend.familyMembers, "Family activities" to friend.familyActivities,
                     "Financial condition" to friend.financialCondition, "Address" to friend.address, "Height" to friend.height,

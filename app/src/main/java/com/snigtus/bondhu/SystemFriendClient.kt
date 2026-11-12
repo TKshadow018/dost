@@ -23,23 +23,11 @@ internal class SystemFriendClient {
                 name = requiredText(profile, "name"),
                 age = requiredText(profile, "age"),
                 gender = requiredText(profile, "gender"),
-                personality = profile.optString("personality"),
-                interests = profile.optString("interests"),
-                memories = profile.optString("memories"),
-                conversationStyle = profile.optString("conversationStyle"),
-                family = profile.optString("family"),
-                familyMembers = profile.optString("familyMembers"),
-                familyActivities = profile.optString("familyActivities"),
-                financialCondition = profile.optString("financialCondition"),
-                address = profile.optString("address"),
-                height = profile.optString("height"),
-                weight = profile.optString("weight"),
-                facialFeatures = profile.optString("facialFeatures"),
-                bodyFeatures = profile.optString("bodyFeatures"),
-                busyStartHour = profile.optInt("busyStartHour", 9).coerceIn(0, 23),
-                busyDurationHours = profile.optInt("busyDurationHours", 8).coerceIn(4, 8),
-                busyReason = profile.optString("busyReason"),
-                timeZoneId = validZoneId(profile.optString("timeZoneId", java.time.ZoneId.systemDefault().id)).id,
+                category = requiredText(profile, "category"),
+                description = requiredText(profile, "description"),
+                tags = profile.optString("tags"),
+                relationship = requiredText(profile, "relationship"),
+                greeting = requiredText(profile, "greeting"),
                 photoUrl = photoUrl(profile.optString("photo_url"))
             )
         }.sortedBy { it.name.lowercase() }
@@ -74,7 +62,9 @@ internal class SystemFriendClient {
             busyDurationHours = profile.optInt("busyDurationHours", if ((age.toIntOrNull() ?: 18) < 18) 6 else 8).coerceIn(4, 8),
             busyReason = profile.optString("busyReason", if ((age.toIntOrNull() ?: 18) < 18) "School" else "Work"),
             timeZoneId = validZoneId(profile.optString("timeZoneId", java.time.ZoneId.systemDefault().id)).id,
-            catalogId = id
+            catalogId = id,
+            greeting = profile.optString("greeting"),
+            relationship = profile.optString("relationship")
         )
     }
 
