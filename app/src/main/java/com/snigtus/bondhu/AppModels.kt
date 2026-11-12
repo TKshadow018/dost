@@ -115,6 +115,24 @@ data class AiReply(
     val serverMessageId: String? = null
 )
 
+data class RelationshipScores(val friendship: Int, val love: Int)
+
+data class RelationshipUpdate(val friendId: String, val friendshipScore: Int, val loveScore: Int)
+
+/** Applies one reply's clamped delta (−1..2) to the scores currently stored for the friend. */
+fun applyRelationshipDelta(friendshipScore: Int, loveScore: Int, friendshipImpact: Int, loveImpact: Int): RelationshipScores {
+    val friendship = (friendshipScore + friendshipImpact.coerceIn(-1, 2)).coerceIn(0, 100)
+    val love = if (friendship > 70) (loveScore + loveImpact.coerceIn(-1, 2)).coerceIn(0, 100) else 0
+    return RelationshipScores(friendship, love)
+}
+
+/** Regenerating replaces the reply text. The new impacts are not applied again. */
+fun applyRegeneratedReply(
+    current: RelationshipScores,
+    @Suppress("UNUSED_PARAMETER") friendshipImpact: Int,
+    @Suppress("UNUSED_PARAMETER") loveImpact: Int
+): RelationshipScores = current
+
 fun friendshipLevel(score: Int): String = when (score.coerceIn(0, 100)) {
     in 0..10 -> "Complete stranger"
     in 11..20 -> "Stranger"
