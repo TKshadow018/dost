@@ -125,8 +125,8 @@ object ConversationManager {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
                     shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
                 }
-            } catch (_: Throwable) {
-                appendAssistant(friend.id, connectionIssueReply(language), modelId = selectedModel)
+            } catch (error: Throwable) {
+                appendAssistant(friend.id, failureReply(error, language), modelId = selectedModel)
             } finally {
                 jobs.remove(friend.id)
                 sendingState.update { it - friend.id }
@@ -224,6 +224,21 @@ object ConversationManager {
         AppLanguage.ENGLISH -> "Sorry, I couldn't reply just now. Please try again in a moment."
     }
 
+    private fun failureReply(error: Throwable, language: AppLanguage): String {
+        var current: Throwable? = error
+        while (current != null) {
+            if (current.message == "App credential required") return credentialReply(language)
+            current = current.cause
+        }
+        return connectionIssueReply(language)
+    }
+
+    private fun credentialReply(language: AppLanguage): String = when (language) {
+        AppLanguage.BANGLA -> "অ্যাপটি আপডেট করুন, অথবা ফোনের তারিখ ও সময় অটোমেটিক রাখুন। নিজের OpenRouter কী দিলে চ্যাট চলবে।"
+        AppLanguage.HINDI -> "ऐप अपडेट करें, या फ़ोन की तारीख और समय अपने आप सेट रखें। अपनी OpenRouter कुंजी डालने पर चैट चलती रहेगी।"
+        AppLanguage.ENGLISH -> "Update the app, or set the phone's date and time to automatic. Chat still works if you enter your own OpenRouter key."
+    }
+
     private fun unreadableReply(language: AppLanguage): String = when (language) {
         AppLanguage.BANGLA -> "এই উত্তরটা পড়া যায়নি। মেসেজ চেপে ধরে Reply differently বেছে আবার চেষ্টা করো।"
         AppLanguage.HINDI -> "यह जवाब पढ़ा नहीं जा सका। संदेश को दबाकर Reply differently चुनें और फिर कोशिश करें।"
@@ -265,8 +280,8 @@ object ConversationManager {
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
                 ).filter { it.isNotBlank() }.joinToString("\n\n")
                 appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, store.aiModel())
-            } catch (_: Throwable) {
-                appendAssistant(friend.id, connectionIssueReply(language), modelId = store.aiModel())
+            } catch (error: Throwable) {
+                appendAssistant(friend.id, failureReply(error, language), modelId = store.aiModel())
             } finally {
                 jobs.remove(friend.id)
                 sendingState.update { it - friend.id }

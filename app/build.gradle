@@ -16,6 +16,8 @@ android {
     def uploadKeystore = file("dost-upload.jks")
     def uploadStorePassword = System.getenv("DOST_KEYSTORE_PASSWORD") ?: providers.gradleProperty("DOST_KEYSTORE_PASSWORD").orNull
     def uploadKeyPassword = System.getenv("DOST_KEY_PASSWORD") ?: providers.gradleProperty("DOST_KEY_PASSWORD").orNull
+    def dostAppCredentialSecret = System.getenv("DOST_APP_CREDENTIAL_SECRET") ?: providers.gradleProperty("DOST_APP_CREDENTIAL_SECRET").orNull ?: ""
+    def escapedDostAppCredentialSecret = dostAppCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")
 
     signingConfigs {
         release {
@@ -34,6 +36,7 @@ android {
         versionName "0.1.1"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
     }
 
     buildTypes {
