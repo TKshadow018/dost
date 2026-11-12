@@ -203,12 +203,20 @@
       <section id="getting-started">
         <h2>02 · Getting started</h2>
         <ol>
-          <li>The app opens to a splash screen and checks whether a local profile exists.</li>
-          <li>First-time onboarding asks for the user's name, email, age, and gender.</li>
+          <li>The splash screen opens into email sign-in, account creation, password reset, or Google sign-in.</li>
+          <li>After authentication, first-time onboarding asks for the user's name, age, and gender.</li>
           <li>The next step can create the first friend using a name, age, gender, and optional photo, or skip adding a friend for now.</li>
           <li>After onboarding, the user lands on the friends list. The current implementation permits up to five friends.</li>
         </ol>
-        <p>This is profile onboarding, not a remote sign-in flow: the inspected Android code saves profile information in local app preferences and does not authenticate an account with a server.</p>
+        <p>Email/password and Google identity are handled by Firebase Authentication. Returning Firebase users with a saved local profile go straight to Home. An eligible local profile created by an older app version also skips sign-in on upgrade, so existing friends and chats remain available.</p>
+        <h3>Enable Firebase sign-in</h3>
+        <ol>
+          <li>Register the Android app ID <code>com.snigtus.dost</code> in a Firebase project and enable Email/Password and Google under Authentication sign-in providers.</li>
+          <li>Download that app's <code>google-services.json</code> to <code>app/google-services.json</code>. The Gradle build reads the Firebase app values and Google web OAuth client ID directly from this file; it is ignored by Git.</li>
+          <li>For Google sign-in, configure the project's web OAuth client and add the app's signing certificate SHA-1 fingerprints in Firebase. Google sign-in is disabled if the web client ID is missing.</li>
+        </ol>
+        <p>The app builds without <code>google-services.json</code>; email and Google sign-in then remain disabled with an in-app setup message. Passwords are sent to Firebase Authentication and are not saved in local preferences. Profile details, friends, and conversations continue to be stored locally; signing out does not delete them.</p>
+        <p class="notice"><strong>Backend follow-up:</strong> The existing PHP API does not verify Firebase ID tokens. The backend developer should add token verification and account-level authorization before server-side data is treated as belonging to an authenticated user.</p>
         <p>When a friend is created, Dost first saves the basic friend record. It then asks the AI service to generate a fictional character profile, including personality, interests, family details, conversation style, and other profile fields. If that request fails, the basic friend remains available with its default profile values.</p>
       </section>
 
@@ -295,6 +303,7 @@
           <thead><tr><th>Setting</th><th>What it changes</th><th>Where it is used</th></tr></thead>
           <tbody>
             <tr><td>App language</td><td>English, Bangla, or Hindi</td><td>UI labels and language requested for AI responses</td></tr>
+            <tr><td>Signed-in account</td><td>Firebase email or Google account; sign out is available here</td><td>Signing out preserves local profile, friends, and chats</td></tr>
             <tr><td>Your time zone</td><td>IANA time-zone identifier</td><td>User clock in AI prompts</td></tr>
             <tr><td>Preferred model</td><td>Choose from the catalog or enter a model ID</td><td>Chat, generated profiles, and summaries</td></tr>
             <tr><td>OpenRouter API key</td><td>Optional personal key; blank uses the server key</td><td>Sent to the API over HTTPS as a request header</td></tr>

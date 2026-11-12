@@ -33,6 +33,19 @@ class DostStore(context: Context) {
     fun hasEligibleAccount(): Boolean =
         preferences.getBoolean("user_profile_saved", false) && accountAgeResult(userAge()) == AccountAgeResult.VALID
 
+    fun authenticationRequired(): Boolean = preferences.getBoolean("authentication_required", false)
+
+    fun authenticationAccountId(): String = preferences.getString("authentication_account_id", "") ?: ""
+
+    fun markAuthenticationRequired() {
+        preferences.edit().putBoolean("authentication_required", true).apply()
+    }
+
+    fun bindAuthenticationAccount(accountId: String) {
+        if (accountId.isBlank()) return
+        preferences.edit().putString("authentication_account_id", accountId).apply()
+    }
+
     /** Writes love scores back as 0 when romance is locked for this user or friend. */
     fun clearLockedLoveScores() {
         val age = userAge()
@@ -41,8 +54,15 @@ class DostStore(context: Context) {
             saveFriends(friends)
         }
     }
-    fun saveUserProfile(name: String, email: String, age: String, gender: String) {
-        preferences.edit().putBoolean("user_profile_saved", true).putString("user_name", name).putString("user_email", email).putString("user_age", age).putString("user_gender", gender).apply()
+    fun saveUserProfile(name: String, email: String, age: String, gender: String, accountId: String? = null) {
+        val editor = preferences.edit()
+            .putBoolean("user_profile_saved", true)
+            .putString("user_name", name)
+            .putString("user_email", email)
+            .putString("user_age", age)
+            .putString("user_gender", gender)
+        if (!accountId.isNullOrBlank()) editor.putString("authentication_account_id", accountId)
+        editor.apply()
     }
     fun userName(): String = preferences.getString("user_name", "") ?: ""
     fun userEmail(): String = preferences.getString("user_email", "") ?: ""

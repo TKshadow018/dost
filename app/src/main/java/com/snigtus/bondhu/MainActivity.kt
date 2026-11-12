@@ -5,6 +5,7 @@ package com.snigtus.dost
 import android.os.Bundle
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -136,11 +137,23 @@ private const val MAX_CUSTOM_FRIENDS = 3
 private const val MAX_SYSTEM_FRIENDS = 7
 private const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 
+private fun Context.activityOrNull(): Activity? {
+    var current: Context? = this
+    while (current != null) {
+        if (current is Activity) return current
+        val wrapper = current as? ContextWrapper ?: return null
+        val base = wrapper.baseContext
+        if (base === current) return null
+        current = base
+    }
+    return null
+}
 
 @Composable
 fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow(null)) {
     val context = LocalContext.current
     val store = remember(context) { DostStore(context) }
+    val authRepository = remember(context) { FirebaseAuthRepository(context) }
     ConversationManager.initialize(context)
     var language by remember { mutableStateOf(store.language()) }
     var screen by rememberSaveable(
@@ -173,17 +186,100 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
     val scope = rememberCoroutineScope()
     var generatingProfileIds by remember { mutableStateOf(setOf<String>()) }
     var profileErrors by remember { mutableStateOf(mapOf<String, ProfileFailure>()) }
+    var authRequestState by remember { mutableStateOf<AuthRequestState>(AuthRequestState.Idle) }
     val openFriendRequest by openFriendRequests.collectAsState()
 
+    fun hasLocalAccountAccess(): Boolean {
+        if (!store.hasEligibleAccount()) return false
+        val currentAccountId = authRepository.currentAccount?.uid
+        val localAccountId = store.authenticationAccountId()
+        return if (store.authenticationRequired()) {
+            !currentAccountId.isNullOrBlank() && currentAccountId == localAccountId
+        } else {
+            currentAccountId == null
+        }
+    }
+
     fun openRequestedFriend(friendId: String?) {
-        val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), friendId, friends.map { it.id }.toSet()) ?: return
+        val resolved = ChatLaunch.friendToOpen(hasLocalAccountAccess(), friendId, friends.map { it.id }.toSet()) ?: return
         selectedFriend = friends.first { it.id == resolved }
         screen = AppScreen.CHAT
+    }
+
+    fun authenticate(action: suspend () -> AuthAccount) {
+        if (authRequestState is AuthRequestState.Loading) return
+        scope.launch {
+            authRequestState = AuthRequestState.Loading
+            try {
+                val account = action()
+                if (store.hasUserProfile()) {
+                    val localAccountId = store.authenticationAccountId()
+                    if ((localAccountId.isNotBlank() && localAccountId != account.uid)
+                        || (localAccountId.isBlank() && store.authenticationRequired())
+                    ) {
+                        authRepository.signOut()
+                        authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                        return@launch
+                    }
+                    if (localAccountId.isBlank()) store.bindAuthenticationAccount(account.uid)
+                }
+                store.markAuthenticationRequired()
+                email = account.email.ifBlank { email }
+                if (!store.hasEligibleAccount()) name = account.displayName.ifBlank { name }
+                authRequestState = AuthRequestState.Idle
+                screen = authenticationStartScreen(
+                    hasSignedInUser = true,
+                    hasEligibleLocalProfile = store.hasEligibleAccount(),
+                    authenticationRequired = true,
+                    signedInUserId = account.uid,
+                    localAccountId = store.authenticationAccountId()
+                )
+            } catch (error: CancellationException) {
+                authRequestState = AuthRequestState.Idle
+                throw error
+            } catch (error: Exception) {
+                authRequestState = AuthRequestState.Error(authenticationErrorText(language, error))
+            }
+        }
+    }
+
+    fun sendPasswordReset(resetEmail: String) {
+        if (authRequestState is AuthRequestState.Loading) return
+        scope.launch {
+            authRequestState = AuthRequestState.Loading
+            try {
+                authRepository.sendPasswordReset(resetEmail)
+                authRequestState = AuthRequestState.Success(
+                    when (language) {
+                        AppLanguage.BANGLA -> "অ্যাকাউন্ট থাকলে ইমেইলে রিসেট লিংক পাঠানো হয়েছে।"
+                        AppLanguage.HINDI -> "यदि खाता मौजूद है, तो ईमेल पर रीसेट लिंक भेज दिया गया है।"
+                        AppLanguage.ENGLISH -> "If an account exists, a reset link has been sent to that email."
+                    }
+                )
+            } catch (error: CancellationException) {
+                authRequestState = AuthRequestState.Idle
+                throw error
+            } catch (error: Exception) {
+                authRequestState = AuthRequestState.Error(authenticationErrorText(language, error))
+            }
+        }
     }
 
     LaunchedEffect(openFriendRequest?.nonce) {
         if (screen == AppScreen.SPLASH) return@LaunchedEffect
         openRequestedFriend(openFriendRequest?.friendId)
+    }
+
+    LaunchedEffect(screen, authRepository.currentAccount?.uid) {
+        if (screen !in setOf(AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
+        val currentAccountId = authRepository.currentAccount?.uid
+        val localAccountId = store.authenticationAccountId()
+        if (!currentAccountId.isNullOrBlank() && localAccountId.isNotBlank() && currentAccountId != localAccountId) {
+            authRepository.signOut()
+            authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+        }
+        selectedFriend = null
+        screen = AppScreen.AUTH
     }
 
     fun minimizeApp() {
@@ -306,7 +402,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
         targetState = screen,
         label = "pageTransition",
         transitionSpec = {
-            val order = listOf(AppScreen.SPLASH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE)
+            val order = listOf(AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE)
             val forward = order.indexOf(targetState) >= order.indexOf(initialState)
             val slideIn = slideInHorizontally(animationSpec = tween(300)) { if (forward) it else -it }
             val slideOut = slideOutHorizontally(animationSpec = tween(300)) { if (forward) -it else it }
@@ -315,15 +411,68 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
     ) { currentScreen ->
     when (currentScreen) {
         AppScreen.SPLASH -> DostSplashScreen(language) {
+            var currentAccount = authRepository.currentAccount
+            if (currentAccount != null) {
+                var localAccountId = store.authenticationAccountId()
+                if (store.hasUserProfile() && localAccountId.isBlank() && !store.authenticationRequired()) {
+                    store.bindAuthenticationAccount(currentAccount.uid)
+                    localAccountId = currentAccount.uid
+                }
+                if (store.hasUserProfile() && localAccountId.isNotBlank() && localAccountId != currentAccount.uid) {
+                    store.markAuthenticationRequired()
+                    authRepository.signOut()
+                    currentAccount = null
+                    authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                } else {
+                    store.markAuthenticationRequired()
+                    email = currentAccount.email.ifBlank { email }
+                    if (!store.hasEligibleAccount()) name = currentAccount.displayName.ifBlank { name }
+                }
+            }
+            val destination = authenticationStartScreen(
+                hasSignedInUser = currentAccount != null,
+                hasEligibleLocalProfile = store.hasEligibleAccount(),
+                authenticationRequired = store.authenticationRequired(),
+                signedInUserId = currentAccount?.uid,
+                localAccountId = store.authenticationAccountId()
+            )
             val requestedId = openFriendRequests.value?.friendId
-            val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), requestedId, friends.map { it.id }.toSet())
+            val resolved = ChatLaunch.friendToOpen(destination == AppScreen.HOME, requestedId, friends.map { it.id }.toSet())
             if (resolved != null) {
                 selectedFriend = friends.first { it.id == resolved }
                 screen = AppScreen.CHAT
             } else {
-                screen = if (store.hasEligibleAccount()) AppScreen.HOME else AppScreen.REGISTER
+                screen = destination
             }
         }
+        AppScreen.AUTH -> AuthScreen(
+            language = language,
+            initialEmail = email,
+            requestState = authRequestState,
+            emailSignInEnabled = authRepository.emailSignInEnabled,
+            googleSignInEnabled = authRepository.googleSignInEnabled,
+            onSignIn = { authEmail, password ->
+                authenticate { authRepository.signIn(authEmail, password) }
+            },
+            onCreateAccount = { authEmail, password ->
+                authenticate { authRepository.createAccount(authEmail, password) }
+            },
+            onPasswordReset = ::sendPasswordReset,
+            onGoogleSignIn = {
+                val activity = context.activityOrNull()
+                if (activity == null) {
+                    authRequestState = AuthRequestState.Error(
+                        when (language) {
+                            AppLanguage.BANGLA -> "এই স্ক্রিনে Google সাইন-ইন চালু করা যায়নি।"
+                            AppLanguage.HINDI -> "इस स्क्रीन पर Google साइन-इन उपलब्ध नहीं है।"
+                            AppLanguage.ENGLISH -> "Google sign-in isn't available from this screen."
+                        }
+                    )
+                } else {
+                    authenticate { authRepository.signInWithGoogle(activity) }
+                }
+            }
+        )
         AppScreen.REGISTER -> RegisterScreen(
             language = language,
             step = registerStep,
@@ -343,15 +492,17 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
             onFinish = finish@{ friend ->
                 if (accountAgeResult(age) != AccountAgeResult.VALID) return@finish
                 if (friend != null && friendAgeResult(friend.age) != AccountAgeResult.VALID) return@finish
-                store.saveUserProfile(name, email, age.trim(), gender)
+                store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
                 friend?.let { addFriendWithProfile(it.copy(age = it.age.trim())) }
                 screen = AppScreen.HOME
             },
-            onBack = { if (registerStep == 2) registerStep = 1 else screen = AppScreen.REGISTER }
+            onBack = { if (registerStep == 2) registerStep = 1 else screen = AppScreen.AUTH },
+            emailEditable = false
         )
-        AppScreen.HOME -> HomeScreen(
+        AppScreen.HOME -> if (hasLocalAccountAccess()) HomeScreen(
             language = language,
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
+            signedInEmail = authRepository.currentAccount?.email,
             friends = friends,
             onAddFriend = { addFriendWithProfile(it) },
             onAddSystemFriend = { addSystemFriend(it) },
@@ -376,10 +527,17 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
             },
             onLanguageChange = { language = it; store.saveLanguage(it) },
             onKnowledge = { screen = AppScreen.KNOWLEDGE },
+            onSignOut = {
+                authRepository.signOut()
+                store.markAuthenticationRequired()
+                selectedFriend = null
+                authRequestState = AuthRequestState.Idle
+                screen = AppScreen.AUTH
+            },
             generatingProfileIds = generatingProfileIds,
             profileFailedIds = profileErrors.keys
         )
-        AppScreen.CHAT -> selectedFriend?.let { friend ->
+        AppScreen.CHAT -> if (hasLocalAccountAccess()) selectedFriend?.let { friend ->
             ChatScreen(
                 friend = friend,
                 store = store,
@@ -403,7 +561,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
                 }
             )
         }
-        AppScreen.KNOWLEDGE -> KnowledgeScreen(
+        AppScreen.KNOWLEDGE -> if (hasLocalAccountAccess()) KnowledgeScreen(
             language = language,
             friends = friends,
             store = store,
@@ -414,7 +572,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
+private fun HomeScreen(language: AppLanguage, userName: String, signedInEmail: String?, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -563,7 +721,7 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
         onSelect = ::addCatalogFriend,
         onDismiss = { showSystemFriendPicker = false }
     )
-    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() })
+    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, signedInEmail, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() }, onSignOut = { showSettings = false; onSignOut() })
     if (showAiSettings) AiSettingsDialog(openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
 }
 
@@ -875,13 +1033,30 @@ private fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange: 
 }
 
 @Composable
-private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit) {
+private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, signedInEmail: String?, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit) {
     val hindi = language == AppLanguage.HINDI
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(when { language == AppLanguage.BANGLA -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (signedInEmail != null) {
+                    Text(
+                        when {
+                            language == AppLanguage.BANGLA -> "সাইন ইন করা অ্যাকাউন্ট: $signedInEmail"
+                            hindi -> "साइन इन खाता: $signedInEmail"
+                            else -> "Signed in as $signedInEmail"
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
+                        Text(when { language == AppLanguage.BANGLA -> "সাইন আউট"; hindi -> "साइन आउट"; else -> "Sign out" })
+                    }
+                    HorizontalDivider()
+                }
                 Text(when { language == AppLanguage.BANGLA -> "অ্যাপের ভাষা"; hindi -> "ऐप की भाषा"; else -> "App language" })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { onLanguageChange(AppLanguage.ENGLISH) }, enabled = language != AppLanguage.ENGLISH) { Text("English") }
