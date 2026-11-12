@@ -25,8 +25,11 @@ if (!dost_romance_allowed_by_age('18', '18')
 }
 
 if (!dost_content_requires_safety_block('I love you and want to kiss you.', false)
+    || !dost_content_requires_safety_block('I want to make out with you.', false)
+    || !dost_content_requires_safety_block('{"reply":"Let us hook up tonight."}', false)
     || dost_content_requires_safety_block('We had a friendly conversation about school.', false)
     || dost_content_requires_safety_block('I love you.', true)
+    || dost_content_requires_safety_block('I want to make out with you.', true)
     || !dost_content_requires_safety_block('This is sexual content.', true)
     || !dost_content_requires_safety_block('পাশে যৌন বিষয় আছে', false)
     || !dost_content_requires_safety_block('{"reply":"Glad to chat","memories":["I love you"]}', false)

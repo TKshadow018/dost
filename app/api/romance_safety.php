@@ -25,6 +25,7 @@ function dost_classify_romance_safety($text)
     }
     $romantic = preg_match(
         '/\b(?:love|loves|loved|loving|romance|romantic|crush|kiss|kissing|date|dating|girlfriend|boyfriend|fianc(?:e|é)e?|marry|married|marriage|husband|wife|darling|sweetheart|flirt|flirting|intimate|intimacy)\b|'
+        . '\b(?:make\s+out|hook\s+up|go\s+out\s+with\s+(?:you|me)|fall(?:ing)?\s+in\s+love)\b|'
         . 'ভালোবাসা|ভালোবাসি|প্রেম|রোমান্স|রোমান্টিক|চুমু|চুম্বন|ডেটিং|গার্লফ্রেন্ড|বয়ফ্রেন্ড|প্রেমিকা|প্রেমিক|ফ্লার্ট|'
         . 'प्यार|प्रेम|रोमांस|रोमांटिक|चूम|चुंबन|डेटिंग|गर्लफ्रेंड|बॉयफ्रेंड|प्रेमिका|प्रेमी|फ्लर्ट|शादी/iu',
         $text
