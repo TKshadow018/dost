@@ -40,4 +40,16 @@ class PromptMessageTest {
         assertEquals(listOf(history[1], history[2]), prompt)
         assertTrue(prompt.sumOf { it.content.length } <= MAX_PROMPT_HISTORY_CHARACTERS)
     }
+
+    @Test
+    fun oversizedLatestMessageIsTruncatedInsteadOfDropped() {
+        val oversized = ChatMessage("user", "latest " + "x".repeat(MAX_PROMPT_HISTORY_CHARACTERS))
+
+        val prompt = messagesForPrompt(listOf(ChatMessage("user", "older"), oversized))
+
+        assertEquals(1, prompt.size)
+        assertTrue(prompt.single().content.startsWith("latest "))
+        assertTrue(prompt.single().content.endsWith("[truncated]"))
+        assertTrue(prompt.sumOf { it.content.length } <= MAX_PROMPT_HISTORY_CHARACTERS)
+    }
 }
