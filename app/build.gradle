@@ -5,7 +5,13 @@ plugins {
 
 android {
     namespace 'com.snigtus.dost'
-    compileSdk 37
+    // Integer 37 makes AGP 9.1.0 look up the unpublished hash "android-37".
+    // minorApiLevel 0 resolves the published platform android-37.0. targetSdk stays 36.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 0
+        }
+    }
 
     def uploadKeystore = file("dost-upload.jks")
     def uploadStorePassword = System.getenv("DOST_KEYSTORE_PASSWORD") ?: providers.gradleProperty("DOST_KEYSTORE_PASSWORD").orNull
