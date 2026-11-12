@@ -93,6 +93,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import com.snigtus.dost.ui.theme.DostTheme
+import com.google.firebase.auth.FirebaseUser
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -141,6 +142,7 @@ private const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow(null)) {
     val context = LocalContext.current
     val store = remember(context) { DostStore(context) }
+    val authentication = remember(context) { FirebaseAuthentication(context) }
     ConversationManager.initialize(context)
     var language by remember { mutableStateOf(store.language()) }
     var screen by rememberSaveable(
@@ -149,6 +151,10 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
             restore = { runCatching { AppScreen.valueOf(it) }.getOrDefault(AppScreen.SPLASH) }
         )
     ) { mutableStateOf(AppScreen.SPLASH) }
+    var authMode by rememberSaveable { mutableStateOf(AuthMode.SIGN_IN) }
+    var authLoading by remember { mutableStateOf(false) }
+    var authError by remember { mutableStateOf<String?>(null) }
+    var authStatus by remember { mutableStateOf<String?>(null) }
     var registerStep by remember { mutableStateOf(1) }
     var name by remember { mutableStateOf(store.userName()) }
     var email by remember { mutableStateOf(store.userEmail()) }
@@ -175,15 +181,70 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
     var profileErrors by remember { mutableStateOf(mapOf<String, ProfileFailure>()) }
     val openFriendRequest by openFriendRequests.collectAsState()
 
+    fun completeAuthentication(user: FirebaseUser) {
+        if (!canUseLocalProfile(store.firebaseAccountId(), user.uid)) {
+            authentication.signOut()
+            authError = localizedAuthText(
+                language,
+                "This device's local profile belongs to another account. Sign in with that account to keep your data safe.",
+                "এই ডিভাইসের স্থানীয় প্রোফাইলটি অন্য অ্যাকাউন্টের। তথ্য নিরাপদ রাখতে সেই অ্যাকাউন্টে সাইন ইন করুন।",
+                "इस डिवाइस की स्थानीय प्रोफ़ाइल दूसरे खाते से जुड़ी है। डेटा सुरक्षित रखने के लिए उसी खाते से साइन इन करें।"
+            )
+            screen = AppScreen.LOGIN
+            return
+        }
+        store.linkFirebaseAccount(user.uid)
+        if (!store.hasEligibleAccount()) {
+            name = user.displayName?.takeIf { it.isNotBlank() } ?: store.userName()
+            email = user.email?.takeIf { it.isNotBlank() } ?: store.userEmail()
+            age = store.userAge()
+            gender = store.userGender()
+            registerStep = 1
+        }
+        authError = null
+        authStatus = null
+        screen = authenticatedDestination(store.hasEligibleAccount())
+    }
+
+    fun continueIfEmailVerified(user: FirebaseUser) {
+        val googleAccount = user.providerData.any { it.providerId == "google.com" }
+        if (requiresEmailVerification(user.isEmailVerified, googleAccount)) {
+            email = user.email.orEmpty()
+            authMode = AuthMode.VERIFY_EMAIL
+            authStatus = localizedAuthText(
+                language,
+                "Verify your email to finish signing in.",
+                "সাইন ইন শেষ করতে ইমেইল যাচাই করুন।",
+                "साइन इन पूरा करने के लिए अपना ईमेल सत्यापित करें।"
+            )
+        } else {
+            completeAuthentication(user)
+        }
+    }
+
     fun openRequestedFriend(friendId: String?) {
+        if (authentication.currentUser == null || screen != AppScreen.HOME) return
         val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), friendId, friends.map { it.id }.toSet()) ?: return
         selectedFriend = friends.first { it.id == resolved }
         screen = AppScreen.CHAT
     }
 
-    LaunchedEffect(openFriendRequest?.nonce) {
-        if (screen == AppScreen.SPLASH) return@LaunchedEffect
+    LaunchedEffect(openFriendRequest?.nonce, screen) {
+        if (screen != AppScreen.HOME) return@LaunchedEffect
         openRequestedFriend(openFriendRequest?.friendId)
+    }
+    LaunchedEffect(Unit) {
+        val user = authentication.currentUser
+        when {
+            screen == AppScreen.LOGIN && user == null && authMode == AuthMode.VERIFY_EMAIL -> {
+                authMode = AuthMode.SIGN_IN
+                authError = null
+            }
+            screen == AppScreen.LOGIN && user != null -> continueIfEmailVerified(user)
+            screen != AppScreen.SPLASH && screen != AppScreen.LOGIN && user == null -> screen = AppScreen.LOGIN
+            screen != AppScreen.SPLASH && screen != AppScreen.LOGIN &&
+                screen != AppScreen.REGISTER && !store.hasEligibleAccount() -> screen = AppScreen.REGISTER
+        }
     }
 
     fun minimizeApp() {
@@ -306,7 +367,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
         targetState = screen,
         label = "pageTransition",
         transitionSpec = {
-            val order = listOf(AppScreen.SPLASH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE)
+            val order = listOf(AppScreen.SPLASH, AppScreen.LOGIN, AppScreen.REGISTER, AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE)
             val forward = order.indexOf(targetState) >= order.indexOf(initialState)
             val slideIn = slideInHorizontally(animationSpec = tween(300)) { if (forward) it else -it }
             val slideOut = slideOutHorizontally(animationSpec = tween(300)) { if (forward) -it else it }
@@ -315,15 +376,147 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
     ) { currentScreen ->
     when (currentScreen) {
         AppScreen.SPLASH -> DostSplashScreen(language) {
-            val requestedId = openFriendRequests.value?.friendId
-            val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), requestedId, friends.map { it.id }.toSet())
-            if (resolved != null) {
-                selectedFriend = friends.first { it.id == resolved }
-                screen = AppScreen.CHAT
+            val user = authentication.currentUser
+            if (user == null) {
+                authMode = AuthMode.SIGN_IN
+                screen = AppScreen.LOGIN
             } else {
-                screen = if (store.hasEligibleAccount()) AppScreen.HOME else AppScreen.REGISTER
+                continueIfEmailVerified(user)
             }
         }
+        AppScreen.LOGIN -> SignInScreen(
+            language = language,
+            mode = authMode,
+            loading = authLoading,
+            error = authError,
+            status = authStatus,
+            verifiedEmail = email,
+            onSubmit = { address, password, createAccount ->
+                authLoading = true
+                authError = null
+                authStatus = null
+                scope.launch {
+                    try {
+                        if (createAccount) {
+                            val user = authentication.createAccount(address, password)
+                            email = user.email.orEmpty()
+                            authMode = AuthMode.VERIFY_EMAIL
+                            try {
+                                authentication.sendVerificationEmail(user)
+                                authStatus = localizedAuthText(
+                                    language,
+                                    "Verification email sent. Open the link, then return here.",
+                                    "যাচাইকরণ ইমেইল পাঠানো হয়েছে। লিংক খুলে এখানে ফিরে আসুন।",
+                                    "सत्यापन ईमेल भेजा गया। लिंक खोलें, फिर यहाँ लौटें।"
+                                )
+                            } catch (error: Throwable) {
+                                authError = authErrorMessage(language, error.authErrorCode())
+                            }
+                        } else {
+                            continueIfEmailVerified(authentication.signIn(address, password))
+                        }
+                    } catch (error: Throwable) {
+                        authError = authErrorMessage(language, error.authErrorCode())
+                    } finally {
+                        authLoading = false
+                    }
+                }
+            },
+            onGoogleSignIn = {
+                val activity = context as? Activity
+                if (activity == null) {
+                    authError = authErrorMessage(language, "CONFIGURATION_MISSING")
+                } else {
+                    authLoading = true
+                    authError = null
+                    authStatus = null
+                    scope.launch {
+                        try {
+                            continueIfEmailVerified(authentication.signInWithGoogle(activity))
+                        } catch (error: Throwable) {
+                            if (error.authErrorCode() != "CANCELED") {
+                                authError = authErrorMessage(language, error.authErrorCode())
+                            }
+                        } finally {
+                            authLoading = false
+                        }
+                    }
+                }
+            },
+            onPasswordReset = { address ->
+                authLoading = true
+                authError = null
+                authStatus = null
+                scope.launch {
+                    try {
+                        authentication.sendPasswordReset(address)
+                        authStatus = localizedAuthText(
+                            language,
+                            "If an account exists for that email, a reset link is on its way.",
+                            "এই ইমেইলে অ্যাকাউন্ট থাকলে পাসওয়ার্ড রিসেট লিংক পাঠানো হবে।",
+                            "अगर इस ईमेल पर खाता है, तो रीसेट लिंक भेज दिया जाएगा।"
+                        )
+                    } catch (error: Throwable) {
+                        authError = authErrorMessage(language, error.authErrorCode())
+                    } finally {
+                        authLoading = false
+                    }
+                }
+            },
+            onResendVerification = {
+                authLoading = true
+                authError = null
+                authStatus = null
+                scope.launch {
+                    try {
+                        authentication.sendVerificationEmail()
+                        authStatus = localizedAuthText(
+                            language,
+                            "A new verification email is on its way.",
+                            "নতুন যাচাইকরণ ইমেইল পাঠানো হয়েছে।",
+                            "नया सत्यापन ईमेल भेज दिया गया है।"
+                        )
+                    } catch (error: Throwable) {
+                        authError = authErrorMessage(language, error.authErrorCode())
+                    } finally {
+                        authLoading = false
+                    }
+                }
+            },
+            onCheckVerification = {
+                authLoading = true
+                authError = null
+                authStatus = null
+                scope.launch {
+                    try {
+                        val user = authentication.reloadCurrentUser()
+                        if (user.isEmailVerified) {
+                            completeAuthentication(user)
+                        } else {
+                            authStatus = localizedAuthText(
+                                language,
+                                "Your email is not verified yet. Open the link in your inbox and try again.",
+                                "আপনার ইমেইল এখনো যাচাই হয়নি। ইনবক্সের লিংক খুলে আবার চেষ্টা করুন।",
+                                "आपका ईमेल अभी सत्यापित नहीं है। इनबॉक्स का लिंक खोलकर फिर कोशिश करें।"
+                            )
+                        }
+                    } catch (error: Throwable) {
+                        authError = authErrorMessage(language, error.authErrorCode())
+                    } finally {
+                        authLoading = false
+                    }
+                }
+            },
+            onModeChange = {
+                authMode = it
+                authError = null
+                authStatus = null
+            },
+            onLanguageChange = {
+                language = it
+                store.saveLanguage(it)
+            }
+        )
         AppScreen.REGISTER -> RegisterScreen(
             language = language,
             step = registerStep,
@@ -376,6 +569,13 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
             },
             onLanguageChange = { language = it; store.saveLanguage(it) },
             onKnowledge = { screen = AppScreen.KNOWLEDGE },
+            onSignOut = {
+                authentication.signOut()
+                authMode = AuthMode.SIGN_IN
+                authError = null
+                authStatus = null
+                screen = AppScreen.LOGIN
+            },
             generatingProfileIds = generatingProfileIds,
             profileFailedIds = profileErrors.keys
         )
@@ -414,7 +614,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
+private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -563,7 +763,7 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
         onSelect = ::addCatalogFriend,
         onDismiss = { showSystemFriendPicker = false }
     )
-    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() })
+    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() }, onSignOut = onSignOut)
     if (showAiSettings) AiSettingsDialog(openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
 }
 
@@ -586,7 +786,7 @@ private fun AddFriendOptionsDialog(
             })
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(when (language) {
                     AppLanguage.BANGLA -> "নিজস্ব $customCount/$MAX_CUSTOM_FRIENDS · সিস্টেম $systemCount/$MAX_SYSTEM_FRIENDS"
                     AppLanguage.HINDI -> "कस्टम $customCount/$MAX_CUSTOM_FRIENDS · सिस्टम $systemCount/$MAX_SYSTEM_FRIENDS"
@@ -875,7 +1075,7 @@ private fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange: 
 }
 
 @Composable
-private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit) {
+private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit) {
     val hindi = language == AppLanguage.HINDI
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -892,6 +1092,9 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
                 TimeZonePicker("Your timezone", userTimeZoneId, onTimeZoneChange = onUserTimeZoneChange)
                 HorizontalDivider()
                 Button(onClick = onAiSettings, modifier = Modifier.fillMaxWidth()) { Text("AI provider and model") }
+                OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)) {
+                    Text(when { language == AppLanguage.BANGLA -> "সাইন আউট"; hindi -> "साइन आउट"; else -> "Sign out" })
+                }
                 Text("Chat messages and AI replies are saved in a private server archive.", style = MaterialTheme.typography.bodySmall)
                 HorizontalDivider()
                 Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {

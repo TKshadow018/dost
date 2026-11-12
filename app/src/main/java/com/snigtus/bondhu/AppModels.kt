@@ -4,7 +4,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-enum class AppScreen { SPLASH, REGISTER, HOME, CHAT, KNOWLEDGE }
+enum class AppScreen { SPLASH, LOGIN, REGISTER, HOME, CHAT, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
 
 data class Friend(
