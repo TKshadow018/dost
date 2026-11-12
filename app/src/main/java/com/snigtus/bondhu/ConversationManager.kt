@@ -129,13 +129,19 @@ object ConversationManager {
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
                 ).filter { it.isNotBlank() }.joinToString("\n\n")
-                appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
+                appendAssistant(
+                    friend.id,
+                    response.ifBlank { unavailableReply(language) },
+                    answer.serverMessageId,
+                    selectedModel,
+                    category = if (response.isBlank()) ERROR_MESSAGE_CATEGORY else "conversation"
+                )
                 when {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
                     shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
                 }
             } catch (error: Throwable) {
-                appendAssistant(friend.id, failureReply(error, language), modelId = selectedModel)
+                appendAssistant(friend.id, failureReply(error, language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
             } finally {
                 finishJobAndResumeQueue(friend.id)
             }
@@ -289,9 +295,15 @@ object ConversationManager {
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
                 ).filter { it.isNotBlank() }.joinToString("\n\n")
-                appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, store.aiModel())
+                appendAssistant(
+                    friend.id,
+                    response.ifBlank { unavailableReply(language) },
+                    answer.serverMessageId,
+                    store.aiModel(),
+                    category = if (response.isBlank()) ERROR_MESSAGE_CATEGORY else "conversation"
+                )
             } catch (error: Throwable) {
-                appendAssistant(friend.id, failureReply(error, language), modelId = store.aiModel())
+                appendAssistant(friend.id, failureReply(error, language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
             } finally {
                 finishJobAndResumeQueue(friend.id)
             }
@@ -363,7 +375,13 @@ object ConversationManager {
                 answer.text,
                 answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
             ).filter { it.isNotBlank() }.joinToString("\n\n")
-            appendAssistant(friendId, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
+            appendAssistant(
+                friendId,
+                response.ifBlank { unavailableReply(language) },
+                answer.serverMessageId,
+                selectedModel,
+                category = if (response.isBlank()) ERROR_MESSAGE_CATEGORY else "conversation"
+            )
             store.setScheduledReply(friendId, false)
             if (!forceFollowUp) {
                 when {
@@ -505,13 +523,19 @@ object ConversationManager {
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
                 ).filter { it.isNotBlank() }.joinToString("\n\n")
-                appendAssistant(friend.id, response.ifBlank { unavailableReply(pending.language) }, answer.serverMessageId, store.aiModel())
+                appendAssistant(
+                    friend.id,
+                    response.ifBlank { unavailableReply(pending.language) },
+                    answer.serverMessageId,
+                    store.aiModel(),
+                    category = if (response.isBlank()) ERROR_MESSAGE_CATEGORY else "conversation"
+                )
                 when {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, pending.language, pending.sessionId, answer.followUpDelayMinutes * 60_000L)
                     shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, pending.language, pending.sessionId)
                 }
             } catch (error: Throwable) {
-                appendAssistant(friend.id, failureReply(error, pending.language), modelId = store.aiModel())
+                appendAssistant(friend.id, failureReply(error, pending.language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
             } finally {
                 finishJobAndResumeQueue(friendId)
             }

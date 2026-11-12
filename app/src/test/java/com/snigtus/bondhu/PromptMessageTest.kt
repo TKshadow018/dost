@@ -1,6 +1,7 @@
 package com.snigtus.dost
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PromptMessageTest {
@@ -24,5 +25,19 @@ class PromptMessageTest {
             ChatMessage("assistant", "Hi there")
         )
         assertEquals(history, messagesForPrompt(history))
+    }
+
+    @Test
+    fun promptHistoryKeepsNewestMessagesWithinCharacterBudget() {
+        val history = listOf(
+            ChatMessage("user", "a".repeat(15_000)),
+            ChatMessage("assistant", "b".repeat(15_000)),
+            ChatMessage("user", "latest")
+        )
+
+        val prompt = messagesForPrompt(history)
+
+        assertEquals(listOf(history[1], history[2]), prompt)
+        assertTrue(prompt.sumOf { it.content.length } <= MAX_PROMPT_HISTORY_CHARACTERS)
     }
 }
