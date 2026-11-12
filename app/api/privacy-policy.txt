@@ -2,7 +2,7 @@ DOST PRIVACY POLICY
 Effective date: November 12, 2026
 
 ABOUT THIS POLICY
-Dost is an AI companion application for Android. This policy describes the information the current app stores on the device, what it sends to Dost's API server and to AI providers, how long the server archive is kept, and what is deleted when you remove a friend or remove the app. It matches this version of the app. There is no children's mode or in-app control that deletes the server archive.
+Dost is an AI companion application for Android. This policy describes the information the current app stores on the device, what it sends to Dost's API server and to AI providers, how long the server archive is kept, and what is deleted when you remove a friend or remove the app. It matches this version of the app. The app is local-only: there is no Dost account or sync service. You can export or import local data and request deletion of this installation's indexed server archive from Settings.
 
 1. INFORMATION STORED ON YOUR DEVICE
 Dost stores the following information in the app's private storage on your Android device:
@@ -13,7 +13,7 @@ Dost stores the following information in the app's private storage on your Andro
 - Language, preferred AI model, unread counts, and other app settings.
 - Compressed copies of photos that you attach to chat messages.
 
-Chat transcripts are stored as per-friend files under the app's private messages directory. Memories, summaries, and settings are stored in the app's private preferences. There is no Dost account server. The email collected at registration is stored only on the device and is not used to sign in.
+Chat transcripts are stored as per-friend files under the app's private messages directory. Memories, summaries, and settings are stored in the app's private preferences. The email collected at registration is stored only on the device and is not used to sign in. Settings can export your profile, friend profiles, memories, summaries, transcripts, and available chat-image attachments to a JSON file, or import that file on a fresh install. The export does not include your OpenRouter API key or installation id. The export file is not encrypted; keep it somewhere private. Friend-avatar references may point to files or URIs that are not available on another device.
 
 Chat messages and chat-photo attachments are also sent to Dost's API server and AI services as described below. A friend photo selected as an avatar stays on the device. Choosing that photo does not upload it. A photo downloaded for a catalog friend is cached on the device.
 
@@ -45,11 +45,11 @@ That deletion does not remove:
 
 Chat-photo files are stored in the app's chat_images directory. The transcript file is deleted before the app walks the message list to delete those photos. If that friend's messages are not already loaded in memory, the photo files can remain in app storage until you clear Dost's storage or uninstall the app.
 
-This version has no control that deletes your profile or all local Dost data at once. Clearing Dost's app storage or uninstalling the app removes the local profile, friend list, transcripts, memories, settings, and other files the app stored in its private directories. Uninstalling does not delete data already sent to the server.
+Clearing Dost's app storage or uninstalling the app removes the local profile, friend list, transcripts, memories, settings, and other files the app stored in its private directories. Uninstalling does not delete data already sent to the server.
 
 Dost server conversation archives are retained for no more than 3,650 days (10 years) after the most recent activity in each conversation session. Activity is the last modification time of that session's archive file. A scheduled server cleanup removes expired session archives and their attached chat-photo files, including older archive files stored directly in the archive directory. The cleanup job does not run when you delete a friend, clear storage, or uninstall. The 10-year limit is Dost's chosen retention period.
 
-The app cannot delete the server archive. There is no delete-archive request in the app or the API. Removing a friend, clearing storage, or uninstalling leaves the server copy in place until the 3,650-day cleanup, unless Dost removes it sooner in response to a manual request. To ask for earlier removal, contact the address below. Dost needs information that is sufficient to locate and verify the archive. This version does not show the installation id in the app. When that id can be read from the device, newer archives can be found by it. Archives written before the id was stored, and any archive whose id is not available, are grouped by display name and server-observed IP address. There is no account to look them up by.
+Use Settings > Delete server archive to ask the API to remove the conversation sessions and attached images indexed for the current installation id. A small hashed-installation deletion marker remains to prevent delayed messages created before deletion from being archived again; new messages can still be archived. This removes server records written by versions that stored and indexed that id; removing a friend, clearing app storage, or uninstalling does not make this request automatically. Archives written before install-id indexing existed cannot be associated with an installation by this control and remain subject to the 3,650-day cleanup. The app does not display the installation id, and there is no account to look archives up by. If the delete request cannot reach the server, the archive remains until a later successful request or the scheduled cleanup.
 
 Once data has been sent to OpenRouter or a model provider, their own deletion and retention policies apply.
 

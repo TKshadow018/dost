@@ -333,6 +333,15 @@ function append_conversation_events($installationId, $userName, $clientIp, $frie
     if ($baseDirectory === false) {
         return false;
     }
+    $deletedBefore = dost_install_archive_deleted_before($baseDirectory, $installationId);
+    if ($deletedBefore > 0) {
+        $events = array_values(array_filter($events, function ($event) use ($deletedBefore) {
+            return (int) $event['timestamp_ms'] > $deletedBefore;
+        }));
+        if (count($events) === 0) {
+            return true;
+        }
+    }
     $directory = conversation_storage_directory($userName, $clientIp, $friendName, $sessionId);
     if ($directory === false) {
         return false;
@@ -448,4 +457,183 @@ function append_conversation_events($installationId, $userName, $clientIp, $frie
 function append_conversation_event($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, $event)
 {
     return append_conversation_events($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, array($event));
+}
+
+function dost_remove_archive_tree($path)
+{
+    if (is_link($path) || !is_dir($path)) {
+        return !file_exists($path) && !is_link($path) ? true : @unlink($path);
+    }
+    $entries = @scandir($path);
+    if (!is_array($entries)) {
+        return false;
+    }
+    foreach ($entries as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+        if (!dost_remove_archive_tree($path . DIRECTORY_SEPARATOR . $entry)) {
+            return false;
+        }
+    }
+    return @rmdir($path);
+}
+
+function dost_install_archive_deleted_before($baseDirectory, $installationId)
+{
+    $markerDirectory = $baseDirectory . DIRECTORY_SEPARATOR . '_deleted_before';
+    if (is_link($markerDirectory) || !is_dir($markerDirectory)) {
+        return 0;
+    }
+    $resolvedDirectory = realpath($markerDirectory);
+    if (!is_string($resolvedDirectory) || !dost_path_is_inside($resolvedDirectory, $baseDirectory)) {
+        return 0;
+    }
+    $markerPath = $resolvedDirectory . DIRECTORY_SEPARATOR . hash('sha256', strtolower($installationId)) . '.txt';
+    $resolvedMarker = realpath($markerPath);
+    if (is_link($markerPath) || !is_file($markerPath) || !is_string($resolvedMarker)
+        || !dost_path_is_inside($resolvedMarker, $resolvedDirectory)
+    ) {
+        return 0;
+    }
+    $contents = @file_get_contents($markerPath);
+    return is_string($contents) && preg_match('/\A[0-9]{1,16}\s*\z/', $contents) === 1
+        ? (int) trim($contents)
+        : 0;
+}
+
+function dost_write_install_archive_deletion_marker($baseDirectory, $installationId)
+{
+    $markerDirectory = $baseDirectory . DIRECTORY_SEPARATOR . '_deleted_before';
+    if (is_link($markerDirectory)
+        || (!is_dir($markerDirectory) && !@mkdir($markerDirectory, 0700, true) && !is_dir($markerDirectory))
+    ) {
+        return false;
+    }
+    @chmod($markerDirectory, 0700);
+    $markerPath = $markerDirectory . DIRECTORY_SEPARATOR . hash('sha256', strtolower($installationId)) . '.txt';
+    if (is_link($markerPath)) {
+        return false;
+    }
+    $temporaryPath = $markerPath . '.' . bin2hex(random_bytes(6)) . '.tmp';
+    $timestamp = (string) (int) floor(microtime(true) * 1000);
+    if (@file_put_contents($temporaryPath, $timestamp . "\n", LOCK_EX) !== strlen($timestamp) + 1) {
+        @unlink($temporaryPath);
+        return false;
+    }
+    @chmod($temporaryPath, 0600);
+    if (!@rename($temporaryPath, $markerPath)) {
+        @unlink($temporaryPath);
+        return false;
+    }
+    @chmod($markerPath, 0600);
+    return true;
+}
+
+function dost_delete_installation_archive($installationId)
+{
+    if (!valid_uuid($installationId)) {
+        return false;
+    }
+    $baseDirectory = dost_prepare_storage_directory(conversation_storage_base_directory());
+    if ($baseDirectory === false) {
+        return false;
+    }
+    if (!dost_write_install_archive_deletion_marker($baseDirectory, $installationId)) {
+        return false;
+    }
+
+    $indexDirectory = $baseDirectory . DIRECTORY_SEPARATOR . '_by_install';
+    $indexPath = $indexDirectory . DIRECTORY_SEPARATOR . strtolower($installationId) . '.txt';
+    if (!file_exists($indexPath) && !is_link($indexPath)) {
+        return 0;
+    }
+    if (is_link($indexPath) || !is_file($indexPath)) {
+        return false;
+    }
+    $handle = @fopen($indexPath, 'r+');
+    if ($handle === false || !flock($handle, LOCK_EX)) {
+        if (is_resource($handle)) {
+            fclose($handle);
+        }
+        return false;
+    }
+
+    $relativePaths = array();
+    rewind($handle);
+    while (($line = fgets($handle)) !== false) {
+        $relative = trim($line);
+        if ($relative === '') {
+            continue;
+        }
+        $parts = explode('/', $relative);
+        if (count($parts) !== 3 || $parts[0] === '' || $parts[1] === ''
+            || $parts[0] === '.' || $parts[0] === '..'
+            || $parts[1] === '.' || $parts[1] === '..'
+            || !valid_uuid($parts[2]) || strpos($relative, '\\') !== false
+            || strpos($relative, "\0") !== false
+        ) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+            return false;
+        }
+        $relativePaths[$relative] = true;
+    }
+    if (!feof($handle)) {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        return false;
+    }
+
+    $deletedSessions = 0;
+    foreach (array_keys($relativePaths) as $relative) {
+        $parts = explode('/', $relative);
+        $sessionPath = $baseDirectory . DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $parts);
+        $cursor = $baseDirectory;
+        $hasSymlink = false;
+        foreach ($parts as $part) {
+            $cursor .= DIRECTORY_SEPARATOR . $part;
+            if (is_link($cursor)) {
+                $hasSymlink = true;
+                break;
+            }
+        }
+        if ($hasSymlink) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+            return false;
+        }
+        if (file_exists($sessionPath) || is_link($sessionPath)) {
+            $resolved = realpath($sessionPath);
+            if (!is_string($resolved) || !dost_path_is_inside($resolved, $baseDirectory)
+                || !is_dir($resolved) || !dost_remove_archive_tree($resolved)
+            ) {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+                return false;
+            }
+            $deletedSessions++;
+            $parent = dirname($sessionPath);
+            while ($parent !== $baseDirectory && dost_path_is_inside($parent, $baseDirectory)) {
+                $entries = @scandir($parent);
+                if (!is_array($entries) || count($entries) > 2 || !@rmdir($parent)) {
+                    break;
+                }
+                $parent = dirname($parent);
+            }
+        }
+    }
+
+    ftruncate($handle, 0);
+    fflush($handle);
+    flock($handle, LOCK_UN);
+    fclose($handle);
+    if (!@unlink($indexPath) && file_exists($indexPath)) {
+        return false;
+    }
+    $entries = @scandir($indexDirectory);
+    if (is_array($entries) && count($entries) === 2) {
+        @rmdir($indexDirectory);
+    }
+    return $deletedSessions;
 }

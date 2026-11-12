@@ -70,6 +70,21 @@ object ConversationManager {
 
     fun messagesFor(friendId: String): List<ChatMessage> = messageState.value[friendId] ?: store.loadMessages(friendId)
 
+    fun refreshAfterDataImport() {
+        if (!::store.isInitialized) return
+        val importedFriends = store.loadFriends()
+        (messageState.value.keys + importedFriends.map { it.id }).forEach { friendId ->
+            ConversationWorkScheduler.cancelAllForFriend(appContext, friendId)
+            outboundQueue.clear(friendId)
+            jobs.remove(friendId)
+        }
+        messageState.value = importedFriends.associate { it.id to store.loadMessages(it.id) }
+        unreadState.value = store.unreadCounts(importedFriends.map { it.id })
+        sendingState.value = emptySet()
+        waitingForScheduleState.value = emptySet()
+        relationshipState.value = emptyMap()
+    }
+
     fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "") {
         if (text.isBlank() && imagePath.isBlank()) return
         if (friend.profilePending) return

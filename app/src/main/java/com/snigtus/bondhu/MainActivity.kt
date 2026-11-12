@@ -13,6 +13,7 @@ import android.os.Build
 import android.provider.Settings
 import java.io.ByteArrayOutputStream
 import java.io.File
+import org.json.JSONObject
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
@@ -95,10 +96,12 @@ import androidx.compose.ui.res.painterResource
 import com.snigtus.dost.ui.theme.DostTheme
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.time.LocalTime
 import java.time.Instant
 import java.time.ZoneId
@@ -171,6 +174,48 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
     var closeAfterOverlayPermission by remember { mutableStateOf(false) }
     var bubbleFriendId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    var settingsNotice by remember { mutableStateOf("") }
+    val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) scope.launch {
+            settingsNotice = try {
+                val backup = withContext(Dispatchers.IO) { store.exportLocalData().toString(2) }
+                require(backup.length <= MAX_LOCAL_BACKUP_CHARS) { "The backup is too large to export." }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(backup) }
+                        ?: throw java.io.IOException("Could not open the selected file.")
+                }
+                "Local data exported."
+            } catch (error: Exception) {
+                "Export failed: ${error.message?.take(160) ?: "could not write the file"}"
+            }
+        }
+    }
+    val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            settingsNotice = "Importing local data…"
+            try {
+                withContext(Dispatchers.IO) {
+                    store.importLocalData(JSONObject(readLocalBackup(context, uri)))
+                }
+                ConversationManager.refreshAfterDataImport()
+                language = store.language()
+                name = store.userName()
+                email = store.userEmail()
+                age = store.userAge()
+                gender = store.userGender()
+                userTimeZoneId = store.userTimeZoneId()
+                openRouterApiKey = store.openRouterApiKey()
+                aiModel = store.aiModel()
+                friends.clear()
+                friends.addAll(store.loadFriends())
+                selectedFriend = null
+                screen = AppScreen.HOME
+                settingsNotice = "Local data imported."
+            } catch (error: Exception) {
+                settingsNotice = "Import failed: ${error.message?.take(160) ?: "the file is invalid"}"
+            }
+        }
+    }
     var generatingProfileIds by remember { mutableStateOf(setOf<String>()) }
     var profileErrors by remember { mutableStateOf(mapOf<String, ProfileFailure>()) }
     val openFriendRequest by openFriendRequests.collectAsState()
@@ -377,7 +422,21 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
             onLanguageChange = { language = it; store.saveLanguage(it) },
             onKnowledge = { screen = AppScreen.KNOWLEDGE },
             generatingProfileIds = generatingProfileIds,
-            profileFailedIds = profileErrors.keys
+            profileFailedIds = profileErrors.keys,
+            onExportLocalData = { backupExportLauncher.launch("dost-local-backup.json") },
+            onImportLocalData = { backupImportLauncher.launch(arrayOf("application/json")) },
+            settingsNotice = settingsNotice,
+            onDeleteServerArchive = {
+                scope.launch {
+                    settingsNotice = "Deleting server archive…"
+                    settingsNotice = try {
+                        val deleted = OpenRouterClient().deleteServerArchive(store.installationId())
+                        "Server archive deleted ($deleted sessions)."
+                    } catch (error: Exception) {
+                        "Archive deletion failed: ${error.message?.take(160) ?: "please try again"}"
+                    }
+                }
+            }
         )
         AppScreen.CHAT -> selectedFriend?.let { friend ->
             ChatScreen(
@@ -414,7 +473,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
+private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -563,7 +622,7 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
         onSelect = ::addCatalogFriend,
         onDismiss = { showSystemFriendPicker = false }
     )
-    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() })
+    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() }, onExportLocalData = onExportLocalData, onImportLocalData = onImportLocalData, settingsNotice = settingsNotice, onDeleteServerArchive = onDeleteServerArchive)
     if (showAiSettings) AiSettingsDialog(openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
 }
 
@@ -875,13 +934,14 @@ private fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange: 
 }
 
 @Composable
-private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit) {
+private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
     val hindi = language == AppLanguage.HINDI
+    var confirmArchiveDelete by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(when { language == AppLanguage.BANGLA -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(when { language == AppLanguage.BANGLA -> "অ্যাপের ভাষা"; hindi -> "ऐप की भाषा"; else -> "App language" })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { onLanguageChange(AppLanguage.ENGLISH) }, enabled = language != AppLanguage.ENGLISH) { Text("English") }
@@ -893,6 +953,20 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
                 HorizontalDivider()
                 Button(onClick = onAiSettings, modifier = Modifier.fillMaxWidth()) { Text("AI provider and model") }
                 Text("Chat messages and AI replies are saved in a private server archive.", style = MaterialTheme.typography.bodySmall)
+                HorizontalDivider()
+                Text("Local data", style = MaterialTheme.typography.titleMedium)
+                Text("Move your profile, friends, memories, summaries, and chat history between devices with a JSON backup. The backup does not include your API key.", style = MaterialTheme.typography.bodySmall)
+                Text("The installation id is not transferred. Delete the old phone's server archive from that phone before moving to a new one.", style = MaterialTheme.typography.bodySmall)
+                Text("Importing replaces the current profile, friends, memories, summaries, and chat history.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                OutlinedButton(onClick = onExportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Export local data") }
+                OutlinedButton(onClick = onImportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Import local data") }
+                if (settingsNotice.isNotBlank()) {
+                    Text(settingsNotice, color = if (settingsNotice.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                }
+                HorizontalDivider()
+                Text("Server archive", style = MaterialTheme.typography.titleMedium)
+                Text("Delete this installation's indexed chat archive and attached images from Dost's server. Older records without an installation id cannot be matched.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = { confirmArchiveDelete = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete server archive") }
                 HorizontalDivider()
                 Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {
                     Text(when { language == AppLanguage.BANGLA -> "আমার সম্পর্কে জানা তথ্য"; hindi -> "मेरे बारे में जानकारी"; else -> "Knowledge about me" })
@@ -909,6 +983,19 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(when { language == AppLanguage.BANGLA -> "বন্ধ করুন"; hindi -> "बंद करें"; else -> "Close" }) } }
     )
+    if (confirmArchiveDelete) {
+        AlertDialog(
+           onDismissRequest = { confirmArchiveDelete = false },
+           title = { Text("Delete server archive?") },
+           text = { Text("This permanently removes the indexed chat sessions and images for this installation from Dost's server. It does not delete copies held by OpenRouter or model providers.") },
+           confirmButton = {
+               TextButton(onClick = { confirmArchiveDelete = false; onDeleteServerArchive() }) {
+                   Text("Delete archive", color = MaterialTheme.colorScheme.error)
+               }
+           },
+           dismissButton = { TextButton(onClick = { confirmArchiveDelete = false }) { Text("Cancel") } }
+        )
+    }
 }
 
 @Composable
@@ -1364,6 +1451,23 @@ private fun MessageBubble(message: ChatMessage, friendName: String, onRegenerate
         Text(timeText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
     }
 }
+
+private fun readLocalBackup(context: Context, uri: Uri): String {
+    val input = context.contentResolver.openInputStream(uri) ?: throw java.io.IOException("Could not open the selected file.")
+    return input.reader(Charsets.UTF_8).use { reader ->
+        val text = StringBuilder()
+        val buffer = CharArray(8192)
+        while (true) {
+            val count = reader.read(buffer)
+            if (count < 0) break
+            require(text.length + count <= MAX_LOCAL_BACKUP_CHARS) { "The backup file is too large to import." }
+            text.append(buffer, 0, count)
+        }
+        text.toString()
+    }
+}
+
+private const val MAX_LOCAL_BACKUP_CHARS = 25_000_000
 
 private fun exportChat(context: Context, friend: Friend, messages: List<ChatMessage>) {
     val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
