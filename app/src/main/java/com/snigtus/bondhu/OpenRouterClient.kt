@@ -42,6 +42,7 @@ class OpenRouterClient {
             "x-ai/grok-3-mini", "perplexity/sonar", "cohere/command-a"
         )).distinct()
         private const val MAX_MEMORY_ITEMS = 200
+        internal const val MODEL_REPLY_LOG_LIMIT = 200
         private const val MAX_SUMMARY_MESSAGES = 100
         private const val MAX_SESSION_SUMMARY_ITEMS = 7
     }
@@ -181,13 +182,21 @@ class OpenRouterClient {
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
         val parsed = parseReply(raw, connection.getHeaderField("X-Dost-Message-ID"))
-        if (parsed.parseFailed) {
-            android.util.Log.w("OpenRouterClient", "Unparseable model reply: $raw")
+        if (parsed.parseFailed && BuildConfig.DEBUG) {
+            android.util.Log.w("OpenRouterClient", "Unparseable model reply: ${modelReplyDebugSnippet(raw)}")
         }
         return parsed
     }
 
+    internal fun modelReplyDebugSnippet(raw: String): String = raw.take(MODEL_REPLY_LOG_LIMIT)
+
     internal fun parseModelReply(raw: String, serverMessageId: String? = null): AiReply = parseReply(raw, serverMessageId)
+
+    internal fun isPlainModelReply(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("```")) return false
+        return '{' !in trimmed && '}' !in trimmed
+    }
 
     private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile {
         val connection = openConnection(apiKey)
@@ -233,7 +242,8 @@ class OpenRouterClient {
     }
 
     private fun parseReply(raw: String, serverMessageId: String?): AiReply {
-        val cleaned = removeSafetyMetadata(raw).removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val visible = removeSafetyMetadata(raw).trim()
+        val cleaned = visible.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         return runCatching {
             val json = JSONObject(cleaned)
             val memories = json.optJSONArray("memories") ?: JSONArray()
@@ -254,7 +264,11 @@ class OpenRouterClient {
                 serverMessageId = serverMessageId
             )
         }.getOrElse {
-            AiReply(text = "", memories = emptyList(), friendshipImpact = 0, loveImpact = 0, parseFailed = true, serverMessageId = serverMessageId)
+            if (isPlainModelReply(visible)) {
+                AiReply(text = visible, serverMessageId = serverMessageId)
+            } else {
+                AiReply(text = "", memories = emptyList(), friendshipImpact = 0, loveImpact = 0, parseFailed = true, serverMessageId = serverMessageId)
+            }
         }
     }
 

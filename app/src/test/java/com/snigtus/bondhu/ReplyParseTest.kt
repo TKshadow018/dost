@@ -45,6 +45,23 @@ class ReplyParseTest {
     }
 
     @Test
+    fun plainProseIsKeptWithoutMemoriesOrDeltas() {
+        val parsed = client.parseModelReply("Glad you got home safely.")
+        assertFalse(parsed.parseFailed)
+        assertEquals("Glad you got home safely.", parsed.text)
+        assertTrue(parsed.memories.isEmpty())
+        assertEquals(0, parsed.friendshipImpact)
+        assertEquals(0, parsed.loveImpact)
+    }
+
+    @Test
+    fun debugLogSnippetIsCappedAtTwoHundredCharacters() {
+        val raw = "x".repeat(500)
+        assertEquals(OpenRouterClient.MODEL_REPLY_LOG_LIMIT, client.modelReplyDebugSnippet(raw).length)
+        assertEquals(200, client.modelReplyDebugSnippet(raw).length)
+    }
+
+    @Test
     fun markdownFenceWithoutJsonDoesNotLeak() {
         val raw = "```json\nI refuse to use json\n```"
         val parsed = client.parseModelReply(raw)

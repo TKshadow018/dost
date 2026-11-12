@@ -106,7 +106,7 @@ object ConversationManager {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
                 if (answer.parseFailed) {
-                    appendAssistant(friend.id, unreadableReply(language), modelId = selectedModel, category = "error")
+                    appendAssistant(friend.id, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
                     return@launch
                 }
                 store.addUserMemories(friend.id, answer.memories)
@@ -200,9 +200,10 @@ object ConversationManager {
         val saved = messagesFor(friendId).toMutableList().apply { add(assistantMessage) }
         publish(friendId, saved)
         store.saveMessages(friendId, saved)
-        ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, assistantMessage.messageId)
+        val isError = category == ERROR_MESSAGE_CATEGORY
+        if (!isError) ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, assistantMessage.messageId)
         scheduleSessionEnd(friendId, sessionId, SESSION_INACTIVITY_MILLIS)
-        if (activeFriendId != friendId) {
+        if (!isError && activeFriendId != friendId) {
             store.incrementUnread(friendId)
             unreadState.update { it + (friendId to store.unreadCount(friendId)) }
             store.loadFriends().firstOrNull { it.id == friendId }?.let { friend ->
@@ -267,7 +268,7 @@ object ConversationManager {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
                 if (answer.parseFailed) {
-                    appendAssistant(friend.id, unreadableReply(language), modelId = store.aiModel(), category = "error")
+                    appendAssistant(friend.id, unreadableReply(language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
                     return@launch
                 }
                 store.addUserMemories(friend.id, answer.memories)
@@ -290,7 +291,7 @@ object ConversationManager {
         val client = OpenRouterClient()
         val selectedModel = store.aiModel()
         val apiKey = store.openRouterApiKey()
-        val history = messagesFor(friend.id).filter { it.sessionId == sessionId }.let { existing ->
+        val history = messagesForPrompt(messagesFor(friend.id).filter { it.sessionId == sessionId }).let { existing ->
             if (seedMessage != null && existing.isEmpty()) listOf(seedMessage) else existing
         }
         try {
@@ -336,7 +337,9 @@ object ConversationManager {
         try {
             val answer = requestReply(friend, sessionId, language, forceFollowUp)
             if (answer.parseFailed) {
-                appendAssistant(friendId, unreadableReply(language), modelId = selectedModel, category = "error")
+                if (!forceFollowUp) {
+                    appendAssistant(friendId, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
+                }
                 store.setScheduledReply(friendId, false)
                 return true
             }
@@ -378,7 +381,12 @@ object ConversationManager {
         val remaining = SESSION_INACTIVITY_MILLIS - (System.currentTimeMillis() - latestMessage.timestampMillis)
         if (remaining > 0L) return false
         val friendName = store.loadFriends().firstOrNull { it.id == friendId }?.name ?: return true
-        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, sessionMessages, store.language())
+        val summaryInput = messagesForPrompt(sessionMessages)
+        if (summaryInput.isEmpty()) {
+            if (store.currentSessionId(friendId) == sessionId) store.saveCurrentSessionId(friendId, null)
+            return true
+        }
+        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, summaryInput, store.language())
         val latestAfterSummary = messagesFor(friendId).lastOrNull { it.sessionId == sessionId }
         if (store.currentSessionId(friendId) != sessionId || latestAfterSummary?.timestampMillis != latestMessage.timestampMillis) return false
         store.saveSessionSummary(friendId, SessionSummary(sessionId, sessionMessages.minOf { it.timestampMillis }, System.currentTimeMillis(), summary))
