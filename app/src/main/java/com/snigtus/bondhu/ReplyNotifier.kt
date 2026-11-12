@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 
 object ReplyNotifier {
     private const val CHANNEL_ID = "dost_replies"
+    private const val POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -21,12 +22,18 @@ object ReplyNotifier {
         }
     }
 
-    fun canNotify(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    fun canNotify(context: Context): Boolean {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
 
     fun notifyReply(context: Context, friend: Friend, preview: String) {
-        if (!canNotify(context)) return
+        val notifications = NotificationManagerCompat.from(context)
+        if (!notifications.areNotificationsEnabled()) return
+        val postNotificationsGranted =
+            ContextCompat.checkSelfPermission(context, POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !postNotificationsGranted) return
         ensureChannel(context)
         val intent = Intent(context, MainActivity::class.java)
             .putExtra(ChatLaunch.EXTRA_FRIEND_ID, friend.id)
@@ -41,6 +48,8 @@ object ReplyNotifier {
             .setContentIntent(pending)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(friend.id.hashCode(), notification) }
+        if (postNotificationsGranted || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            notifications.notify(friend.id.hashCode(), notification)
+        }
     }
 }
