@@ -238,7 +238,7 @@
           <li>The app parses the AI response, adds any explicit user facts to memory, updates relationship scores, and appends the assistant message.</li>
           <li>Message archival is also queued with Android WorkManager; network-dependent work waits for connectivity and can retry after transient failures.</li>
         </ol>
-        <p>The AI prompt includes the selected language, user and friend clocks, fictional friend profile, relationship scores, recent memory facts, and up to three recent session summaries. It tells the model to stay in character as a fictional friend, avoid claiming to be a real person, and return a JSON object containing the reply and optional structured updates.</p>
+        <p>The AI prompt includes the selected language, user and friend clocks, fictional friend profile, relationship scores, recent memory facts, and up to seven recent session summaries. It tells the model to stay in character as a fictional friend, avoid claiming to be a real person, and return a JSON object containing the reply and optional structured updates.</p>
         <h3>Images</h3>
         <p>Images are resized to a maximum dimension of 1,280 pixels and compressed as JPEG to a maximum of 300 KB. The compressed copy is stored in the app's private files directory. The API forwards image data as a multimodal data URL; a vision-capable selected model is needed for useful image analysis.</p>
         <h3>Follow-ups and errors</h3>
