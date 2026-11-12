@@ -53,8 +53,8 @@ class OpenRouterClient {
             messages.takeLast(MAX_SUMMARY_MESSAGES)
     }
 
-    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, userAge: String = ""): AiReply = withContext(Dispatchers.IO) {
-        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, userAge)
+    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = ""): AiReply = withContext(Dispatchers.IO) {
+        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction, userAge)
     }
 
     suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
@@ -92,8 +92,9 @@ class OpenRouterClient {
         return false
     }
 
-    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, userAge: String): AiReply {
-        val sessionId = history.lastOrNull()?.sessionId.orEmpty()
+    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = ""): AiReply {
+        val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
+        val connection = openConnection(apiKey, installationId, friend.id, resolvedSessionId)
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
         val friendDateTime = ZonedDateTime.now(validZoneId(friend.timeZoneId)).format(formatter)
@@ -159,7 +160,9 @@ class OpenRouterClient {
             The combined reply and follow_up_question may contain at most one question total. Never ask stacked questions or put one question in each field. $questionGuidance Do not interrogate, repeat a question already answered, or ask for secrets. Make it playful or gently funny when it fits, while remaining respectful. If the user seems uncomfortable or asks not to share, ask no question.
             Set follow_up_delay_minutes to an integer from 1 to 1440 only when the user explicitly asks for a future check-in after a duration; otherwise set it to null. When a delay is requested, do not ask an immediate follow-up question.
             ${relationshipImpactPrompt(userAge, friend.age)}
-        """.trimIndent()
+        """.trimIndent().let { prompt ->
+            if (ephemeralInstruction.isBlank()) prompt else prompt + "\n\n" + ephemeralInstruction.trim()
+        }
         val imageMessages = history.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
         val messages = JSONArray().apply {
             put(JSONObject().apply { put("role", "system"); put("content", system) })
@@ -179,7 +182,7 @@ class OpenRouterClient {
             }) }
         }
         val body = JSONObject().apply { put("operation", "chat_reply"); put("user_name", userName); put("friend_name", friend.name); put("model", model); put("messages", messages); put("temperature", 0.8) }
-        val connection = post(apiKey, installationId, friend.id, sessionId, body.toString().toByteArray())
+        val connection = post(apiKey, installationId, friend.id, resolvedSessionId, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()

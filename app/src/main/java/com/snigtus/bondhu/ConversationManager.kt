@@ -298,7 +298,7 @@ object ConversationManager {
         }
     }
 
-    private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null): AiReply {
+    private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null, ephemeralInstruction: String = ""): AiReply {
         val client = OpenRouterClient()
         val selectedModel = store.aiModel()
         val apiKey = store.openRouterApiKey()
@@ -310,7 +310,8 @@ object ConversationManager {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp, userAge = store.userAge()
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
+                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge()
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
@@ -318,7 +319,8 @@ object ConversationManager {
             return client.reply(
                 apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
                 store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp, userAge = store.userAge()
+                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
+                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge()
             )
         }
     }
@@ -433,15 +435,19 @@ object ConversationManager {
         if (!jobs.add(friendId)) return false
         sendingState.update { it + friendId }
         try {
-            val greetingSeed = ChatMessage("user", "Say a warm good-morning greeting to me as if you just woke up and thought of me.", sessionId = sessionId, modelId = store.aiModel())
+            val plan = MorningGreeting.plan(sessionId, messagesFor(friendId))
             val answer = runCatching {
-                requestReply(friend, sessionId, language, forceFollowUp = false, seedMessage = greetingSeed)
+                requestReply(friend, plan.sessionId, language, forceFollowUp = false, ephemeralInstruction = plan.instruction)
             }.getOrNull() ?: return true
             val response = listOf(
                 answer.text,
                 answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
             ).filter { it.isNotBlank() }.joinToString("\n\n")
-            if (response.isNotBlank()) appendAssistant(friendId, response, answer.serverMessageId, store.aiModel())
+            if (response.isNotBlank()) {
+                // Close whatever session was open by moving the current pointer onto the scheduled id.
+                store.saveCurrentSessionId(friendId, plan.sessionId)
+                appendAssistant(friendId, response, answer.serverMessageId, store.aiModel())
+            }
             return true
         } finally {
             finishJobAndResumeQueue(friendId)
