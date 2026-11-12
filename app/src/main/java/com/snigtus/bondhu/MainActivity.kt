@@ -76,6 +76,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
@@ -92,6 +94,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import com.snigtus.dost.ui.theme.DostTheme
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.time.LocalTime
@@ -101,15 +105,29 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    private val openFriendRequests = MutableStateFlow<OpenFriendRequest?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) publishOpenFriend(intent)
         enableEdgeToEdge()
-        setContent { DostTheme { DostApp() } }
+        setContent { DostTheme { DostApp(openFriendRequests) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        publishOpenFriend(intent)
     }
 
     override fun onStart() {
         super.onStart()
         stopService(Intent(this, FloatingChatService::class.java))
+    }
+
+    private fun publishOpenFriend(intent: Intent?) {
+        val friendId = intent?.getStringExtra(ChatLaunch.EXTRA_FRIEND_ID)?.takeIf { it.isNotBlank() } ?: return
+        openFriendRequests.value = OpenFriendRequest(friendId, System.nanoTime())
     }
 }
 
@@ -119,12 +137,17 @@ private const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 
 
 @Composable
-fun DostApp() {
+fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow(null)) {
     val context = LocalContext.current
     val store = remember(context) { DostStore(context) }
     ConversationManager.initialize(context)
     var language by remember { mutableStateOf(store.language()) }
-    var screen by remember { mutableStateOf(AppScreen.SPLASH) }
+    var screen by rememberSaveable(
+        stateSaver = Saver<AppScreen, String>(
+            save = { it.name },
+            restore = { runCatching { AppScreen.valueOf(it) }.getOrDefault(AppScreen.SPLASH) }
+        )
+    ) { mutableStateOf(AppScreen.SPLASH) }
     var registerStep by remember { mutableStateOf(1) }
     var name by remember { mutableStateOf(store.userName()) }
     var email by remember { mutableStateOf(store.userEmail()) }
@@ -137,10 +160,28 @@ fun DostApp() {
         store.clearLockedLoveScores()
         mutableStateListOf<Friend>().apply { addAll(store.loadFriends()) }
     }
-    var selectedFriend by remember { mutableStateOf<Friend?>(null) }
+    val selectedFriendSaver = remember(store) {
+        Saver<Friend?, String>(
+            save = { friend -> friend?.id ?: "" },
+            restore = { id -> if (id.isBlank()) null else store.loadFriends().firstOrNull { it.id == id } }
+        )
+    }
+    var selectedFriend by rememberSaveable(stateSaver = selectedFriendSaver) { mutableStateOf<Friend?>(null) }
     var closeAfterOverlayPermission by remember { mutableStateOf(false) }
     var bubbleFriendId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val openFriendRequest by openFriendRequests.collectAsState()
+
+    fun openRequestedFriend(friendId: String?) {
+        val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), friendId, friends.map { it.id }.toSet()) ?: return
+        selectedFriend = friends.first { it.id == resolved }
+        screen = AppScreen.CHAT
+    }
+
+    LaunchedEffect(openFriendRequest?.nonce) {
+        if (screen == AppScreen.SPLASH) return@LaunchedEffect
+        openRequestedFriend(openFriendRequest?.friendId)
+    }
 
     fun minimizeApp() {
         (context as? Activity)?.moveTaskToBack(true)
@@ -157,6 +198,17 @@ fun DostApp() {
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val relationshipUpdates = ConversationManager.relationshipUpdates.collectAsState().value
+    LaunchedEffect(relationshipUpdates) {
+        if (relationshipUpdates.isEmpty()) return@LaunchedEffect
+        val storedFriends = store.loadFriends()
+        relationshipUpdates.keys.forEach { friendId ->
+            val stored = storedFriends.firstOrNull { it.id == friendId } ?: return@forEach
+            val index = friends.indexOfFirst { it.id == friendId }
+            if (index >= 0) friends[index] = stored
+            if (selectedFriend?.id == friendId) selectedFriend = stored
+        }
+    }
     LaunchedEffect(screen) {
         if (screen == AppScreen.HOME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ReplyNotifier.ensureChannel(context)
@@ -192,14 +244,16 @@ fun DostApp() {
                 .onSuccess { profile ->
                     val index = friends.indexOfFirst { it.id == safeFriend.id }
                     if (index >= 0) {
-                        friends[index] = safeFriend.copy(
-                            personality = profile.personality, interests = profile.interests, family = profile.family,
-                            familyMembers = profile.familyMembers, familyActivities = profile.familyActivities,
-                            financialCondition = profile.financialCondition, address = profile.address, height = profile.height,
-                            weight = profile.weight, facialFeatures = profile.facialFeatures, bodyFeatures = profile.bodyFeatures,
-                            conversationStyle = profile.conversationStyle
-                        )
-                        store.saveFriends(friends)
+                        val updated = store.updateFriend(friend.id) { current ->
+                            current.copy(
+                                personality = profile.personality, interests = profile.interests, family = profile.family,
+                                familyMembers = profile.familyMembers, familyActivities = profile.familyActivities,
+                                financialCondition = profile.financialCondition, address = profile.address, height = profile.height,
+                                weight = profile.weight, facialFeatures = profile.facialFeatures, bodyFeatures = profile.bodyFeatures,
+                                conversationStyle = profile.conversationStyle
+                            )
+                        }
+                        if (updated != null) friends[index] = updated
                     }
                 }
         }
@@ -216,18 +270,6 @@ fun DostApp() {
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
     }
 
-    fun updateRelationship(friendId: String, friendshipScore: Int, loveScore: Int) {
-        val index = friends.indexOfFirst { it.id == friendId }
-        if (index < 0) return
-        val current = friends[index]
-        val friendship = friendshipScore.coerceIn(0, 100)
-        val love = if (romanceAllowed(store.userAge(), current.age) && friendship > 70) loveScore.coerceIn(0, 100) else 0
-        val updated = current.copy(friendshipScore = friendship, loveScore = love)
-        friends[index] = updated
-        selectedFriend = updated
-        store.saveFriends(friends)
-    }
-
     androidx.compose.animation.AnimatedContent(
         targetState = screen,
         label = "pageTransition",
@@ -241,7 +283,14 @@ fun DostApp() {
     ) { currentScreen ->
     when (currentScreen) {
         AppScreen.SPLASH -> DostSplashScreen(language) {
-            screen = if (store.hasEligibleAccount()) AppScreen.HOME else AppScreen.REGISTER
+            val requestedId = openFriendRequests.value?.friendId
+            val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), requestedId, friends.map { it.id }.toSet())
+            if (resolved != null) {
+                selectedFriend = friends.first { it.id == resolved }
+                screen = AppScreen.CHAT
+            } else {
+                screen = if (store.hasEligibleAccount()) AppScreen.HOME else AppScreen.REGISTER
+            }
         }
         AppScreen.REGISTER -> RegisterScreen(
             language = language,
@@ -302,16 +351,16 @@ fun DostApp() {
                 language = language,
                 onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) },
                 onFriendTimeZoneChange = { timeZoneId ->
-                    val index = friends.indexOfFirst { it.id == friend.id }
-                    if (index >= 0) {
-                        val updated = friends[index].copy(timeZoneId = validZoneId(timeZoneId).id)
-                        friends[index] = updated
+                    val updated = store.updateFriend(friend.id) { current ->
+                        current.copy(timeZoneId = validZoneId(timeZoneId).id)
+                    }
+                    if (updated != null) {
+                        val index = friends.indexOfFirst { it.id == friend.id }
+                        if (index >= 0) friends[index] = updated
                         selectedFriend = updated
-                        store.saveFriends(friends)
                         ConversationManager.refreshBusyReply(updated)
                     }
-                },
-                onRelationshipUpdate = { friendship, love -> updateRelationship(friend.id, friendship, love) }
+                }
             )
         }
         AppScreen.KNOWLEDGE -> KnowledgeScreen(
@@ -837,10 +886,14 @@ private fun AiSettingsDialog(apiKey: String, initialModel: String, onDismiss: ()
 
 @Composable
 private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store: DostStore, onBack: () -> Unit) {
-    val knowledge = friends.mapNotNull { friend ->
-        val memories = store.loadUserMemories(friend.id)
-            .filter { it.fact.isNotBlank() }
-        if (memories.isEmpty()) null else friend to memories
+    var revision by remember { mutableStateOf(0) }
+    var editing by remember { mutableStateOf<Pair<String, UserMemory>?>(null) }
+    var deleting by remember { mutableStateOf<Pair<String, UserMemory>?>(null) }
+    val knowledge = remember(friends, revision) {
+        friends.mapNotNull { friend ->
+            val memories = store.loadUserMemories(friend.id).filter { it.fact.isNotBlank() }
+            if (memories.isEmpty()) null else friend to memories
+        }
     }
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
@@ -866,12 +919,23 @@ private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store:
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(18.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                knowledge.forEach { (friend, categories) ->
+                knowledge.forEach { (friend, memories) ->
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(friend.name, style = MaterialTheme.typography.titleLarge)
-                            categories.forEach { memory ->
-                                Text("• ${memory.fact}", style = MaterialTheme.typography.bodyLarge)
+                            memories.forEach { memory ->
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(memoryCategoryLabel(memory.category, language), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                    Text(memory.fact, style = MaterialTheme.typography.bodyLarge)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(onClick = { editing = friend.id to memory }) {
+                                            Text(when { bangla -> "ঠিক করুন"; hindi -> "ठीक करें"; else -> "Correct" })
+                                        }
+                                        TextButton(onClick = { deleting = friend.id to memory }) {
+                                            Text(when { bangla -> "মুছুন"; hindi -> "हटाएँ"; else -> "Delete" }, color = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -879,10 +943,73 @@ private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store:
             }
         }
     }
+    editing?.let { (friendId, memory) ->
+        CorrectMemoryDialog(
+            language = language,
+            memory = memory,
+            onDismiss = { editing = null },
+            onSave = { updated ->
+                store.updateUserMemory(friendId, memory, updated)
+                editing = null
+                revision += 1
+            }
+        )
+    }
+    deleting?.let { (friendId, memory) ->
+        val friendName = friends.firstOrNull { it.id == friendId }?.name ?: ""
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text(when { bangla -> "এই তথ্য মুছবেন?"; hindi -> "यह जानकारी हटाएँ?"; else -> "Delete this fact?" }) },
+            text = { Text(when { bangla -> "$friendName আর এটা মনে রাখবে না।"; hindi -> "$friendName अब इसे याद नहीं रखेगा।"; else -> "$friendName will no longer remember this." }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.deleteUserMemory(friendId, memory)
+                    deleting = null
+                    revision += 1
+                }) { Text(when { bangla -> "মুছুন"; hindi -> "हटाएँ"; else -> "Delete" }, color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" }) } }
+        )
+    }
 }
 
 @Composable
-private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onRelationshipUpdate: (Int, Int) -> Unit) {
+private fun CorrectMemoryDialog(language: AppLanguage, memory: UserMemory, onDismiss: () -> Unit, onSave: (UserMemory) -> Unit) {
+    var category by remember(memory) { mutableStateOf(memory.category) }
+    var fact by remember(memory) { mutableStateOf(memory.fact) }
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(when { bangla -> "এই তথ্য ঠিক করুন"; hindi -> "इस जानकारी को ठीक करें"; else -> "Correct this fact" }) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    category,
+                    { category = it },
+                    label = { Text(when { bangla -> "বিভাগ"; hindi -> "श्रेणी"; else -> "Category" }) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    fact,
+                    { fact = it },
+                    label = { Text(when { bangla -> "তথ্য"; hindi -> "जानकारी"; else -> "Fact" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(UserMemory(category, fact)) }, enabled = fact.isNotBlank()) {
+                Text(when { bangla -> "সংরক্ষণ"; hindi -> "सहेजें"; else -> "Save" })
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" }) } }
+    )
+}
+
+@Composable
+private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit) {
     val context = LocalContext.current
     val messageMap = ConversationManager.messages.collectAsState().value
     val messages = messageMap[friend.id] ?: store.loadMessages(friend.id)

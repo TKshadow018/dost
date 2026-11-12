@@ -1,2 +1,5 @@
+# Legacy deny rule for a leftover public_html/log directory during migration.
+# New conversation archives are stored outside the web root. This file does not
+# protect that private directory. See deletion-lookup.txt.
 Options -Indexes
 Require all denied

@@ -67,6 +67,21 @@ class AgeGateTest {
     }
 
     @Test
+    fun relationshipDeltasAccumulateWhileLoveRemainsAgeGated() {
+        val adult = Friend(id = "adult", name = "A", age = "24", gender = "female", friendshipScore = 80, loveScore = 10)
+        val first = adult.withRelationshipDelta(2, 2, "25")
+        val second = first.withRelationshipDelta(2, 2, "25")
+        assertEquals(84, second.friendshipScore)
+        assertEquals(14, second.loveScore)
+
+        listOf(adult.copy(age = "17"), adult.copy(age = ""), adult).forEachIndexed { index, friend ->
+            val updated = friend.withRelationshipDelta(2, 2, if (index == 2) "17" else "25")
+            assertEquals(82, updated.friendshipScore)
+            assertEquals(0, updated.loveScore)
+        }
+    }
+
+    @Test
     fun modelLoveImpactIsDroppedWhenRomanceIsLocked() {
         val reply = AiReply(text = "hi", friendshipImpact = 2, loveImpact = 2)
         val locked = applyLoveImpactGate(reply, "15", "20")
