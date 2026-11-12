@@ -37,6 +37,19 @@ data class Friend(
     ,val profilePending: Boolean = false
 )
 
+data class ProfileFailure(val message: String, val detail: String?)
+
+fun profileFailureText(language: AppLanguage, causeMessage: String?, detailLimit: Int = 120): ProfileFailure {
+    val message = when (language) {
+        AppLanguage.BANGLA -> "প্রোফাইল তৈরি করা যায়নি"
+        AppLanguage.HINDI -> "प्रोफ़ाइल नहीं बन सकी"
+        AppLanguage.ENGLISH -> "Couldn't create their profile"
+    }
+    val collapsed = causeMessage?.trim()?.replace(Regex("\\s+"), " ").orEmpty()
+    val detail = collapsed.takeIf { it.isNotBlank() && it != "null" }?.take(detailLimit)
+    return ProfileFailure(message, detail)
+}
+
 fun Friend.withGeneratedProfile(profile: FriendProfile): Friend = copy(
     personality = profile.personality,
     interests = profile.interests,

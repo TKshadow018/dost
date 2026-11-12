@@ -82,4 +82,15 @@ class ExampleUnitTest {
         assertEquals("Rafi", ready.name)
         assertEquals("24", ready.age)
     }
+
+    @Test
+    fun profileFailureKeepsLocalizedMessageAndTruncatesDetail() {
+        val body = "x".repeat(200)
+        val failure = profileFailureText(AppLanguage.BANGLA, "  $body\nmore  ")
+        assertEquals("প্রোফাইল তৈরি করা যায়নি", failure.message)
+        assertEquals(120, failure.detail?.length)
+        assertEquals("x".repeat(120), failure.detail)
+        assertEquals(null, profileFailureText(AppLanguage.HINDI, "  ").detail)
+        assertEquals("Couldn't create their profile", profileFailureText(AppLanguage.ENGLISH, null).message)
+    }
 }

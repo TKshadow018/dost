@@ -140,7 +140,7 @@ fun DostApp() {
     var bubbleFriendId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     var generatingProfileIds by remember { mutableStateOf(setOf<String>()) }
-    var profileErrors by remember { mutableStateOf(mapOf<String, String>()) }
+    var profileErrors by remember { mutableStateOf(mapOf<String, ProfileFailure>()) }
 
     fun minimizeApp() {
         (context as? Activity)?.moveTaskToBack(true)
@@ -181,16 +181,6 @@ fun DostApp() {
 
     
 
-    fun profileFailureMessage(cause: Throwable?, requestLanguage: AppLanguage): String {
-        val detail = cause?.message?.trim().orEmpty()
-        if (detail.isNotBlank() && detail != "null") return detail
-        return when (requestLanguage) {
-            AppLanguage.BANGLA -> "প্রোফাইল তৈরি করা যায়নি"
-            AppLanguage.HINDI -> "प्रोफ़ाइल नहीं बन सकी"
-            AppLanguage.ENGLISH -> "Couldn't create their profile"
-        }
-    }
-
     fun startProfileGeneration(friendId: String) {
         val friend = friends.firstOrNull { it.id == friendId } ?: return
         if (!friend.profilePending || friendId in generatingProfileIds) return
@@ -213,7 +203,7 @@ fun DostApp() {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                profileErrors = profileErrors + (friendId to profileFailureMessage(error, requestLanguage))
+                profileErrors = profileErrors + (friendId to profileFailureText(requestLanguage, error.message))
             } finally {
                 generatingProfileIds = generatingProfileIds - friendId
             }
@@ -237,6 +227,10 @@ fun DostApp() {
         friends.add(pending)
         store.saveFriends(friends)
         startProfileGeneration(pending.id)
+    }
+
+    LaunchedEffect(Unit) {
+        friends.filter { it.profilePending }.forEach { startProfileGeneration(it.id) }
     }
 
     fun addSystemFriend(friend: Friend) {
@@ -323,7 +317,8 @@ fun DostApp() {
             },
             onLanguageChange = { language = it; store.saveLanguage(it) },
             onKnowledge = { screen = AppScreen.KNOWLEDGE },
-            generatingProfileIds = generatingProfileIds
+            generatingProfileIds = generatingProfileIds,
+            profileFailedIds = profileErrors.keys
         )
         AppScreen.CHAT -> selectedFriend?.let { friend ->
             ChatScreen(
@@ -360,7 +355,7 @@ fun DostApp() {
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>) {
+private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -453,7 +448,7 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (friends.any { it.profilePending }) {
-                        val creating = friends.any { it.profilePending && it.id in generatingProfileIds }
+                        val creating = friends.any { it.profilePending && it.id !in profileFailedIds }
                         Text(
                             when {
                                 creating && bangla -> "প্রোফাইল তৈরি হচ্ছে…"
@@ -478,7 +473,8 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
                     onOpenChat = { onOpenChat(friend) },
                     onDelete = { onDeleteFriend(friend) },
                     language = language,
-                    profileGenerating = friend.id in generatingProfileIds
+                    profileGenerating = friend.id in generatingProfileIds || friend.id !in profileFailedIds,
+                    profileFailed = friend.id in profileFailedIds
                 )
             }
         }
@@ -687,13 +683,13 @@ private fun EmptyFriendsState(onAdd: () -> Unit, language: AppLanguage) {
 }
 
 @Composable
-private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage, profileGenerating: Boolean) {
+private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage, profileGenerating: Boolean, profileFailed: Boolean) {
     var confirmDelete by remember { mutableStateOf(false) }
     val lastMessage = ConversationManager.messages.collectAsState().value[friend.id]?.lastOrNull()
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     val subtitle = when {
-        friend.profilePending && profileGenerating -> when {
+        friend.profilePending && (profileGenerating || !profileFailed) -> when {
             bangla -> "প্রোফাইল তৈরি হচ্ছে…"
             hindi -> "प्रोफ़ाइल बनाई जा रही है…"
             else -> "Creating their profile…"
@@ -713,7 +709,7 @@ private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDel
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                    color = if (friend.profilePending && !profileGenerating) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (friend.profilePending && profileFailed && !profileGenerating) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.size(width = 56.dp, height = 6.dp))
@@ -954,7 +950,7 @@ private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store:
 }
 
 @Composable
-private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onRelationshipUpdate: (Int, Int) -> Unit, profileGenerating: Boolean, profileError: String?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit) {
+private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onRelationshipUpdate: (Int, Int) -> Unit, profileGenerating: Boolean, profileError: ProfileFailure?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit) {
     val context = LocalContext.current
     val messageMap = ConversationManager.messages.collectAsState().value
     val messages = messageMap[friend.id] ?: store.loadMessages(friend.id)
@@ -1287,12 +1283,13 @@ private fun storeChatImage(context: Context, uri: Uri): String {
 }
 
 @Composable
-private fun ProfileCreationNotice(language: AppLanguage, generating: Boolean, errorMessage: String?, onRetry: () -> Unit, onContinue: () -> Unit) {
+private fun ProfileCreationNotice(language: AppLanguage, generating: Boolean, failure: ProfileFailure?, onRetry: () -> Unit, onContinue: () -> Unit) {
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
+    val recordedFailure = failure
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (generating) {
+            if (generating || recordedFailure == null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     Text(when {
@@ -1302,14 +1299,10 @@ private fun ProfileCreationNotice(language: AppLanguage, generating: Boolean, er
                     })
                 }
             } else {
-                Text(
-                    errorMessage ?: when {
-                        bangla -> "প্রোফাইল তৈরি করা যায়নি"
-                        hindi -> "प्रोफ़ाइल नहीं बन सकी"
-                        else -> "Couldn't create their profile"
-                    },
-                    color = MaterialTheme.colorScheme.error
-                )
+                Text(recordedFailure.message, color = MaterialTheme.colorScheme.error)
+                recordedFailure.detail?.let { detail ->
+                    Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Text(
                     when {
                         bangla -> "মেসেজ পাঠানোর আগে আবার চেষ্টা করুন, অথবা সাধারণ প্রোফাইল নিয়ে এগিয়ে যান।"
