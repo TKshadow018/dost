@@ -29,7 +29,9 @@ if (!dost_content_requires_safety_block('I love you and want to kiss you.', fals
     || dost_content_requires_safety_block('I love you.', true)
     || !dost_content_requires_safety_block('This is sexual content.', true)
     || !dost_content_requires_safety_block('পাশে যৌন বিষয় আছে', false)
+    || !dost_content_requires_safety_block('{"reply":"Glad to chat","memories":["I love you"]}', false)
     || !dost_content_requires_safety_block(null, true)
+    || dost_content_requires_safety_block(dost_safety_fallback(false), false)
 ) {
     dost_safety_test_fail('Romantic or sexual text was not classified conservatively.');
 }

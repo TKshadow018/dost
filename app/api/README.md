@@ -6,6 +6,10 @@ Upload `ai.php`, `app_credential.php`, `archive_store.php`, `romance_safety.php`
 
 The server needs PHP with the cURL extension and outbound HTTPS access.
 
+## Chat content safety
+
+For chat replies, `ai.php` applies a local, conservative text classifier before forwarding conversation messages and again before returning the model response. Romantic content is blocked when either supplied age is missing, invalid, or under 18; sexual content is blocked for all ages. Requests with an under-18 or unusable age do not forward attached images because the text classifier cannot inspect them. Flagged input is not sent to OpenRouter, and flagged model output is replaced before it is returned or archived. Classifier results and flagged text are not added to AI diagnostic logs; ordinary conversation archiving continues under the existing retention policy. The age values remain self-reported and are not independently verified by the proxy.
+
 ## System friend catalog
 
 Upload `friends.php` and the complete `system_friends/` directory to `public_html/api/` on Hostinger. Keep `system_friends/.htaccess` in place so profile JSON files and photo files cannot be fetched directly. Add one UTF-8 `.json` file per friend directly inside `public_html/api/system_friends/`; the filename (without `.json`) is its stable catalog ID and must contain only letters, numbers, `_`, or `-`. The catalog endpoint scans this directory on each request, so new profile JSON files appear without changing or redeploying the API.
