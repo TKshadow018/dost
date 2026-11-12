@@ -1,10 +1,14 @@
 # Dost AI API (Hostinger)
 
-Upload `ai.php`, `app_credential.php`, `archive_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. `ai.php` loads both PHP files from the same directory; uploading `ai.php` alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
+Upload `ai.php`, `app_credential.php`, `archive_store.php`, `romance_safety.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. `ai.php` loads these PHP files from the same directory; uploading `ai.php` alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
 
 `https://bisque-bear-900175.hostingersite.com/api/ai.php`
 
 The server needs PHP with the cURL extension and outbound HTTPS access.
+
+## Chat content safety
+
+For chat replies, `ai.php` applies a local, conservative text classifier before forwarding conversation messages and again before returning the model response. Romantic content is blocked when either supplied age is missing, invalid, or under 18; sexual content is blocked for all ages. Requests with an under-18 or unusable age do not forward attached images because the text classifier cannot inspect them. Flagged input is not sent to OpenRouter, and flagged model output is replaced before it is returned or archived. Classifier results and flagged text are not added to AI diagnostic logs; ordinary conversation archiving continues under the existing retention policy. The age values remain self-reported and are not independently verified by the proxy.
 
 ## System friend catalog
 
