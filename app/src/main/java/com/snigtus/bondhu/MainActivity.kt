@@ -92,6 +92,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import com.snigtus.dost.ui.theme.DostTheme
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.time.LocalTime
@@ -138,6 +139,8 @@ fun DostApp() {
     var closeAfterOverlayPermission by remember { mutableStateOf(false) }
     var bubbleFriendId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    var generatingProfileIds by remember { mutableStateOf(setOf<String>()) }
+    var profileErrors by remember { mutableStateOf(mapOf<String, String>()) }
 
     fun minimizeApp() {
         (context as? Activity)?.moveTaskToBack(true)
@@ -178,27 +181,62 @@ fun DostApp() {
 
     
 
+    fun profileFailureMessage(cause: Throwable?, requestLanguage: AppLanguage): String {
+        val detail = cause?.message?.trim().orEmpty()
+        if (detail.isNotBlank() && detail != "null") return detail
+        return when (requestLanguage) {
+            AppLanguage.BANGLA -> "প্রোফাইল তৈরি করা যায়নি"
+            AppLanguage.HINDI -> "प्रोफ़ाइल नहीं बन सकी"
+            AppLanguage.ENGLISH -> "Couldn't create their profile"
+        }
+    }
+
+    fun startProfileGeneration(friendId: String) {
+        val friend = friends.firstOrNull { it.id == friendId } ?: return
+        if (!friend.profilePending || friendId in generatingProfileIds) return
+        val requestLanguage = language
+        profileErrors = profileErrors - friendId
+        generatingProfileIds = generatingProfileIds + friendId
+        scope.launch {
+            try {
+                val profile = OpenRouterClient().generateFriendProfile(
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, requestLanguage
+                )
+                val index = friends.indexOfFirst { it.id == friendId }
+                if (index >= 0 && friends[index].profilePending) {
+                    val updated = friends[index].withGeneratedProfile(profile)
+                    friends[index] = updated
+                    if (selectedFriend?.id == friendId) selectedFriend = updated
+                    store.saveFriends(friends)
+                    ConversationWorkScheduler.scheduleMorningGreeting(context, updated, requestLanguage)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                profileErrors = profileErrors + (friendId to profileFailureMessage(error, requestLanguage))
+            } finally {
+                generatingProfileIds = generatingProfileIds - friendId
+            }
+        }
+    }
+
+    fun continueWithBasicProfile(friendId: String) {
+        val index = friends.indexOfFirst { it.id == friendId }
+        if (index < 0 || !friends[index].profilePending || friendId in generatingProfileIds) return
+        val updated = friends[index].copy(profilePending = false)
+        friends[index] = updated
+        if (selectedFriend?.id == friendId) selectedFriend = updated
+        store.saveFriends(friends)
+        profileErrors = profileErrors - friendId
+        ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+    }
+
     fun addFriendWithProfile(friend: Friend) {
         if (friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS) return
-        friends.add(friend)
+        val pending = friend.copy(profilePending = true)
+        friends.add(pending)
         store.saveFriends(friends)
-        ConversationWorkScheduler.scheduleMorningGreeting(context, friend, language)
-        scope.launch {
-            runCatching { OpenRouterClient().generateFriendProfile(store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, language) }
-                .onSuccess { profile ->
-                    val index = friends.indexOfFirst { it.id == friend.id }
-                    if (index >= 0) {
-                        friends[index] = friend.copy(
-                            personality = profile.personality, interests = profile.interests, family = profile.family,
-                            familyMembers = profile.familyMembers, familyActivities = profile.familyActivities,
-                            financialCondition = profile.financialCondition, address = profile.address, height = profile.height,
-                            weight = profile.weight, facialFeatures = profile.facialFeatures, bodyFeatures = profile.bodyFeatures,
-                            conversationStyle = profile.conversationStyle
-                        )
-                        store.saveFriends(friends)
-                    }
-                }
-        }
+        startProfileGeneration(pending.id)
     }
 
     fun addSystemFriend(friend: Friend) {
@@ -269,6 +307,8 @@ fun DostApp() {
                 store.saveFriends(friends)
                 store.deleteFriendData(friend.id)
                 ConversationManager.removeFriend(friend.id)
+                generatingProfileIds = generatingProfileIds - friend.id
+                profileErrors = profileErrors - friend.id
             },
             onOpenChat = { selectedFriend = it; screen = AppScreen.CHAT },
             userTimeZoneId = userTimeZoneId,
@@ -282,7 +322,8 @@ fun DostApp() {
                 store.saveAiModel(model)
             },
             onLanguageChange = { language = it; store.saveLanguage(it) },
-            onKnowledge = { screen = AppScreen.KNOWLEDGE }
+            onKnowledge = { screen = AppScreen.KNOWLEDGE },
+            generatingProfileIds = generatingProfileIds
         )
         AppScreen.CHAT -> selectedFriend?.let { friend ->
             ChatScreen(
@@ -290,6 +331,10 @@ fun DostApp() {
                 store = store,
                 onBack = { screen = AppScreen.HOME },
                 language = language,
+                profileGenerating = friend.id in generatingProfileIds,
+                profileError = profileErrors[friend.id],
+                onRetryProfile = { startProfileGeneration(friend.id) },
+                onUseBasicProfile = { continueWithBasicProfile(friend.id) },
                 onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) },
                 onFriendTimeZoneChange = { timeZoneId ->
                     val index = friends.indexOfFirst { it.id == friend.id }
@@ -315,7 +360,7 @@ fun DostApp() {
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit) {
+private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -407,11 +452,35 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (friends.any { it.profilePending }) {
+                        val creating = friends.any { it.profilePending && it.id in generatingProfileIds }
+                        Text(
+                            when {
+                                creating && bangla -> "প্রোফাইল তৈরি হচ্ছে…"
+                                creating && hindi -> "प्रोफ़ाइल बनाई जा रही है…"
+                                creating -> "Creating their profile…"
+                                bangla -> "প্রোফাইল তৈরি হয়নি। চ্যাটে গিয়ে আবার চেষ্টা করুন।"
+                                hindi -> "प्रोफ़ाइल नहीं बनी। चैट खोलकर फिर कोशिश करें।"
+                                else -> "A profile wasn't created. Open the chat to retry."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (creating) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
             item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
             if (friends.isEmpty()) item { EmptyFriendsState(onAdd = { showAddOptions = true }, language = language) }
-            items(friends) { friend -> FriendRow(friend, unread = unreadCounts[friend.id] ?: 0, onOpenChat = { onOpenChat(friend) }, onDelete = { onDeleteFriend(friend) }, language = language) }
+            items(friends) { friend ->
+                FriendRow(
+                    friend,
+                    unread = unreadCounts[friend.id] ?: 0,
+                    onOpenChat = { onOpenChat(friend) },
+                    onDelete = { onDeleteFriend(friend) },
+                    language = language,
+                    profileGenerating = friend.id in generatingProfileIds
+                )
+            }
         }
     }
     if (showAddFriend) AddFriendDialog(onDismiss = { showAddFriend = false }, onAdd = { onAddFriend(it); showAddFriend = false })
@@ -618,18 +687,33 @@ private fun EmptyFriendsState(onAdd: () -> Unit, language: AppLanguage) {
 }
 
 @Composable
-private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage) {
+private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage, profileGenerating: Boolean) {
     var confirmDelete by remember { mutableStateOf(false) }
     val lastMessage = ConversationManager.messages.collectAsState().value[friend.id]?.lastOrNull()
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    val subtitle = when {
+        friend.profilePending && profileGenerating -> when {
+            bangla -> "প্রোফাইল তৈরি হচ্ছে…"
+            hindi -> "प्रोफ़ाइल बनाई जा रही है…"
+            else -> "Creating their profile…"
+        }
+        friend.profilePending -> when {
+            bangla -> "প্রোফাইল তৈরি হয়নি। আবার চেষ্টা করতে খুলুন।"
+            hindi -> "प्रोफ़ाइल नहीं बनी। फिर कोशिश के लिए खोलें।"
+            else -> "Profile wasn't created. Open to retry."
+        }
+        else -> lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100"
+    }
     androidx.compose.foundation.layout.Box {
         Row(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onOpenChat, onLongClick = { confirmDelete = true }).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             FriendPhoto(friend.photoUri, friend.name, Modifier.size(46.dp).clip(CircleShape))
             Column(modifier = Modifier.weight(1f)) {
                 Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else "", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100",
+                    subtitle,
                     style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (friend.profilePending && !profileGenerating) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.size(width = 56.dp, height = 6.dp))
@@ -870,7 +954,7 @@ private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store:
 }
 
 @Composable
-private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onRelationshipUpdate: (Int, Int) -> Unit) {
+private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onRelationshipUpdate: (Int, Int) -> Unit, profileGenerating: Boolean, profileError: String?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit) {
     val context = LocalContext.current
     val messageMap = ConversationManager.messages.collectAsState().value
     val messages = messageMap[friend.id] ?: store.loadMessages(friend.id)
@@ -906,6 +990,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
     val displayedMessages = remember(messages, searchQuery) {
         if (searchQuery.isBlank()) messages else messages.filter { it.content.contains(searchQuery, ignoreCase = true) }
     }
+    val profileBlocked = friend.profilePending
     val busyUntil = friend.replyAvailableAt(currentTime)
     val dailyBusyStart = LocalTime.of(friend.busyStartHour.coerceIn(0, 23), 0)
     val dailyBusyEnd = dailyBusyStart.plusHours(friend.busyDurationHours.coerceIn(4, 8).toLong())
@@ -936,7 +1021,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                 )
             }
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)) {
-                if (displayedMessages.isEmpty()) item { Text(when { bangla -> "${friend.name}-এর সাথে কথা বলা শুরু করুন।"; hindi -> "${friend.name} के साथ बातचीत शुरू करें।"; else -> "Start a conversation with ${friend.name}." }, modifier = Modifier.padding(12.dp)) }
+                if (displayedMessages.isEmpty() && !profileBlocked) item { Text(when { bangla -> "${friend.name}-এর সাথে কথা বলা শুরু করুন।"; hindi -> "${friend.name} के साथ बातचीत शुरू करें।"; else -> "Start a conversation with ${friend.name}." }, modifier = Modifier.padding(12.dp)) }
                 items(displayedMessages) { message ->
                     MessageBubble(
                         message = message,
@@ -949,6 +1034,9 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                 if (sending && waitingForSchedule) item { Text("${friend.name} will reply after the busy schedule.", modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium) }
                 else if (sending) item { ThinkingBubble(friendName = friend.name, bangla = bangla, hindi = hindi) }
                 error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp)) } }
+            }
+            if (profileBlocked) {
+                ProfileCreationNotice(language, profileGenerating, profileError, onRetryProfile, onUseBasicProfile)
             }
             Surface(shadowElevation = 4.dp, tonalElevation = 2.dp, modifier = Modifier.imePadding()) {
                 Column(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -965,7 +1053,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
                             onClick = { imagePicker.launch("image/*") },
-                            enabled = !sending || waitingForSchedule
+                            enabled = !profileBlocked && (!sending || waitingForSchedule)
                         ) {
                             Icon(
                                 painter = painterResource(android.R.drawable.ic_menu_gallery),
@@ -976,8 +1064,9 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                                 }
                             )
                         }
-                        OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f), placeholder = { Text(when { bangla -> "একটি মেসেজ লিখুন..."; hindi -> "संदेश लिखें..."; else -> "Write a message..." }) }, maxLines = 4)
-                        Button(enabled = (draft.isNotBlank() || selectedImagePath.isNotBlank()) && (!sending || waitingForSchedule), onClick = {
+                        OutlinedTextField(draft, { draft = it }, enabled = !profileBlocked, modifier = Modifier.weight(1f), placeholder = { Text(when { bangla -> "একটি মেসেজ লিখুন..."; hindi -> "संदेश लिखें..."; else -> "Write a message..." }) }, maxLines = 4)
+                        Button(enabled = !profileBlocked && (draft.isNotBlank() || selectedImagePath.isNotBlank()) && (!sending || waitingForSchedule), onClick = {
+                            if (friend.profilePending) return@Button
                             val text = draft.trim()
                             val imagePath = selectedImagePath
                             draft = ""
@@ -1195,6 +1284,51 @@ private fun storeChatImage(context: Context, uri: Uri): String {
     val destination = File(directory, "${java.util.UUID.randomUUID()}.jpg")
     destination.writeBytes(compressed)
     return destination.absolutePath
+}
+
+@Composable
+private fun ProfileCreationNotice(language: AppLanguage, generating: Boolean, errorMessage: String?, onRetry: () -> Unit, onContinue: () -> Unit) {
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (generating) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(when {
+                        bangla -> "প্রোফাইল তৈরি হচ্ছে…"
+                        hindi -> "प्रोफ़ाइल बनाई जा रही है…"
+                        else -> "Creating their profile…"
+                    })
+                }
+            } else {
+                Text(
+                    errorMessage ?: when {
+                        bangla -> "প্রোফাইল তৈরি করা যায়নি"
+                        hindi -> "प्रोफ़ाइल नहीं बन सकी"
+                        else -> "Couldn't create their profile"
+                    },
+                    color = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    when {
+                        bangla -> "মেসেজ পাঠানোর আগে আবার চেষ্টা করুন, অথবা সাধারণ প্রোফাইল নিয়ে এগিয়ে যান।"
+                        hindi -> "संदेश भेजने से पहले फिर कोशिश करें, या साधारण प्रोफ़ाइल के साथ आगे बढ़ें।"
+                        else -> "Retry before sending, or continue with a basic profile."
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onRetry) {
+                        Text(when { bangla -> "আবার চেষ্টা করুন"; hindi -> "फिर कोशिश करें"; else -> "Retry" })
+                    }
+                    OutlinedButton(onClick = onContinue) {
+                        Text(when { bangla -> "সাধারণ প্রোফাইল"; hindi -> "साधारण प्रोफ़ाइल"; else -> "Use basic profile" })
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

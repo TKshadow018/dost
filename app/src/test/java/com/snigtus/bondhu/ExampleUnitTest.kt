@@ -51,4 +51,35 @@ class ExampleUnitTest {
     fun responseWithoutQuestionRemainsUnchanged() {
         assertEquals("Sounds good.", limitToSingleQuestion("Sounds good."))
     }
+
+    @Test
+    fun generatedProfileReplacesDefaultsBeforeChatCanStart() {
+        val friend = Friend(id = "new", name = "Rafi", age = "24", gender = "male", profilePending = true)
+        assertTrue(friend.profilePending)
+        assertEquals("Friendly and curious", friend.personality)
+
+        val ready = friend.withGeneratedProfile(
+            FriendProfile(
+                personality = "Calm and witty",
+                interests = "Tea and cricket",
+                family = "Parents in Khulna",
+                familyMembers = "Mother, father",
+                familyActivities = "Friday lunch",
+                financialCondition = "Modest salary",
+                address = "A fictional lane in Dhaka",
+                height = "170 cm",
+                weight = "65 kg",
+                facialFeatures = "Short hair",
+                bodyFeatures = "Average build",
+                conversationStyle = "Warm and brief"
+            )
+        )
+
+        assertFalse(ready.profilePending)
+        assertEquals("Calm and witty", ready.personality)
+        assertEquals("Tea and cricket", ready.interests)
+        assertEquals("Warm and brief", ready.conversationStyle)
+        assertEquals("Rafi", ready.name)
+        assertEquals("24", ready.age)
+    }
 }

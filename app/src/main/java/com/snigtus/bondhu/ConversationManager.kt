@@ -67,6 +67,7 @@ object ConversationManager {
 
     fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "") {
         if (text.isBlank() && imagePath.isBlank()) return
+        if (friend.profilePending) return
         val selectedModel = store.aiModel()
         val messageContent = text.ifBlank { "Shared an image" }
         if (store.hasScheduledReply(friend.id)) {

@@ -34,6 +34,23 @@ data class Friend(
     ,val busyReason: String = if ((age.toIntOrNull() ?: 18) < 18) "School" else "Work"
     ,val timeZoneId: String = ZoneId.systemDefault().id
     ,val catalogId: String = ""
+    ,val profilePending: Boolean = false
+)
+
+fun Friend.withGeneratedProfile(profile: FriendProfile): Friend = copy(
+    personality = profile.personality,
+    interests = profile.interests,
+    family = profile.family,
+    familyMembers = profile.familyMembers,
+    familyActivities = profile.familyActivities,
+    financialCondition = profile.financialCondition,
+    address = profile.address,
+    height = profile.height,
+    weight = profile.weight,
+    facialFeatures = profile.facialFeatures,
+    bodyFeatures = profile.bodyFeatures,
+    conversationStyle = profile.conversationStyle,
+    profilePending = false
 )
 
 data class SystemFriendListing(
