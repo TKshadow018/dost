@@ -97,7 +97,17 @@ class DostStore(context: Context) {
         }
     }.getOrDefault(mutableListOf())
 
-    fun saveFriends(friends: List<Friend>) {
+    fun updateFriend(friendId: String, transform: (Friend) -> Friend): Friend? = synchronized(preferences) {
+        val friends = loadFriends()
+        val index = friends.indexOfFirst { it.id == friendId }
+        if (index < 0) return null
+        val updated = transform(friends[index])
+        friends[index] = updated
+        saveFriends(friends)
+        updated
+    }
+
+    fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
         val json = JSONArray()
         friends.forEach { friend ->
             json.put(JSONObject().apply {
@@ -263,13 +273,16 @@ class DostStore(context: Context) {
         preferences.edit().putString("user_memories_$friendId", json.toString()).apply()
     }
 
+    fun updateUserMemory(friendId: String, original: UserMemory, updated: UserMemory) {
+        saveUserMemories(friendId, replaceUserMemory(loadUserMemories(friendId), original, updated))
+    }
+
+    fun deleteUserMemory(friendId: String, memory: UserMemory) {
+        saveUserMemories(friendId, withoutUserMemory(loadUserMemories(friendId), memory))
+    }
+
     fun addUserMemories(friendId: String, newMemories: List<UserMemory>) {
-        val memories = loadUserMemories(friendId)
-        newMemories.forEach { memory ->
-            val exists = memories.any { it.category.equals(memory.category, ignoreCase = true) && it.fact.equals(memory.fact, ignoreCase = true) }
-            if (!exists && memory.fact.isNotBlank()) memories.add(memory)
-        }
-        saveUserMemories(friendId, memories.takeLast(1000))
+        saveUserMemories(friendId, mergeUserMemories(loadUserMemories(friendId), newMemories))
     }
 
     fun language(): AppLanguage = when (preferences.getString("language", "bn")) {

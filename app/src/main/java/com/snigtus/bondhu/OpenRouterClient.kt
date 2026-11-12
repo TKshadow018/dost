@@ -43,7 +43,8 @@ class OpenRouterClient {
             "mistralai/mistral-medium-3", "mistralai/mistral-small-3.1-24b-instruct",
             "x-ai/grok-3-mini", "perplexity/sonar", "cohere/command-a"
         )).distinct()
-        private const val MAX_MEMORY_ITEMS = 200
+        private const val MAX_MEMORY_ITEMS = MAX_INJECTED_USER_MEMORIES
+        internal const val MODEL_REPLY_LOG_LIMIT = 200
         private const val MAX_SUMMARY_MESSAGES = 100
         private const val MAX_SESSION_SUMMARY_ITEMS = 7
     }
@@ -129,7 +130,7 @@ class OpenRouterClient {
             Extract separate items: 
             1) User lives in Sylhet. 2) User lives in a small apartment. 3) User teaches high school math. 4) User loves children. 5) User drinks green tea. 6) User drinks green tea in the mornings. 7) User has a younger brother named Rafi. 8) Rafi is in medical school. 9) Rafi goes to school in Dhaka. 10) Rafi is struggling with his medical studies.
             
-            PRECISION & CONFLICT RESOLUTION: Preserve exact quantities, dates, specific names, and constraints. Preserve negation (e.g., "User does not eat pork") and uncertainty (e.g., "User is unsure if they will quit their job"). If the user updates a detail (e.g., moving to a new city), explicitly format it as an update so it overrides older context. Never infer, invent, or guess details.
+            PRECISION & CONFLICT RESOLUTION: Preserve exact quantities, dates, specific names, and constraints. Preserve negation (e.g., "User does not eat pork") and uncertainty (e.g., "User is unsure if they will quit their job"). If the user updates a detail (e.g., moving to a new city), set replaces to the previous fact text so that stored fact is replaced. Leave replaces empty for a new fact. Never infer, invent, or guess details.
             
             SECURITY: Never store passwords, API keys, or authentication secrets. Store ordinary sensitive details (like health or finances) ONLY if explicitly volunteered by the user. Return an empty array only if the user explicitly provided zero new personal data in the current turn.
         """.trimIndent()
@@ -147,10 +148,10 @@ class OpenRouterClient {
             $sessionSummaryContext
 
             Return only valid JSON with this exact shape:
-            {"reply":"your natural response","memories":[{"category":"family|relatives|address|contact|profile|preferences|interests|goals|routines|important_dates|relationships|health|work_or_study|education|finances|travel|other","fact":"one explicitly stated personal fact"}],"follow_up_question":"one optional friendly question, or an empty string","follow_up_delay_minutes":null,"friendship_impact":0,"love_impact":0}
+            {"reply":"your natural response","memories":[{"category":"family|relatives|address|contact|profile|preferences|interests|goals|routines|important_dates|relationships|health|work_or_study|education|finances|travel|other","fact":"one explicitly stated personal fact","replaces":"previous fact this corrects, or an empty string"}],"follow_up_question":"one optional friendly question, or an empty string","follow_up_delay_minutes":null,"friendship_impact":0,"love_impact":0}
             Never include internal safety, moderation, or classifier metadata (for example, "User Safety: safe") in reply or follow_up_question.
             Extract every explicit personal detail the user gives in their latest messages, including seemingly small details and details about family members or other people they mention. For example, save separate facts for having three brothers, a father's workplace, a mother's age, and an address. Never infer or invent facts. Do not store passwords, API keys, security codes, or other authentication secrets. Store ordinary sensitive personal details only because the user explicitly gave them, and use them discreetly. Use an empty memories array when there is nothing personal to save.
-            Before replying, do a detail pass over the user's latest messages. Save one concise fact per memory item; preserve exact names, who each person is to the user, quantities, dates, time periods, locations, preferences, reasons, plans, constraints, and whether something is current, past, or only intended. Keep facts about the user distinct from facts about relatives, friends, coworkers, and other people. Preserve meaningful negation and uncertainty instead of turning it into certainty. If the user corrects a prior detail, save the correction explicitly without erasing the historical detail. Do not merge unrelated facts or infer missing links.
+            Before replying, do a detail pass over the user's latest messages. Save one concise fact per memory item; preserve exact names, who each person is to the user, quantities, dates, time periods, locations, preferences, reasons, plans, constraints, and whether something is current, past, or only intended. Keep facts about the user distinct from facts about relatives, friends, coworkers, and other people. Preserve meaningful negation and uncertainty instead of turning it into certainty. If the user corrects a prior detail, set replaces to the old fact text so the stored fact is replaced instead of keeping both. Do not merge unrelated facts or infer missing links.
             The combined reply and follow_up_question may contain at most one question total. Never ask stacked questions or put one question in each field. $questionGuidance Do not interrogate, repeat a question already answered, or ask for secrets. Make it playful or gently funny when it fits, while remaining respectful. If the user seems uncomfortable or asks not to share, ask no question.
             Set follow_up_delay_minutes to an integer from 1 to 1440 only when the user explicitly asks for a future check-in after a duration; otherwise set it to null. When a delay is requested, do not ask an immediate follow-up question.
             Rate the latest conversation's relationship impact. friendship_impact must be an integer from -1 to 2. love_impact must be an integer from -1 to 2 only when friendship is above 70 and the conversation is clearly flirty or romantic; otherwise use 0. Apply friendship impact to warmth, trust, respectful openness, and shared conversation. A private question from a complete stranger should be met with a gentle boundary such as "Whoa, we just met" rather than a direct answer, and should not earn positive points. Do not unlock private or intimate talk early. Personal talk becomes more open around friendship 41+, private talk around 61+, and romantic/intimate-but-non-explicit talk only when friendship is above 70 and love is above 30. Never generate explicit sexual content.
@@ -178,7 +179,21 @@ class OpenRouterClient {
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-        return parseReply(raw, connection.getHeaderField("X-Dost-Message-ID"))
+        val parsed = parseReply(raw, connection.getHeaderField("X-Dost-Message-ID"))
+        if (parsed.parseFailed && BuildConfig.DEBUG) {
+            android.util.Log.w("OpenRouterClient", "Unparseable model reply: ${modelReplyDebugSnippet(raw)}")
+        }
+        return parsed
+    }
+
+    internal fun modelReplyDebugSnippet(raw: String): String = raw.take(MODEL_REPLY_LOG_LIMIT)
+
+    internal fun parseModelReply(raw: String, serverMessageId: String? = null): AiReply = parseReply(raw, serverMessageId)
+
+    internal fun isPlainModelReply(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("```")) return false
+        return '{' !in trimmed && '}' !in trimmed
     }
 
     private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile {
@@ -223,7 +238,8 @@ class OpenRouterClient {
     }
 
     private fun parseReply(raw: String, serverMessageId: String?): AiReply {
-        val cleaned = removeSafetyMetadata(raw).removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val visible = removeSafetyMetadata(raw).trim()
+        val cleaned = visible.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         return runCatching {
             val json = JSONObject(cleaned)
             val memories = json.optJSONArray("memories") ?: JSONArray()
@@ -232,7 +248,7 @@ class OpenRouterClient {
                 val item = memories.optJSONObject(index) ?: continue
                 val category = item.optString("category", "other").trim().lowercase()
                 val fact = item.optString("fact").trim()
-                if (fact.isNotBlank()) extracted.add(UserMemory(category, fact))
+                if (fact.isNotBlank()) extracted.add(UserMemory(category, fact, item.optString("replaces").trim()))
             }
             AiReply(
                 text = removeSafetyMetadata(json.optString("reply", cleaned)),
@@ -243,7 +259,13 @@ class OpenRouterClient {
                 loveImpact = json.optInt("love_impact", 0).coerceIn(-1, 2),
                 serverMessageId = serverMessageId
             )
-        }.getOrElse { AiReply(removeSafetyMetadata(raw), serverMessageId = serverMessageId) }
+        }.getOrElse {
+            if (isPlainModelReply(visible)) {
+                AiReply(text = visible, serverMessageId = serverMessageId)
+            } else {
+                AiReply(text = "", memories = emptyList(), friendshipImpact = 0, loveImpact = 0, parseFailed = true, serverMessageId = serverMessageId)
+            }
+        }
     }
 
     private fun removeSafetyMetadata(text: String): String = text
