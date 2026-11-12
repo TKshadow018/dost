@@ -1,5 +1,10 @@
 <?php
 
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 /**
  * Checks privacy-policy.txt against the deletion, retention, and audience
  * facts this version of the app actually implements.
@@ -20,7 +25,9 @@ $forbidden = array(
     '/intended for users of all ages/i' => 'states an all-ages audience',
     '/does not currently erase/i' => 'says friend removal keeps local history',
     '/removal does not erase/i' => 'says removal does not erase local history',
-    '/does not currently erase that friend/i' => 'says friend removal keeps local chat'
+    '/does not currently erase that friend/i' => 'says friend removal keeps local chat',
+    '/Google Play requires/i' => 'states a third-party store rule in the user-facing policy',
+    '/not configured to exclude/i' => 'says chat photos are included in backup'
 );
 foreach ($forbidden as $pattern => $reason) {
     if (preg_match($pattern, $text) === 1) {
@@ -40,7 +47,13 @@ $required = array(
     'tushartk018@gmail.com' => 'keeps the archive-request contact address',
     'November 12, 2026' => 'uses the revised effective date',
     'API keys are not written into conversation logs' => 'still says API keys are not logged',
-    'chat_images' => 'mentions leftover chat image files'
+    'chat_images' => 'mentions chat image files',
+    'system-friend-photos' => 'says system-friend photos are excluded from backup',
+    'up to the 200 most recent saved facts' => 'names learned facts sent with each turn',
+    'up to the seven most recent summaries' => 'names session summaries sent with each turn',
+    'friendship score and love score' => 'names relationship scores sent with each turn',
+    'does not show the installation id' => 'says the app does not display the installation id',
+    'installation id' => 'describes install-id lookup for newer archives'
 );
 foreach ($required as $needle => $reason) {
     if (strpos($text, $needle) === false) {
