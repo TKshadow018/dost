@@ -1,6 +1,6 @@
 # Dost AI API (Hostinger)
 
-Upload `ai.php`, `app_credential.php`, `archive_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. `ai.php` loads both PHP files from the same directory; uploading `ai.php` alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
+Upload `ai.php`, `app_credential.php`, `archive_store.php`, `romance_safety.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. `ai.php` loads these PHP files from the same directory; uploading `ai.php` alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
 
 `https://bisque-bear-900175.hostingersite.com/api/ai.php`
 

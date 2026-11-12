@@ -181,7 +181,16 @@ class OpenRouterClient {
                 }
             }) }
         }
-        val body = JSONObject().apply { put("operation", "chat_reply"); put("user_name", userName); put("friend_name", friend.name); put("model", model); put("messages", messages); put("temperature", 0.8) }
+        val body = JSONObject().apply {
+            put("operation", "chat_reply")
+            put("user_name", userName)
+            put("friend_name", friend.name)
+            put("user_age", userAge)
+            put("friend_age", friend.age)
+            put("model", model)
+            put("messages", messages)
+            put("temperature", 0.8)
+        }
         val connection = post(apiKey, installationId, friend.id, resolvedSessionId, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))

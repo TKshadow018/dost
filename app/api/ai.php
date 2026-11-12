@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/app_credential.php';
 require_once __DIR__ . '/archive_store.php';
+require_once __DIR__ . '/romance_safety.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -237,6 +238,13 @@ foreach ($messages as $message) {
     }
 }
 
+$romanceAllowed = dost_romance_allowed_by_age(
+    isset($request['user_age']) ? $request['user_age'] : null,
+    isset($request['friend_age']) ? $request['friend_age'] : null
+);
+$safetyBlockedInput = $operation === 'chat_reply'
+    && dost_conversation_requires_safety_block($messages, $romanceAllowed);
+
 $chatLogContext = null;
 if ($operation === 'chat_reply') {
     $installationId = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) ? $_SERVER['HTTP_X_DOST_INSTALL_ID'] : '';
@@ -311,44 +319,52 @@ $upstreamBody = json_encode(array(
     'temperature' => $temperature
 ), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 
-$requestStartedAt = microtime(true);
-$curl = curl_init('https://openrouter.ai/api/v1/chat/completions');
-if ($curl === false) {
-    write_ai_error_log('curl_initialization_failed', array(
-        'model' => bounded_log_text($model),
-        'key_source' => $usesClientKey ? 'client' : 'server'
+if ($safetyBlockedInput) {
+    $upstreamStatus = 200;
+    $upstreamResponse = json_encode(array(
+        'choices' => array(array('message' => array('content' => dost_safety_fallback($romanceAllowed))))
+    ), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    $requestDurationMs = 0;
+} else {
+    $requestStartedAt = microtime(true);
+    $curl = curl_init('https://openrouter.ai/api/v1/chat/completions');
+    if ($curl === false) {
+        write_ai_error_log('curl_initialization_failed', array(
+            'model' => bounded_log_text($model),
+            'key_source' => $usesClientKey ? 'client' : 'server'
+        ));
+        respond(502, array('error' => 'Could not reach the AI provider'));
+    }
+    curl_setopt_array($curl, array(
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $upstreamBody,
+        CURLOPT_HTTPHEADER => array(
+            'Authorization: Bearer ' . trim($apiKey),
+            'Content-Type: application/json',
+            'HTTP-Referer: https://bisque-bear-900175.hostingersite.com',
+            'X-Title: Dost'
+        ),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => 90
     ));
-    respond(502, array('error' => 'Could not reach the AI provider'));
-}
-curl_setopt_array($curl, array(
-    CURLOPT_POST => true,
-    CURLOPT_POSTFIELDS => $upstreamBody,
-    CURLOPT_HTTPHEADER => array(
-        'Authorization: Bearer ' . trim($apiKey),
-        'Content-Type: application/json',
-        'HTTP-Referer: https://bisque-bear-900175.hostingersite.com',
-        'X-Title: Dost'
-    ),
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_CONNECTTIMEOUT => 10,
-    CURLOPT_TIMEOUT => 90
-));
-$upstreamResponse = curl_exec($curl);
-$upstreamStatus = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
-$curlError = curl_errno($curl);
-$curlErrorMessage = curl_error($curl);
-curl_close($curl);
-$requestDurationMs = (int) round((microtime(true) - $requestStartedAt) * 1000);
+    $upstreamResponse = curl_exec($curl);
+    $upstreamStatus = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    $curlError = curl_errno($curl);
+    $curlErrorMessage = curl_error($curl);
+    curl_close($curl);
+    $requestDurationMs = (int) round((microtime(true) - $requestStartedAt) * 1000);
 
-if ($upstreamResponse === false || $curlError !== 0) {
-    write_ai_error_log('provider_connection_failed', array(
-        'model' => bounded_log_text($model),
-        'key_source' => $usesClientKey ? 'client' : 'server',
-        'curl_errno' => $curlError,
-        'curl_error' => bounded_log_text($curlErrorMessage, 500, $apiKey),
-        'duration_ms' => $requestDurationMs
-    ));
-    respond(502, array('error' => 'Could not reach the AI provider'));
+    if ($upstreamResponse === false || $curlError !== 0) {
+        write_ai_error_log('provider_connection_failed', array(
+            'model' => bounded_log_text($model),
+            'key_source' => $usesClientKey ? 'client' : 'server',
+            'curl_errno' => $curlError,
+            'curl_error' => bounded_log_text($curlErrorMessage, 500, $apiKey),
+            'duration_ms' => $requestDurationMs
+        ));
+        respond(502, array('error' => 'Could not reach the AI provider'));
+    }
 }
 if ($upstreamStatus < 200 || $upstreamStatus >= 300) {
     $decodedError = json_decode($upstreamResponse, true);
@@ -404,6 +420,19 @@ if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300)
             $parts[] = limit_to_single_question(trim($decodedAssistant['follow_up_question']));
         }
         $visibleContent = implode("\n\n", array_filter($parts, 'strlen'));
+    }
+    try {
+        $safetyBlockedOutput = dost_content_requires_safety_block($assistantContent, $romanceAllowed);
+    } catch (Throwable $error) {
+        $safetyBlockedOutput = true;
+    }
+    if ($safetyBlockedOutput) {
+        $visibleContent = dost_safety_fallback($romanceAllowed);
+        $decodedResponse['choices'][0]['message']['content'] = $visibleContent;
+        $upstreamResponse = json_encode($decodedResponse, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if (!is_string($upstreamResponse)) {
+            respond(502, array('error' => 'AI safety check failed'));
+        }
     }
     $assistantMessageId = bin2hex(random_bytes(4)) . '-' . bin2hex(random_bytes(2)) . '-4' . substr(bin2hex(random_bytes(2)), 1)
         . '-a' . substr(bin2hex(random_bytes(2)), 1) . '-' . bin2hex(random_bytes(6));
