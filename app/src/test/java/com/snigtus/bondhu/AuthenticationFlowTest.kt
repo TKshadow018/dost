@@ -1,9 +1,18 @@
 package com.snigtus.dost
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AuthenticationFlowTest {
+    @Test
+    fun emailAccountsMustVerifyButGoogleAccountsDoNot() {
+        assertTrue(requiresEmailVerification(emailVerified = false, googleAccount = false))
+        assertFalse(requiresEmailVerification(emailVerified = true, googleAccount = false))
+        assertFalse(requiresEmailVerification(emailVerified = false, googleAccount = true))
+    }
+
     @Test
     fun newInstallOpensAuthentication() {
         assertEquals(

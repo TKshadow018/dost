@@ -13,6 +13,7 @@ import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.FirebaseUser
 import com.google.android.gms.tasks.Task
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -28,7 +29,7 @@ class FirebaseAuthRepository(context: Context) {
         get() = auth != null && BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank()
 
     val currentAccount: AuthAccount?
-        get() = auth?.currentUser?.let { AuthAccount(it.uid, it.email.orEmpty(), it.displayName.orEmpty()) }
+        get() = auth?.currentUser?.toAuthAccount()
 
     suspend fun createAccount(email: String, password: String): AuthAccount =
         requireAuth().createUserWithEmailAndPassword(email.trim(), password).awaitTask().toAccount()
@@ -38,6 +39,17 @@ class FirebaseAuthRepository(context: Context) {
 
     suspend fun sendPasswordReset(email: String) {
         requireAuth().sendPasswordResetEmail(email.trim()).awaitTask()
+    }
+
+    suspend fun sendEmailVerification() {
+        val user = requireAuth().currentUser ?: throw IllegalStateException("No signed-in Firebase account.")
+        user.sendEmailVerification().awaitTask()
+    }
+
+    suspend fun reloadCurrentAccount(): AuthAccount {
+        val user = requireAuth().currentUser ?: throw IllegalStateException("No signed-in Firebase account.")
+        user.reload().awaitTask()
+        return user.toAuthAccount()
     }
 
     suspend fun signInWithGoogle(activity: Activity): AuthAccount {
@@ -90,8 +102,16 @@ class FirebaseAuthRepository(context: Context) {
 
     private fun com.google.firebase.auth.AuthResult.toAccount(): AuthAccount {
         val user = this.user ?: throw IllegalStateException("Authentication returned no user.")
-        return AuthAccount(user.uid, user.email.orEmpty(), user.displayName.orEmpty())
+        return user.toAuthAccount()
     }
+
+    private fun FirebaseUser.toAuthAccount(): AuthAccount = AuthAccount(
+        uid = uid,
+        email = email.orEmpty(),
+        displayName = displayName.orEmpty(),
+        emailVerified = isEmailVerified,
+        googleAccount = providerData.any { it.providerId == GoogleAuthProvider.PROVIDER_ID }
+    )
 }
 
 fun authenticationAccountMismatchText(language: AppLanguage): String = when (language) {

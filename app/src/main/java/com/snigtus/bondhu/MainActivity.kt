@@ -186,6 +186,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
     val scope = rememberCoroutineScope()
     var generatingProfileIds by remember { mutableStateOf(setOf<String>()) }
     var profileErrors by remember { mutableStateOf(mapOf<String, ProfileFailure>()) }
+    var authMode by rememberSaveable { mutableStateOf(AuthMode.SIGN_IN) }
     var authRequestState by remember { mutableStateOf<AuthRequestState>(AuthRequestState.Idle) }
     val openFriendRequest by openFriendRequests.collectAsState()
 
@@ -206,34 +207,104 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
         screen = AppScreen.CHAT
     }
 
-    fun authenticate(action: suspend () -> AuthAccount) {
+    fun completeAuthentication(account: AuthAccount) {
+        if (store.hasUserProfile()) {
+            val localAccountId = store.authenticationAccountId()
+            if ((localAccountId.isNotBlank() && localAccountId != account.uid)
+                || (localAccountId.isBlank() && store.authenticationRequired())
+            ) {
+                authRepository.signOut()
+                authMode = AuthMode.SIGN_IN
+                authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                return
+            }
+            if (localAccountId.isBlank()) store.bindAuthenticationAccount(account.uid)
+        }
+        store.markAuthenticationRequired()
+        email = account.email.ifBlank { email }
+        if (!store.hasEligibleAccount()) name = account.displayName.ifBlank { name }
+        authMode = AuthMode.SIGN_IN
+        authRequestState = AuthRequestState.Idle
+        screen = authenticationStartScreen(
+            hasSignedInUser = true,
+            hasEligibleLocalProfile = store.hasEligibleAccount(),
+            authenticationRequired = true,
+            signedInUserId = account.uid,
+            localAccountId = store.authenticationAccountId()
+        )
+    }
+
+    fun authenticate(action: suspend () -> AuthAccount, sendVerificationEmail: Boolean = false) {
         if (authRequestState is AuthRequestState.Loading) return
         scope.launch {
             authRequestState = AuthRequestState.Loading
             try {
                 val account = action()
-                if (store.hasUserProfile()) {
-                    val localAccountId = store.authenticationAccountId()
-                    if ((localAccountId.isNotBlank() && localAccountId != account.uid)
-                        || (localAccountId.isBlank() && store.authenticationRequired())
-                    ) {
-                        authRepository.signOut()
-                        authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
-                        return@launch
-                    }
-                    if (localAccountId.isBlank()) store.bindAuthenticationAccount(account.uid)
+                if (account.needsEmailVerification) {
+                    email = account.email
+                    authMode = AuthMode.VERIFY_EMAIL
+                    if (sendVerificationEmail) authRepository.sendEmailVerification()
+                    authRequestState = AuthRequestState.Success(
+                        when {
+                            sendVerificationEmail && language == AppLanguage.BANGLA -> "যাচাইকরণ ইমেইল পাঠানো হয়েছে। লিংক খুলে এখানে ফিরে আসুন।"
+                            sendVerificationEmail && language == AppLanguage.HINDI -> "सत्यापन ईमेल भेजा गया। लिंक खोलें, फिर यहाँ लौटें।"
+                            sendVerificationEmail -> "Verification email sent. Open the link, then return here."
+                            language == AppLanguage.BANGLA -> "সাইন ইন শেষ করতে ইমেইল যাচাই করুন।"
+                            language == AppLanguage.HINDI -> "साइन इन पूरा करने के लिए अपना ईमेल सत्यापित करें।"
+                            else -> "Verify your email to finish signing in."
+                        }
+                    )
+                    return@launch
                 }
-                store.markAuthenticationRequired()
-                email = account.email.ifBlank { email }
-                if (!store.hasEligibleAccount()) name = account.displayName.ifBlank { name }
+                completeAuthentication(account)
+            } catch (error: CancellationException) {
                 authRequestState = AuthRequestState.Idle
-                screen = authenticationStartScreen(
-                    hasSignedInUser = true,
-                    hasEligibleLocalProfile = store.hasEligibleAccount(),
-                    authenticationRequired = true,
-                    signedInUserId = account.uid,
-                    localAccountId = store.authenticationAccountId()
+                throw error
+            } catch (error: Exception) {
+                authRequestState = AuthRequestState.Error(authenticationErrorText(language, error))
+            }
+        }
+    }
+
+    fun resendVerificationEmail() {
+        if (authRequestState is AuthRequestState.Loading) return
+        scope.launch {
+            authRequestState = AuthRequestState.Loading
+            try {
+                authRepository.sendEmailVerification()
+                authRequestState = AuthRequestState.Success(
+                    when (language) {
+                        AppLanguage.BANGLA -> "যাচাইকরণ ইমেইল আবার পাঠানো হয়েছে।"
+                        AppLanguage.HINDI -> "सत्यापन ईमेल फिर भेजा गया है।"
+                        AppLanguage.ENGLISH -> "Verification email sent again."
+                    }
                 )
+            } catch (error: CancellationException) {
+                authRequestState = AuthRequestState.Idle
+                throw error
+            } catch (error: Exception) {
+                authRequestState = AuthRequestState.Error(authenticationErrorText(language, error))
+            }
+        }
+    }
+
+    fun checkEmailVerification() {
+        if (authRequestState is AuthRequestState.Loading) return
+        scope.launch {
+            authRequestState = AuthRequestState.Loading
+            try {
+                val account = authRepository.reloadCurrentAccount()
+                if (account.needsEmailVerification) {
+                    authRequestState = AuthRequestState.Error(
+                        when (language) {
+                            AppLanguage.BANGLA -> "ইমেইল যাচাই করা হয়নি। ইমেইলের লিংক খুলে আবার চেষ্টা করুন।"
+                            AppLanguage.HINDI -> "ईमेल सत्यापित नहीं हुआ। ईमेल का लिंक खोलकर फिर कोशिश करें।"
+                            AppLanguage.ENGLISH -> "Your email is not verified yet. Open the link from your email and try again."
+                        }
+                    )
+                } else {
+                    completeAuthentication(account)
+                }
             } catch (error: CancellationException) {
                 authRequestState = AuthRequestState.Idle
                 throw error
@@ -270,9 +341,28 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
         openRequestedFriend(openFriendRequest?.friendId)
     }
 
-    LaunchedEffect(screen, authRepository.currentAccount?.uid) {
+    LaunchedEffect(screen, authRepository.currentAccount?.uid, authRepository.currentAccount?.emailVerified) {
+        val currentAccount = authRepository.currentAccount
+        if (currentAccount?.needsEmailVerification == true && screen != AppScreen.SPLASH) {
+            if (authMode != AuthMode.VERIFY_EMAIL) {
+                email = currentAccount.email
+                authMode = AuthMode.VERIFY_EMAIL
+                authRequestState = AuthRequestState.Success(
+                    when (language) {
+                        AppLanguage.BANGLA -> "সাইন ইন শেষ করতে ইমেইল যাচাই করুন।"
+                        AppLanguage.HINDI -> "साइन इन पूरा करने के लिए अपना ईमेल सत्यापित करें।"
+                        AppLanguage.ENGLISH -> "Verify your email to finish signing in."
+                    }
+                )
+            }
+            if (screen != AppScreen.AUTH) {
+                selectedFriend = null
+                screen = AppScreen.AUTH
+            }
+            return@LaunchedEffect
+        }
         if (screen !in setOf(AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
-        val currentAccountId = authRepository.currentAccount?.uid
+        val currentAccountId = currentAccount?.uid
         val localAccountId = store.authenticationAccountId()
         if (!currentAccountId.isNullOrBlank() && localAccountId.isNotBlank() && currentAccountId != localAccountId) {
             authRepository.signOut()
@@ -412,42 +502,57 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
     when (currentScreen) {
         AppScreen.SPLASH -> DostSplashScreen(language) {
             var currentAccount = authRepository.currentAccount
-            if (currentAccount != null) {
-                var localAccountId = store.authenticationAccountId()
-                if (store.hasUserProfile() && localAccountId.isBlank() && !store.authenticationRequired()) {
-                    store.bindAuthenticationAccount(currentAccount.uid)
-                    localAccountId = currentAccount.uid
-                }
-                if (store.hasUserProfile() && localAccountId.isNotBlank() && localAccountId != currentAccount.uid) {
-                    store.markAuthenticationRequired()
-                    authRepository.signOut()
-                    currentAccount = null
-                    authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
-                } else {
-                    store.markAuthenticationRequired()
-                    email = currentAccount.email.ifBlank { email }
-                    if (!store.hasEligibleAccount()) name = currentAccount.displayName.ifBlank { name }
-                }
-            }
-            val destination = authenticationStartScreen(
-                hasSignedInUser = currentAccount != null,
-                hasEligibleLocalProfile = store.hasEligibleAccount(),
-                authenticationRequired = store.authenticationRequired(),
-                signedInUserId = currentAccount?.uid,
-                localAccountId = store.authenticationAccountId()
-            )
-            val requestedId = openFriendRequests.value?.friendId
-            val resolved = ChatLaunch.friendToOpen(destination == AppScreen.HOME, requestedId, friends.map { it.id }.toSet())
-            if (resolved != null) {
-                selectedFriend = friends.first { it.id == resolved }
-                screen = AppScreen.CHAT
+            if (currentAccount?.needsEmailVerification == true) {
+                email = currentAccount.email
+                authMode = AuthMode.VERIFY_EMAIL
+                authRequestState = AuthRequestState.Success(
+                    when (language) {
+                        AppLanguage.BANGLA -> "সাইন ইন শেষ করতে ইমেইল যাচাই করুন।"
+                        AppLanguage.HINDI -> "साइन इन पूरा करने के लिए अपना ईमेल सत्यापित करें।"
+                        AppLanguage.ENGLISH -> "Verify your email to finish signing in."
+                    }
+                )
+                screen = AppScreen.AUTH
             } else {
-                screen = destination
+                if (currentAccount != null) {
+                    var localAccountId = store.authenticationAccountId()
+                    if (store.hasUserProfile() && localAccountId.isBlank() && !store.authenticationRequired()) {
+                        store.bindAuthenticationAccount(currentAccount.uid)
+                        localAccountId = currentAccount.uid
+                    }
+                    if (store.hasUserProfile() && localAccountId.isNotBlank() && localAccountId != currentAccount.uid) {
+                        store.markAuthenticationRequired()
+                        authRepository.signOut()
+                        currentAccount = null
+                        authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                    } else {
+                        store.markAuthenticationRequired()
+                        email = currentAccount.email.ifBlank { email }
+                        if (!store.hasEligibleAccount()) name = currentAccount.displayName.ifBlank { name }
+                    }
+                }
+                val destination = authenticationStartScreen(
+                    hasSignedInUser = currentAccount != null,
+                    hasEligibleLocalProfile = store.hasEligibleAccount(),
+                    authenticationRequired = store.authenticationRequired(),
+                    signedInUserId = currentAccount?.uid,
+                    localAccountId = store.authenticationAccountId()
+                )
+                val requestedId = openFriendRequests.value?.friendId
+                val resolved = ChatLaunch.friendToOpen(destination == AppScreen.HOME, requestedId, friends.map { it.id }.toSet())
+                if (resolved != null) {
+                    selectedFriend = friends.first { it.id == resolved }
+                    screen = AppScreen.CHAT
+                } else {
+                    screen = destination
+                }
             }
         }
         AppScreen.AUTH -> AuthScreen(
             language = language,
             initialEmail = email,
+            mode = authMode,
+            onModeChange = { authMode = it },
             requestState = authRequestState,
             emailSignInEnabled = authRepository.emailSignInEnabled,
             googleSignInEnabled = authRepository.googleSignInEnabled,
@@ -455,9 +560,11 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
                 authenticate { authRepository.signIn(authEmail, password) }
             },
             onCreateAccount = { authEmail, password ->
-                authenticate { authRepository.createAccount(authEmail, password) }
+                authenticate({ authRepository.createAccount(authEmail, password) }, sendVerificationEmail = true)
             },
             onPasswordReset = ::sendPasswordReset,
+            onResendVerification = ::resendVerificationEmail,
+            onCheckVerification = ::checkEmailVerification,
             onGoogleSignIn = {
                 val activity = context.activityOrNull()
                 if (activity == null) {
@@ -531,6 +638,7 @@ fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow
                 authRepository.signOut()
                 store.markAuthenticationRequired()
                 selectedFriend = null
+                authMode = AuthMode.SIGN_IN
                 authRequestState = AuthRequestState.Idle
                 screen = AppScreen.AUTH
             },

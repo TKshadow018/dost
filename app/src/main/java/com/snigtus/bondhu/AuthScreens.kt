@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,15 +78,18 @@ import com.snigtus.dost.ui.theme.DostTeal
 fun AuthScreen(
     language: AppLanguage,
     initialEmail: String,
+    mode: AuthMode,
+    onModeChange: (AuthMode) -> Unit,
     requestState: AuthRequestState,
     emailSignInEnabled: Boolean,
     googleSignInEnabled: Boolean,
     onSignIn: (String, String) -> Unit,
     onCreateAccount: (String, String) -> Unit,
     onPasswordReset: (String) -> Unit,
+    onResendVerification: () -> Unit,
+    onCheckVerification: () -> Unit,
     onGoogleSignIn: () -> Unit
 ) {
-    var mode by rememberSaveable { mutableStateOf(AuthMode.SIGN_IN) }
     var email by rememberSaveable { mutableStateOf(initialEmail) }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
@@ -97,11 +101,24 @@ fun AuthScreen(
     val loading = requestState is AuthRequestState.Loading
     val requestMessage = if (dismissRequestMessage) null else when (requestState) {
         is AuthRequestState.Error -> requestState.message
-        is AuthRequestState.Success -> requestState.message.takeIf { mode == AuthMode.FORGOT_PASSWORD }
+        is AuthRequestState.Success -> requestState.message.takeIf { mode == AuthMode.FORGOT_PASSWORD || mode == AuthMode.VERIFY_EMAIL }
         else -> null
     }
 
+    LaunchedEffect(mode, initialEmail) {
+        localError = null
+        if (mode == AuthMode.VERIFY_EMAIL) {
+            dismissRequestMessage = false
+            if (initialEmail.isNotBlank()) email = initialEmail
+        }
+    }
+
     fun submit() {
+        if (mode == AuthMode.VERIFY_EMAIL) {
+            localError = null
+            onCheckVerification()
+            return
+        }
         val validEmail = Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()
         localError = when {
             !emailSignInEnabled -> authLabel(
@@ -125,6 +142,7 @@ fun AuthScreen(
             AuthMode.SIGN_IN -> onSignIn(email.trim(), password)
             AuthMode.CREATE_ACCOUNT -> onCreateAccount(email.trim(), password)
             AuthMode.FORGOT_PASSWORD -> onPasswordReset(email.trim())
+            AuthMode.VERIFY_EMAIL -> onCheckVerification()
         }
     }
 
@@ -193,6 +211,22 @@ fun AuthScreen(
                             ),
                             color = DostAuthMuted
                         )
+                    } else if (mode == AuthMode.VERIFY_EMAIL) {
+                        Text(
+                            authLabel(language, "ইমেইল যাচাই করুন", "ईमेल सत्यापित करें", "Verify your email"),
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = DostAuthInk,
+                            modifier = Modifier.semantics { heading() }
+                        )
+                        Text(
+                            authLabel(
+                                language,
+                                "যাচাইকরণ লিংক পাঠানো হয়েছে। ইমেইল যাচাই করে এখানে ফিরে আসুন: $email",
+                                "सत्यापन लिंक भेज दिया गया है। ईमेल सत्यापित करके यहाँ लौटें: $email",
+                                "A verification link was sent. Verify your email, then return here: $email"
+                            ),
+                            color = DostAuthMuted
+                        )
                     } else {
                         Text(
                             authLabel(language, "তোমার দোস্তের কাছে ফিরে এসো", "अपने दोस्त के पास लौटें", "Come on in"),
@@ -211,24 +245,24 @@ fun AuthScreen(
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (mode == AuthMode.SIGN_IN) {
-                                Button(onClick = { mode = AuthMode.SIGN_IN; localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)) {
+                                Button(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)) {
                                     Text(authLabel(language, "লগ ইন", "लॉग इन", "Sign in"))
                                 }
-                                OutlinedButton(onClick = { mode = AuthMode.CREATE_ACCOUNT; localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = DostTeal)) {
+                                OutlinedButton(onClick = { onModeChange(AuthMode.CREATE_ACCOUNT); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = DostTeal)) {
                                     Text(authLabel(language, "নতুন অ্যাকাউন্ট", "नया खाता", "Create account"))
                                 }
                             } else {
-                                OutlinedButton(onClick = { mode = AuthMode.SIGN_IN; localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = DostTeal)) {
+                                OutlinedButton(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = DostTeal)) {
                                     Text(authLabel(language, "লগ ইন", "लॉग इन", "Sign in"))
                                 }
-                                Button(onClick = { mode = AuthMode.CREATE_ACCOUNT; localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)) {
+                                Button(onClick = { onModeChange(AuthMode.CREATE_ACCOUNT); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)) {
                                     Text(authLabel(language, "নতুন অ্যাকাউন্ট", "नया खाता", "Create account"))
                                 }
                             }
                         }
                     }
 
-                    if (mode != AuthMode.FORGOT_PASSWORD) {
+                    if (mode != AuthMode.FORGOT_PASSWORD && mode != AuthMode.VERIFY_EMAIL) {
                         OutlinedButton(
                             onClick = {
                                 localError = null
@@ -261,7 +295,7 @@ fun AuthScreen(
                             )
                         }
                     }
-                    if (mode != AuthMode.FORGOT_PASSWORD) {
+                    if (mode != AuthMode.FORGOT_PASSWORD && mode != AuthMode.VERIFY_EMAIL) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             HorizontalDivider(modifier = Modifier.weight(1f), color = DostAuthBorder)
                             Text(authLabel(language, "অথবা ইমেইল", "या ईमेल", "or email"), color = DostAuthMuted, style = MaterialTheme.typography.labelMedium)
@@ -275,8 +309,8 @@ fun AuthScreen(
                         label = { Text(authLabel(language, "ইমেইল", "ईमेल", "Email address")) },
                         leadingIcon = { Text("@", color = DostAuthMuted) },
                         singleLine = true,
-                        enabled = !loading,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = if (mode == AuthMode.FORGOT_PASSWORD) ImeAction.Done else ImeAction.Next),
+                        enabled = !loading && mode != AuthMode.VERIFY_EMAIL,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = if (mode == AuthMode.FORGOT_PASSWORD || mode == AuthMode.VERIFY_EMAIL) ImeAction.Done else ImeAction.Next),
                         keyboardActions = KeyboardActions(
                             onNext = { passwordFocusRequester.requestFocus() },
                             onDone = { submit() }
@@ -285,7 +319,7 @@ fun AuthScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    if (mode != AuthMode.FORGOT_PASSWORD) {
+                    if (mode != AuthMode.FORGOT_PASSWORD && mode != AuthMode.VERIFY_EMAIL) {
                         OutlinedTextField(
                             value = password,
                             onValueChange = { password = it; localError = null; dismissRequestMessage = true },
@@ -313,7 +347,7 @@ fun AuthScreen(
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                         )
                     }
-                    if (!emailSignInEnabled) {
+                    if (!emailSignInEnabled && mode != AuthMode.VERIFY_EMAIL) {
                         Text(
                             authLabel(
                                 language,
@@ -341,6 +375,7 @@ fun AuthScreen(
                                     AuthMode.SIGN_IN -> authLabel(language, "লগ ইন করুন", "लॉग इन करें", "Sign in")
                                     AuthMode.CREATE_ACCOUNT -> authLabel(language, "অ্যাকাউন্ট তৈরি করুন", "खाता बनाएँ", "Create account")
                                     AuthMode.FORGOT_PASSWORD -> authLabel(language, "রিসেট লিংক পাঠান", "रीसेट लिंक भेजें", "Send reset link")
+                                    AuthMode.VERIFY_EMAIL -> authLabel(language, "আমি যাচাই করেছি", "मैंने सत्यापित किया", "I've verified my email")
                                 }
                             )
                         }
@@ -348,14 +383,21 @@ fun AuthScreen(
 
                     if (mode == AuthMode.SIGN_IN) {
                         TextButton(
-                            onClick = { mode = AuthMode.FORGOT_PASSWORD; localError = null; password = ""; dismissRequestMessage = true },
+                            onClick = { onModeChange(AuthMode.FORGOT_PASSWORD); localError = null; password = ""; dismissRequestMessage = true },
                             enabled = !loading,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(authLabel(language, "পাসওয়ার্ড ভুলে গেছ?", "पासवर्ड भूल गए?", "Forgot password?"))
                         }
                     } else if (mode == AuthMode.FORGOT_PASSWORD) {
-                        TextButton(onClick = { mode = AuthMode.SIGN_IN; localError = null; dismissRequestMessage = true }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                            Text(authLabel(language, "লগ ইন-এ ফিরে যান", "लॉग इन पर वापस जाएँ", "Back to sign in"))
+                        }
+                    } else if (mode == AuthMode.VERIFY_EMAIL) {
+                        TextButton(onClick = onResendVerification, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                            Text(authLabel(language, "যাচাইকরণ ইমেইল আবার পাঠান", "सत्यापन ईमेल फिर भेजें", "Resend verification email"))
+                        }
+                        TextButton(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
                             Text(authLabel(language, "লগ ইন-এ ফিরে যান", "लॉग इन पर वापस जाएँ", "Back to sign in"))
                         }
                     } else {

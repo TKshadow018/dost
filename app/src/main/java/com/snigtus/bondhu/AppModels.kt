@@ -6,7 +6,7 @@ import java.time.ZonedDateTime
 
 enum class AppScreen { SPLASH, AUTH, REGISTER, HOME, CHAT, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
-enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD }
+enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD, VERIFY_EMAIL }
 
 sealed interface AuthRequestState {
     data object Idle : AuthRequestState
@@ -15,7 +15,19 @@ sealed interface AuthRequestState {
     data class Success(val message: String) : AuthRequestState
 }
 
-data class AuthAccount(val uid: String, val email: String, val displayName: String)
+data class AuthAccount(
+    val uid: String,
+    val email: String,
+    val displayName: String,
+    val emailVerified: Boolean = false,
+    val googleAccount: Boolean = false
+) {
+    val needsEmailVerification: Boolean
+        get() = requiresEmailVerification(emailVerified, googleAccount)
+}
+
+fun requiresEmailVerification(emailVerified: Boolean, googleAccount: Boolean): Boolean =
+    !emailVerified && !googleAccount
 
 fun authenticationStartScreen(
     hasSignedInUser: Boolean,
