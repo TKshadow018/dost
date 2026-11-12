@@ -108,10 +108,13 @@ object ConversationManager {
             try {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
+                if (answer.parseFailed) {
+                    appendAssistant(friend.id, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
+                    return@launch
+                }
                 store.addUserMemories(friend.id, answer.memories)
                 updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
                 updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
-                val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
                 val response = listOf(
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
@@ -119,7 +122,7 @@ object ConversationManager {
                 appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
                 when {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
-                    !hasQuestion -> scheduleInactivityQuestion(friend, language, sessionId)
+                    shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
                 }
             } catch (_: Throwable) {
                 appendAssistant(friend.id, connectionIssueReply(language), modelId = selectedModel)
@@ -182,16 +185,17 @@ object ConversationManager {
         ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, userMessage.messageId)
     }
 
-    private fun appendAssistant(friendId: String, response: String, messageId: String? = null, modelId: String = store.aiModel()) {
+    private fun appendAssistant(friendId: String, response: String, messageId: String? = null, modelId: String = store.aiModel(), category: String = "conversation") {
         val sessionId = store.currentSessionId(friendId) ?: java.util.UUID.randomUUID().toString()
         store.saveCurrentSessionId(friendId, sessionId)
-        val assistantMessage = ChatMessage("assistant", response, sessionId = sessionId, messageId = messageId ?: java.util.UUID.randomUUID().toString(), modelId = modelId)
+        val assistantMessage = ChatMessage("assistant", response, category = category, sessionId = sessionId, messageId = messageId ?: java.util.UUID.randomUUID().toString(), modelId = modelId)
         val saved = messagesFor(friendId).toMutableList().apply { add(assistantMessage) }
         publish(friendId, saved)
         store.saveMessages(friendId, saved)
-        ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, assistantMessage.messageId)
+        val isError = category == ERROR_MESSAGE_CATEGORY
+        if (!isError) ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, assistantMessage.messageId)
         scheduleSessionEnd(friendId, sessionId, SESSION_INACTIVITY_MILLIS)
-        if (activeFriendId != friendId) {
+        if (!isError && activeFriendId != friendId) {
             store.incrementUnread(friendId)
             unreadState.update { it + (friendId to store.unreadCount(friendId)) }
             store.loadFriends().firstOrNull { it.id == friendId }?.let { friend ->
@@ -219,6 +223,12 @@ object ConversationManager {
         AppLanguage.ENGLISH -> "Sorry, I couldn't reply just now. Please try again in a moment."
     }
 
+    private fun unreadableReply(language: AppLanguage): String = when (language) {
+        AppLanguage.BANGLA -> "এই উত্তরটা পড়া যায়নি। মেসেজ চেপে ধরে Reply differently বেছে আবার চেষ্টা করো।"
+        AppLanguage.HINDI -> "यह जवाब पढ़ा नहीं जा सका। संदेश को दबाकर Reply differently चुनें और फिर कोशिश करें।"
+        AppLanguage.ENGLISH -> "I couldn't read that reply. Touch and hold this message and choose Reply differently to try again."
+    }
+
     private fun connectionIssueReply(language: AppLanguage): String = when (language) {
         AppLanguage.BANGLA -> "এই মুহূর্তে সংযোগে সমস্যা হচ্ছে। কিছুক্ষণ পর আবার চেষ্টা করলে আমি উত্তর দেব।"
         AppLanguage.HINDI -> "अभी कनेक्शन में समस्या है। थोड़ी देर बाद फिर कोशिश करें, मैं जवाब दे दूँगा।"
@@ -244,6 +254,10 @@ object ConversationManager {
             try {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
+                if (answer.parseFailed) {
+                    appendAssistant(friend.id, unreadableReply(language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                    return@launch
+                }
                 store.addUserMemories(friend.id, answer.memories)
                 val response = listOf(
                     answer.text,
@@ -263,7 +277,7 @@ object ConversationManager {
         val client = OpenRouterClient()
         val selectedModel = store.aiModel()
         val apiKey = store.openRouterApiKey()
-        val history = messagesFor(friend.id).filter { it.sessionId == sessionId }.let { existing ->
+        val history = messagesForPrompt(messagesFor(friend.id).filter { it.sessionId == sessionId }).let { existing ->
             if (seedMessage != null && existing.isEmpty()) listOf(seedMessage) else existing
         }
         try {
@@ -308,6 +322,13 @@ object ConversationManager {
         sendingState.update { it + friendId }
         try {
             val answer = requestReply(friend, sessionId, language, forceFollowUp)
+            if (answer.parseFailed) {
+                if (!forceFollowUp) {
+                    appendAssistant(friendId, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
+                }
+                store.setScheduledReply(friendId, false)
+                return true
+            }
             store.addUserMemories(friendId, answer.memories)
             updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
             val response = listOf(
@@ -317,10 +338,9 @@ object ConversationManager {
             appendAssistant(friendId, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
             store.setScheduledReply(friendId, false)
             if (!forceFollowUp) {
-                val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
                 when {
                     answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
-                    !hasQuestion -> scheduleInactivityQuestion(friend, language, sessionId)
+                    shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
                 }
             }
             return true
@@ -346,7 +366,12 @@ object ConversationManager {
         val remaining = SESSION_INACTIVITY_MILLIS - (System.currentTimeMillis() - latestMessage.timestampMillis)
         if (remaining > 0L) return false
         val friendName = store.loadFriends().firstOrNull { it.id == friendId }?.name ?: return true
-        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, sessionMessages, store.language())
+        val summaryInput = messagesForPrompt(sessionMessages)
+        if (summaryInput.isEmpty()) {
+            if (store.currentSessionId(friendId) == sessionId) store.saveCurrentSessionId(friendId, null)
+            return true
+        }
+        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, summaryInput, store.language())
         val latestAfterSummary = messagesFor(friendId).lastOrNull { it.sessionId == sessionId }
         if (store.currentSessionId(friendId) != sessionId || latestAfterSummary?.timestampMillis != latestMessage.timestampMillis) return false
         store.saveSessionSummary(friendId, SessionSummary(sessionId, sessionMessages.minOf { it.timestampMillis }, System.currentTimeMillis(), summary))
@@ -368,8 +393,12 @@ object ConversationManager {
         messageState.update { it + (friendId to messages) }
     }
 
-    private const val DEFAULT_FOLLOW_UP_MILLIS = 30_000L //will be 1 minutes later
-    private const val SESSION_INACTIVITY_MILLIS = 5 * 60 * 1000L // will be 60 minutes later
+    internal const val DEFAULT_FOLLOW_UP_MILLIS = 60_000L // 1 minute
+    internal const val SESSION_INACTIVITY_MILLIS = 60 * 60 * 1000L // 60 minutes
+
+    /** Default check-in only when the reply did not already ask something. */
+    internal fun shouldScheduleDefaultFollowUp(replyText: String, followUpQuestion: String): Boolean =
+        followUpQuestion.isBlank() && !replyText.contains("?")
 
     suspend fun runMorningGreeting(friendId: String, sessionId: String, language: AppLanguage): Boolean {
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
