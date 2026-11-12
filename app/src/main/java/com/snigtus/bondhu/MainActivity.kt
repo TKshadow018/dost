@@ -76,6 +76,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
@@ -92,6 +94,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import com.snigtus.dost.ui.theme.DostTheme
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.time.LocalTime
@@ -101,15 +106,29 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    private val openFriendRequests = MutableStateFlow<OpenFriendRequest?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) publishOpenFriend(intent)
         enableEdgeToEdge()
-        setContent { DostTheme { DostApp() } }
+        setContent { DostTheme { DostApp(openFriendRequests) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        publishOpenFriend(intent)
     }
 
     override fun onStart() {
         super.onStart()
         stopService(Intent(this, FloatingChatService::class.java))
+    }
+
+    private fun publishOpenFriend(intent: Intent?) {
+        val friendId = intent?.getStringExtra(ChatLaunch.EXTRA_FRIEND_ID)?.takeIf { it.isNotBlank() } ?: return
+        openFriendRequests.value = OpenFriendRequest(friendId, System.nanoTime())
     }
 }
 
@@ -119,25 +138,53 @@ private const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 
 
 @Composable
-fun DostApp() {
+fun DostApp(openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow(null)) {
     val context = LocalContext.current
     val store = remember(context) { DostStore(context) }
     ConversationManager.initialize(context)
     var language by remember { mutableStateOf(store.language()) }
-    var screen by remember { mutableStateOf(AppScreen.SPLASH) }
+    var screen by rememberSaveable(
+        stateSaver = Saver<AppScreen, String>(
+            save = { it.name },
+            restore = { runCatching { AppScreen.valueOf(it) }.getOrDefault(AppScreen.SPLASH) }
+        )
+    ) { mutableStateOf(AppScreen.SPLASH) }
     var registerStep by remember { mutableStateOf(1) }
-    var name by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var age by remember { mutableStateOf("") }
-    var gender by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(store.userName()) }
+    var email by remember { mutableStateOf(store.userEmail()) }
+    var age by remember { mutableStateOf(store.userAge()) }
+    var gender by remember { mutableStateOf(store.userGender()) }
     var userTimeZoneId by remember { mutableStateOf(store.userTimeZoneId()) }
     var openRouterApiKey by remember { mutableStateOf(store.openRouterApiKey()) }
     var aiModel by remember { mutableStateOf(store.aiModel()) }
-    val friends = remember { mutableStateListOf<Friend>().apply { addAll(store.loadFriends()) } }
-    var selectedFriend by remember { mutableStateOf<Friend?>(null) }
+    val friends = remember {
+        store.clearLockedLoveScores()
+        mutableStateListOf<Friend>().apply { addAll(store.loadFriends()) }
+    }
+    val selectedFriendSaver = remember(store) {
+        Saver<Friend?, String>(
+            save = { friend -> friend?.id ?: "" },
+            restore = { id -> if (id.isBlank()) null else store.loadFriends().firstOrNull { it.id == id } }
+        )
+    }
+    var selectedFriend by rememberSaveable(stateSaver = selectedFriendSaver) { mutableStateOf<Friend?>(null) }
     var closeAfterOverlayPermission by remember { mutableStateOf(false) }
     var bubbleFriendId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    var generatingProfileIds by remember { mutableStateOf(setOf<String>()) }
+    var profileErrors by remember { mutableStateOf(mapOf<String, ProfileFailure>()) }
+    val openFriendRequest by openFriendRequests.collectAsState()
+
+    fun openRequestedFriend(friendId: String?) {
+        val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), friendId, friends.map { it.id }.toSet()) ?: return
+        selectedFriend = friends.first { it.id == resolved }
+        screen = AppScreen.CHAT
+    }
+
+    LaunchedEffect(openFriendRequest?.nonce) {
+        if (screen == AppScreen.SPLASH) return@LaunchedEffect
+        openRequestedFriend(openFriendRequest?.friendId)
+    }
 
     fun minimizeApp() {
         (context as? Activity)?.moveTaskToBack(true)
@@ -154,6 +201,17 @@ fun DostApp() {
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val relationshipUpdates = ConversationManager.relationshipUpdates.collectAsState().value
+    LaunchedEffect(relationshipUpdates) {
+        if (relationshipUpdates.isEmpty()) return@LaunchedEffect
+        val storedFriends = store.loadFriends()
+        relationshipUpdates.keys.forEach { friendId ->
+            val stored = storedFriends.firstOrNull { it.id == friendId } ?: return@forEach
+            val index = friends.indexOfFirst { it.id == friendId }
+            if (index >= 0) friends[index] = stored
+            if (selectedFriend?.id == friendId) selectedFriend = stored
+        }
+    }
     LaunchedEffect(screen) {
         if (screen == AppScreen.HOME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ReplyNotifier.ensureChannel(context)
@@ -178,27 +236,59 @@ fun DostApp() {
 
     
 
-    fun addFriendWithProfile(friend: Friend) {
-        if (friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS) return
-        friends.add(friend)
-        store.saveFriends(friends)
-        ConversationWorkScheduler.scheduleMorningGreeting(context, friend, language)
+    fun startProfileGeneration(friendId: String) {
+        val friend = friends.firstOrNull { it.id == friendId } ?: return
+        if (!friend.profilePending || friendId in generatingProfileIds) return
+        val requestLanguage = language
+        profileErrors = profileErrors - friendId
+        generatingProfileIds = generatingProfileIds + friendId
         scope.launch {
-            runCatching { OpenRouterClient().generateFriendProfile(store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, language) }
-                .onSuccess { profile ->
-                    val index = friends.indexOfFirst { it.id == friend.id }
-                    if (index >= 0) {
-                        friends[index] = friend.copy(
-                            personality = profile.personality, interests = profile.interests, family = profile.family,
-                            familyMembers = profile.familyMembers, familyActivities = profile.familyActivities,
-                            financialCondition = profile.financialCondition, address = profile.address, height = profile.height,
-                            weight = profile.weight, facialFeatures = profile.facialFeatures, bodyFeatures = profile.bodyFeatures,
-                            conversationStyle = profile.conversationStyle
-                        )
-                        store.saveFriends(friends)
-                    }
+            try {
+                val profile = OpenRouterClient().generateFriendProfile(
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, requestLanguage
+                )
+                val index = friends.indexOfFirst { it.id == friendId }
+                if (index >= 0 && friends[index].profilePending) {
+                    val updated = store.updateFriend(friendId) { current ->
+                        current.withGeneratedProfile(profile)
+                    } ?: return@launch
+                    friends[index] = updated
+                    if (selectedFriend?.id == friendId) selectedFriend = updated
+                    ConversationWorkScheduler.scheduleMorningGreeting(context, updated, requestLanguage)
                 }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                profileErrors = profileErrors + (friendId to profileFailureText(requestLanguage, error.message))
+            } finally {
+                generatingProfileIds = generatingProfileIds - friendId
+            }
         }
+    }
+
+    fun continueWithBasicProfile(friendId: String) {
+        val index = friends.indexOfFirst { it.id == friendId }
+        if (index < 0 || !friends[index].profilePending || friendId in generatingProfileIds) return
+        val updated = store.updateFriend(friendId) { current ->
+            current.copy(profilePending = false)
+        } ?: return
+        friends[index] = updated
+        if (selectedFriend?.id == friendId) selectedFriend = updated
+        profileErrors = profileErrors - friendId
+        ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+    }
+
+    fun addFriendWithProfile(friend: Friend) {
+        val safeFriend = friend.withLoveMeterGated(store.userAge())
+        if (friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS) return
+        val pending = safeFriend.copy(profilePending = true)
+        friends.add(pending)
+        store.saveFriends(friends)
+        startProfileGeneration(pending.id)
+    }
+
+    LaunchedEffect(Unit) {
+        friends.filter { it.profilePending }.forEach { startProfileGeneration(it.id) }
     }
 
     fun addSystemFriend(friend: Friend) {
@@ -206,22 +296,10 @@ fun DostApp() {
             || friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS
             || friends.any { it.catalogId == friend.catalogId }
         ) return
-        val addedFriend = friend.copy(id = java.util.UUID.randomUUID().toString())
+        val addedFriend = friend.copy(id = java.util.UUID.randomUUID().toString()).withLoveMeterGated(store.userAge())
         friends.add(addedFriend)
         store.saveFriends(friends)
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
-    }
-
-    fun updateRelationship(friendId: String, friendshipScore: Int, loveScore: Int) {
-        val index = friends.indexOfFirst { it.id == friendId }
-        if (index < 0) return
-        val current = friends[index]
-        val friendship = friendshipScore.coerceIn(0, 100)
-        val love = if (friendship > 70) loveScore.coerceIn(0, 100) else 0
-        val updated = current.copy(friendshipScore = friendship, loveScore = love)
-        friends[index] = updated
-        selectedFriend = updated
-        store.saveFriends(friends)
     }
 
     androidx.compose.animation.AnimatedContent(
@@ -237,7 +315,14 @@ fun DostApp() {
     ) { currentScreen ->
     when (currentScreen) {
         AppScreen.SPLASH -> DostSplashScreen(language) {
-            screen = if (store.hasUserProfile()) AppScreen.HOME else AppScreen.REGISTER
+            val requestedId = openFriendRequests.value?.friendId
+            val resolved = ChatLaunch.friendToOpen(store.hasEligibleAccount(), requestedId, friends.map { it.id }.toSet())
+            if (resolved != null) {
+                selectedFriend = friends.first { it.id == resolved }
+                screen = AppScreen.CHAT
+            } else {
+                screen = if (store.hasEligibleAccount()) AppScreen.HOME else AppScreen.REGISTER
+            }
         }
         AppScreen.REGISTER -> RegisterScreen(
             language = language,
@@ -250,10 +335,16 @@ fun DostApp() {
             onEmailChange = { email = it },
             onAgeChange = { age = it },
             onGenderChange = { gender = it },
-            onNext = { registerStep = 2 },
-            onFinish = { friend ->
-                store.saveUserProfile(name, email, age, gender)
-                friend?.let { addFriendWithProfile(it) }
+            onNext = {
+                if (name.isNotBlank() && email.isNotBlank() && accountAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) {
+                    registerStep = 2
+                }
+            },
+            onFinish = finish@{ friend ->
+                if (accountAgeResult(age) != AccountAgeResult.VALID) return@finish
+                if (friend != null && friendAgeResult(friend.age) != AccountAgeResult.VALID) return@finish
+                store.saveUserProfile(name, email, age.trim(), gender)
+                friend?.let { addFriendWithProfile(it.copy(age = it.age.trim())) }
                 screen = AppScreen.HOME
             },
             onBack = { if (registerStep == 2) registerStep = 1 else screen = AppScreen.REGISTER }
@@ -269,6 +360,8 @@ fun DostApp() {
                 store.saveFriends(friends)
                 store.deleteFriendData(friend.id)
                 ConversationManager.removeFriend(friend.id)
+                generatingProfileIds = generatingProfileIds - friend.id
+                profileErrors = profileErrors - friend.id
             },
             onOpenChat = { selectedFriend = it; screen = AppScreen.CHAT },
             userTimeZoneId = userTimeZoneId,
@@ -282,7 +375,9 @@ fun DostApp() {
                 store.saveAiModel(model)
             },
             onLanguageChange = { language = it; store.saveLanguage(it) },
-            onKnowledge = { screen = AppScreen.KNOWLEDGE }
+            onKnowledge = { screen = AppScreen.KNOWLEDGE },
+            generatingProfileIds = generatingProfileIds,
+            profileFailedIds = profileErrors.keys
         )
         AppScreen.CHAT -> selectedFriend?.let { friend ->
             ChatScreen(
@@ -290,18 +385,22 @@ fun DostApp() {
                 store = store,
                 onBack = { screen = AppScreen.HOME },
                 language = language,
+                profileGenerating = friend.id in generatingProfileIds,
+                profileError = profileErrors[friend.id],
+                onRetryProfile = { startProfileGeneration(friend.id) },
+                onUseBasicProfile = { continueWithBasicProfile(friend.id) },
                 onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) },
                 onFriendTimeZoneChange = { timeZoneId ->
-                    val index = friends.indexOfFirst { it.id == friend.id }
-                    if (index >= 0) {
-                        val updated = friends[index].copy(timeZoneId = validZoneId(timeZoneId).id)
-                        friends[index] = updated
+                    val updated = store.updateFriend(friend.id) { current ->
+                        current.copy(timeZoneId = validZoneId(timeZoneId).id)
+                    }
+                    if (updated != null) {
+                        val index = friends.indexOfFirst { it.id == friend.id }
+                        if (index >= 0) friends[index] = updated
                         selectedFriend = updated
-                        store.saveFriends(friends)
                         ConversationManager.refreshBusyReply(updated)
                     }
-                },
-                onRelationshipUpdate = { friendship, love -> updateRelationship(friend.id, friendship, love) }
+                }
             )
         }
         AppScreen.KNOWLEDGE -> KnowledgeScreen(
@@ -315,7 +414,7 @@ fun DostApp() {
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit) {
+private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -407,14 +506,39 @@ private fun HomeScreen(language: AppLanguage, userName: String, friends: List<Fr
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (friends.any { it.profilePending }) {
+                        val creating = friends.any { it.profilePending && it.id !in profileFailedIds }
+                        Text(
+                            when {
+                                creating && bangla -> "প্রোফাইল তৈরি হচ্ছে…"
+                                creating && hindi -> "प्रोफ़ाइल बनाई जा रही है…"
+                                creating -> "Creating their profile…"
+                                bangla -> "প্রোফাইল তৈরি হয়নি। চ্যাটে গিয়ে আবার চেষ্টা করুন।"
+                                hindi -> "प्रोफ़ाइल नहीं बनी। चैट खोलकर फिर कोशिश करें।"
+                                else -> "A profile wasn't created. Open the chat to retry."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (creating) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
             item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
             if (friends.isEmpty()) item { EmptyFriendsState(onAdd = { showAddOptions = true }, language = language) }
-            items(friends) { friend -> FriendRow(friend, unread = unreadCounts[friend.id] ?: 0, onOpenChat = { onOpenChat(friend) }, onDelete = { onDeleteFriend(friend) }, language = language) }
+            items(friends) { friend ->
+                FriendRow(
+                    friend,
+                    unread = unreadCounts[friend.id] ?: 0,
+                    onOpenChat = { onOpenChat(friend) },
+                    onDelete = { onDeleteFriend(friend) },
+                    language = language,
+                    profileGenerating = friend.id in generatingProfileIds || friend.id !in profileFailedIds,
+                    profileFailed = friend.id in profileFailedIds
+                )
+            }
         }
     }
-    if (showAddFriend) AddFriendDialog(onDismiss = { showAddFriend = false }, onAdd = { onAddFriend(it); showAddFriend = false })
+    if (showAddFriend) AddFriendDialog(language, onDismiss = { showAddFriend = false }, onAdd = { onAddFriend(it); showAddFriend = false })
     if (showAddOptions) AddFriendOptionsDialog(
         language = language,
         customCount = customFriendCount,
@@ -618,18 +742,33 @@ private fun EmptyFriendsState(onAdd: () -> Unit, language: AppLanguage) {
 }
 
 @Composable
-private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage) {
+private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage, profileGenerating: Boolean, profileFailed: Boolean) {
     var confirmDelete by remember { mutableStateOf(false) }
     val lastMessage = ConversationManager.messages.collectAsState().value[friend.id]?.lastOrNull()
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    val subtitle = when {
+        friend.profilePending && (profileGenerating || !profileFailed) -> when {
+            bangla -> "প্রোফাইল তৈরি হচ্ছে…"
+            hindi -> "प्रोफ़ाइल बनाई जा रही है…"
+            else -> "Creating their profile…"
+        }
+        friend.profilePending -> when {
+            bangla -> "প্রোফাইল তৈরি হয়নি। আবার চেষ্টা করতে খুলুন।"
+            hindi -> "प्रोफ़ाइल नहीं बनी। फिर कोशिश के लिए खोलें।"
+            else -> "Profile wasn't created. Open to retry."
+        }
+        else -> lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100"
+    }
     androidx.compose.foundation.layout.Box {
         Row(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onOpenChat, onLongClick = { confirmDelete = true }).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             FriendPhoto(friend.photoUri, friend.name, Modifier.size(46.dp).clip(CircleShape))
             Column(modifier = Modifier.weight(1f)) {
                 Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else "", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100",
+                    subtitle,
                     style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (friend.profilePending && profileFailed && !profileGenerating) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.size(width = 56.dp, height = 6.dp))
@@ -643,7 +782,7 @@ private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddFriendDialog(onDismiss: () -> Unit, onAdd: (Friend) -> Unit) {
+private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd: (Friend) -> Unit) {
     var name by remember { mutableStateOf("") }
     var age by remember { mutableStateOf("") }
     var gender by remember { mutableStateOf("") }
@@ -667,6 +806,8 @@ private fun AddFriendDialog(onDismiss: () -> Unit, onAdd: (Friend) -> Unit) {
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Add a friend") }, text = { Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         OutlinedTextField(name, { name = it }, label = { Text("Name") })
         OutlinedTextField(age, { age = it }, label = { Text("Age") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+        friendAgeError(age, language)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        friendUnder18RomanceNote(age, language)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         GenderField(gender, onValueChange = { gender = it })
         TimeZonePicker("Friend timezone", friendTimeZoneId, onTimeZoneChange = { friendTimeZoneId = it })
         Text("Daily busy schedule", style = MaterialTheme.typography.titleSmall)
@@ -699,7 +840,7 @@ private fun AddFriendDialog(onDismiss: () -> Unit, onAdd: (Friend) -> Unit) {
             }
             if (photoUri.isNotBlank()) TextButton(onClick = { photoUri = "" }) { Text("Remove") }
         }
-    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age, gender = gender, photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId)) }, enabled = name.isNotBlank() && age.isNotBlank() && gender.isNotBlank()) { Text("Add") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    } }, confirmButton = { Button(onClick = { onAdd(Friend(id = java.util.UUID.randomUUID().toString(), name = name, age = age.trim(), gender = gender, photoUri = photoUri, busyStartHour = busyStartHour, busyDurationHours = busyDurationHours, busyReason = if (isWorkSchedule) "Work" else "School", timeZoneId = friendTimeZoneId)) }, enabled = name.isNotBlank() && friendAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) { Text("Add") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -825,10 +966,14 @@ private fun AiSettingsDialog(apiKey: String, initialModel: String, onDismiss: ()
 
 @Composable
 private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store: DostStore, onBack: () -> Unit) {
-    val knowledge = friends.mapNotNull { friend ->
-        val memories = store.loadUserMemories(friend.id)
-            .filter { it.fact.isNotBlank() }
-        if (memories.isEmpty()) null else friend to memories
+    var revision by remember { mutableStateOf(0) }
+    var editing by remember { mutableStateOf<Pair<String, UserMemory>?>(null) }
+    var deleting by remember { mutableStateOf<Pair<String, UserMemory>?>(null) }
+    val knowledge = remember(friends, revision) {
+        friends.mapNotNull { friend ->
+            val memories = store.loadUserMemories(friend.id).filter { it.fact.isNotBlank() }
+            if (memories.isEmpty()) null else friend to memories
+        }
     }
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
@@ -854,12 +999,23 @@ private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store:
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(18.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                knowledge.forEach { (friend, categories) ->
+                knowledge.forEach { (friend, memories) ->
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(friend.name, style = MaterialTheme.typography.titleLarge)
-                            categories.forEach { memory ->
-                                Text("• ${memory.fact}", style = MaterialTheme.typography.bodyLarge)
+                            memories.forEach { memory ->
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(memoryCategoryLabel(memory.category, language), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                    Text(memory.fact, style = MaterialTheme.typography.bodyLarge)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(onClick = { editing = friend.id to memory }) {
+                                            Text(when { bangla -> "ঠিক করুন"; hindi -> "ठीक करें"; else -> "Correct" })
+                                        }
+                                        TextButton(onClick = { deleting = friend.id to memory }) {
+                                            Text(when { bangla -> "মুছুন"; hindi -> "हटाएँ"; else -> "Delete" }, color = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -867,10 +1023,73 @@ private fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store:
             }
         }
     }
+    editing?.let { (friendId, memory) ->
+        CorrectMemoryDialog(
+            language = language,
+            memory = memory,
+            onDismiss = { editing = null },
+            onSave = { updated ->
+                store.updateUserMemory(friendId, memory, updated)
+                editing = null
+                revision += 1
+            }
+        )
+    }
+    deleting?.let { (friendId, memory) ->
+        val friendName = friends.firstOrNull { it.id == friendId }?.name ?: ""
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text(when { bangla -> "এই তথ্য মুছবেন?"; hindi -> "यह जानकारी हटाएँ?"; else -> "Delete this fact?" }) },
+            text = { Text(when { bangla -> "$friendName আর এটা মনে রাখবে না।"; hindi -> "$friendName अब इसे याद नहीं रखेगा।"; else -> "$friendName will no longer remember this." }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.deleteUserMemory(friendId, memory)
+                    deleting = null
+                    revision += 1
+                }) { Text(when { bangla -> "মুছুন"; hindi -> "हटाएँ"; else -> "Delete" }, color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" }) } }
+        )
+    }
 }
 
 @Composable
-private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onRelationshipUpdate: (Int, Int) -> Unit) {
+private fun CorrectMemoryDialog(language: AppLanguage, memory: UserMemory, onDismiss: () -> Unit, onSave: (UserMemory) -> Unit) {
+    var category by remember(memory) { mutableStateOf(memory.category) }
+    var fact by remember(memory) { mutableStateOf(memory.fact) }
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(when { bangla -> "এই তথ্য ঠিক করুন"; hindi -> "इस जानकारी को ठीक करें"; else -> "Correct this fact" }) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    category,
+                    { category = it },
+                    label = { Text(when { bangla -> "বিভাগ"; hindi -> "श्रेणी"; else -> "Category" }) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    fact,
+                    { fact = it },
+                    label = { Text(when { bangla -> "তথ্য"; hindi -> "जानकारी"; else -> "Fact" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(UserMemory(category, fact)) }, enabled = fact.isNotBlank()) {
+                Text(when { bangla -> "সংরক্ষণ"; hindi -> "सहेजें"; else -> "Save" })
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" }) } }
+    )
+}
+
+@Composable
+private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, onFloatingChat: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, profileGenerating: Boolean, profileError: ProfileFailure?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit) {
     val context = LocalContext.current
     val messageMap = ConversationManager.messages.collectAsState().value
     val messages = messageMap[friend.id] ?: store.loadMessages(friend.id)
@@ -906,6 +1125,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
     val displayedMessages = remember(messages, searchQuery) {
         if (searchQuery.isBlank()) messages else messages.filter { it.content.contains(searchQuery, ignoreCase = true) }
     }
+    val profileBlocked = friend.profilePending
     val busyUntil = friend.replyAvailableAt(currentTime)
     val dailyBusyStart = LocalTime.of(friend.busyStartHour.coerceIn(0, 23), 0)
     val dailyBusyEnd = dailyBusyStart.plusHours(friend.busyDurationHours.coerceIn(4, 8).toLong())
@@ -925,7 +1145,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
     }
     Scaffold(topBar = { TopAppBar(title = { Row(modifier = Modifier.clickable { showFriendInfo = true }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) { FriendPhoto(friend.photoUri, friend.name, Modifier.size(40.dp).clip(CircleShape)); Column { Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else ""); Text("${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100", style = MaterialTheme.typography.labelSmall); Text(if (busyUntil != null) "${friend.name} will reply at ${busyUntil.format(DateTimeFormatter.ofPattern("h:mm a"))}" else "Daily busy ${dailyBusyStart.format(DateTimeFormatter.ofPattern("h:mm a"))}–${dailyBusyEnd.format(DateTimeFormatter.ofPattern("h:mm a"))} (${friend.timeZoneId})", style = MaterialTheme.typography.labelSmall) } } }, navigationIcon = { TextButton(onClick = onBack) { Text(when { bangla -> "ফিরুন"; hindi -> "वापस"; else -> "Back" }) } }, actions = { androidx.compose.foundation.layout.Box { IconButton(onClick = { showChatMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }; DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) { DropdownMenuItem(text = { Text("Search") }, onClick = { showChatMenu = false; showSearch = !showSearch; if (!showSearch) searchQuery = "" }); DropdownMenuItem(text = { Text("Export chat") }, onClick = { showChatMenu = false; exportChat(context, friend, messages) }); DropdownMenuItem(text = { Text("Your profile") }, onClick = { showChatMenu = false; showUserInfo = true }); DropdownMenuItem(text = { Text("Session summaries") }, onClick = { showChatMenu = false; sessionSummaries = store.loadSessionSummaries(friend.id).takeLast(10).reversed(); showSessionSummaries = true }); DropdownMenuItem(text = { Text("Minimize chat") }, onClick = { showChatMenu = false; onFloatingChat() }) } } }) }) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            RelationshipMeters(friend = friend, language = language)
+            RelationshipMeters(friend = friend, language = language, userAge = store.userAge())
             if (showSearch) {
                 OutlinedTextField(
                     value = searchQuery,
@@ -936,7 +1156,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                 )
             }
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)) {
-                if (displayedMessages.isEmpty()) item { Text(when { bangla -> "${friend.name}-এর সাথে কথা বলা শুরু করুন।"; hindi -> "${friend.name} के साथ बातचीत शुरू करें।"; else -> "Start a conversation with ${friend.name}." }, modifier = Modifier.padding(12.dp)) }
+                if (displayedMessages.isEmpty() && !profileBlocked) item { Text(when { bangla -> "${friend.name}-এর সাথে কথা বলা শুরু করুন।"; hindi -> "${friend.name} के साथ बातचीत शुरू करें।"; else -> "Start a conversation with ${friend.name}." }, modifier = Modifier.padding(12.dp)) }
                 items(displayedMessages) { message ->
                     MessageBubble(
                         message = message,
@@ -949,6 +1169,9 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                 if (sending && waitingForSchedule) item { Text("${friend.name} will reply after the busy schedule.", modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium) }
                 else if (sending) item { ThinkingBubble(friendName = friend.name, bangla = bangla, hindi = hindi) }
                 error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp)) } }
+            }
+            if (profileBlocked) {
+                ProfileCreationNotice(language, profileGenerating, profileError, onRetryProfile, onUseBasicProfile)
             }
             Surface(shadowElevation = 4.dp, tonalElevation = 2.dp, modifier = Modifier.imePadding()) {
                 Column(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -965,7 +1188,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
                             onClick = { imagePicker.launch("image/*") },
-                            enabled = !sending || waitingForSchedule
+                            enabled = !profileBlocked
                         ) {
                             Icon(
                                 painter = painterResource(android.R.drawable.ic_menu_gallery),
@@ -976,8 +1199,9 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
                                 }
                             )
                         }
-                        OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f), placeholder = { Text(when { bangla -> "একটি মেসেজ লিখুন..."; hindi -> "संदेश लिखें..."; else -> "Write a message..." }) }, maxLines = 4)
-                        Button(enabled = (draft.isNotBlank() || selectedImagePath.isNotBlank()) && (!sending || waitingForSchedule), onClick = {
+                        OutlinedTextField(draft, { draft = it }, enabled = !profileBlocked, modifier = Modifier.weight(1f), placeholder = { Text(when { bangla -> "একটি মেসেজ লিখুন..."; hindi -> "संदेश लिखें..."; else -> "Write a message..." }) }, maxLines = 4)
+                        Button(enabled = !profileBlocked && (draft.isNotBlank() || selectedImagePath.isNotBlank()), onClick = {
+                            if (friend.profilePending) return@Button
                             val text = draft.trim()
                             val imagePath = selectedImagePath
                             draft = ""
@@ -990,7 +1214,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
             }
         }
     }
-    if (showFriendInfo) FriendInfoDialog(friend, onTimeZoneChange = onFriendTimeZoneChange, onDismiss = { showFriendInfo = false })
+    if (showFriendInfo) FriendInfoDialog(friend, store.userAge(), onTimeZoneChange = onFriendTimeZoneChange, onDismiss = { showFriendInfo = false })
     if (showUserInfo) ConversationProfileDialog(
         friend = friend,
         memories = store.loadUserMemories(friend.id),
@@ -1001,7 +1225,7 @@ private fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, lan
 }
 
 @Composable
-private fun FriendInfoDialog(friend: Friend, onTimeZoneChange: (String) -> Unit, onDismiss: () -> Unit) {
+private fun FriendInfoDialog(friend: Friend, userAge: String, onTimeZoneChange: (String) -> Unit, onDismiss: () -> Unit) {
     val start = LocalTime.of(friend.busyStartHour.coerceIn(0, 23), 0)
     val end = start.plusHours(friend.busyDurationHours.coerceIn(4, 8).toLong())
     AlertDialog(
@@ -1018,7 +1242,7 @@ private fun FriendInfoDialog(friend: Friend, onTimeZoneChange: (String) -> Unit,
                     "Weight" to friend.weight, "Facial features" to friend.facialFeatures, "Body features" to friend.bodyFeatures,
                     "Daily busy hours" to "${start.format(DateTimeFormatter.ofPattern("h:mm a"))}–${end.format(DateTimeFormatter.ofPattern("h:mm a"))} (${friend.timeZoneId})",
                     "Friendship" to "${friendshipLevel(friend.friendshipScore)} (${friend.friendshipScore}/100)",
-                    "Love" to if (friend.friendshipScore > 70) "${loveLevel(friend.loveScore)} (${friend.loveScore}/100)" else "Locked"
+                    "Love" to if (!romanceAllowed(userAge, friend.age)) "Off (only when you and this friend are both 18 or older)" else if (friend.friendshipScore > 70) "${loveLevel(friend.loveScore)} (${friend.loveScore}/100)" else "Locked"
                 ).forEach { (label, value) ->
                     if (value.isNotBlank()) Text("$label: $value", style = MaterialTheme.typography.bodyMedium)
                 }
@@ -1198,6 +1422,48 @@ private fun storeChatImage(context: Context, uri: Uri): String {
 }
 
 @Composable
+private fun ProfileCreationNotice(language: AppLanguage, generating: Boolean, failure: ProfileFailure?, onRetry: () -> Unit, onContinue: () -> Unit) {
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    val recordedFailure = failure
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (generating || recordedFailure == null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(when {
+                        bangla -> "প্রোফাইল তৈরি হচ্ছে…"
+                        hindi -> "प्रोफ़ाइल बनाई जा रही है…"
+                        else -> "Creating their profile…"
+                    })
+                }
+            } else {
+                Text(recordedFailure.message, color = MaterialTheme.colorScheme.error)
+                recordedFailure.detail?.let { detail ->
+                    Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(
+                    when {
+                        bangla -> "মেসেজ পাঠানোর আগে আবার চেষ্টা করুন, অথবা সাধারণ প্রোফাইল নিয়ে এগিয়ে যান।"
+                        hindi -> "संदेश भेजने से पहले फिर कोशिश करें, या साधारण प्रोफ़ाइल के साथ आगे बढ़ें।"
+                        else -> "Retry before sending, or continue with a basic profile."
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onRetry) {
+                        Text(when { bangla -> "আবার চেষ্টা করুন"; hindi -> "फिर कोशिश करें"; else -> "Retry" })
+                    }
+                    OutlinedButton(onClick = onContinue) {
+                        Text(when { bangla -> "সাধারণ প্রোফাইল"; hindi -> "साधारण प्रोफ़ाइल"; else -> "Use basic profile" })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ThinkingBubble(friendName: String, bangla: Boolean, hindi: Boolean) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(18.dp)) {
         Text(when { bangla -> "$friendName ভাবছে..."; hindi -> "$friendName सोच रहा है..."; else -> "$friendName is thinking..." }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyMedium)
@@ -1205,13 +1471,30 @@ private fun ThinkingBubble(friendName: String, bangla: Boolean, hindi: Boolean) 
 }
 
 @Composable
-private fun RelationshipMeters(friend: Friend, language: AppLanguage) {
-    val loveUnlocked = friend.friendshipScore > 70
+private fun RelationshipMeters(friend: Friend, language: AppLanguage, userAge: String) {
+    val romance = romanceAllowed(userAge, friend.age)
+    val loveUnlocked = romance && friend.friendshipScore > 70
     val hindi = language == AppLanguage.HINDI
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(when { language == AppLanguage.BANGLA -> "বন্ধুত্ব: ${friendshipLevel(friend.friendshipScore)} (${friend.friendshipScore}/100)"; hindi -> "दोस्ती: ${friendshipLevel(friend.friendshipScore)} (${friend.friendshipScore}/100)"; else -> "Friendship: ${friendshipLevel(friend.friendshipScore)} (${friend.friendshipScore}/100)" }, style = MaterialTheme.typography.labelMedium)
         LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.fillMaxWidth())
-        Text(if (loveUnlocked) "${if (hindi) "प्यार" else "Love"}: ${loveLevel(friend.loveScore)} (${friend.loveScore}/100)" else when { language == AppLanguage.BANGLA -> "ভালোবাসা: বন্ধ (বন্ধুত্ব ৭১-এর বেশি হলে খুলবে)"; hindi -> "प्यार: बंद (दोस्ती 70 से ऊपर होने पर खुलेगा)"; else -> "Love: locked (unlocks above 70 friendship)" }, style = MaterialTheme.typography.labelMedium)
+        Text(when {
+            !romance -> when (language) {
+                AppLanguage.BANGLA -> "ভালোবাসা: বন্ধ (তুমি এবং এই বন্ধু দুজনেই ১৮ বা তার বেশি হলে তবেই)"
+                AppLanguage.HINDI -> "प्यार: बंद (सिर्फ़ तब, जब आप और यह दोस्त दोनों 18 या उससे बड़े हों)"
+                AppLanguage.ENGLISH -> "Love: off (only if you and this friend are both 18 or older)"
+            }
+            loveUnlocked -> when (language) {
+                AppLanguage.BANGLA -> "ভালোবাসা: ${loveLevel(friend.loveScore)} (${friend.loveScore}/100)"
+                AppLanguage.HINDI -> "प्यार: ${loveLevel(friend.loveScore)} (${friend.loveScore}/100)"
+                AppLanguage.ENGLISH -> "Love: ${loveLevel(friend.loveScore)} (${friend.loveScore}/100)"
+            }
+            else -> when (language) {
+                AppLanguage.BANGLA -> "ভালোবাসা: বন্ধ (বন্ধুত্ব ৭১-এর বেশি হলে খুলবে)"
+                AppLanguage.HINDI -> "प्यार: बंद (दोस्ती 70 से ऊपर होने पर खुलेगा)"
+                AppLanguage.ENGLISH -> "Love: locked (unlocks above 70 friendship)"
+            }
+        }, style = MaterialTheme.typography.labelMedium)
         if (loveUnlocked) LinearProgressIndicator(progress = { friend.loveScore / 100f }, modifier = Modifier.fillMaxWidth())
     }
 }

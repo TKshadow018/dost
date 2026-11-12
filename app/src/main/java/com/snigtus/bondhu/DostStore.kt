@@ -28,6 +28,19 @@ class DostStore(context: Context) {
     fun hasUserProfile(): Boolean = preferences.getBoolean("user_profile_saved", false) || runCatching {
         JSONArray(preferences.getString("friends", "[]")).length() > 0
     }.getOrDefault(false)
+
+    /** Saved profile whose age meets [MINIMUM_ACCOUNT_AGE]. Friends alone do not count. */
+    fun hasEligibleAccount(): Boolean =
+        preferences.getBoolean("user_profile_saved", false) && accountAgeResult(userAge()) == AccountAgeResult.VALID
+
+    /** Writes love scores back as 0 when romance is locked for this user or friend. */
+    fun clearLockedLoveScores() {
+        val age = userAge()
+        val friends = loadFriends()
+        if (friends.any { !romanceAllowed(age, it.age) && it.loveScore != 0 }) {
+            saveFriends(friends)
+        }
+    }
     fun saveUserProfile(name: String, email: String, age: String, gender: String) {
         preferences.edit().putBoolean("user_profile_saved", true).putString("user_name", name).putString("user_email", email).putString("user_age", age).putString("user_gender", gender).apply()
     }
@@ -93,11 +106,22 @@ class DostStore(context: Context) {
         val json = JSONArray(preferences.getString("friends", "[]"))
         MutableList(json.length()) { index ->
             val item = json.getJSONObject(index)
-            Friend(item.getString("id"), item.getString("name"), item.getString("age"), item.getString("gender"), item.optString("personality", "Friendly and curious"), item.optString("interests"), item.optString("memories"), item.optString("conversationStyle", "Warm, natural, and concise"), item.optString("family"), item.optString("familyMembers"), item.optString("familyActivities"), item.optString("financialCondition"), item.optString("address"), item.optString("height"), item.optString("weight"), item.optString("facialFeatures"), item.optString("bodyFeatures"), item.optInt("friendshipScore", 0).coerceIn(0, 100), item.optInt("loveScore", 0).coerceIn(0, 100), item.optString("mood"), item.optString("photoUri"), item.optInt("busyStartHour", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 8 else 9), item.optInt("busyDurationHours", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 6 else 8), item.optString("busyReason", if ((item.optString("age").toIntOrNull() ?: 18) < 18) "School" else "Work"), validZoneId(item.optString("timeZoneId", ZoneId.systemDefault().id)).id, item.optString("catalogId"))
+            Friend(item.getString("id"), item.getString("name"), item.getString("age"), item.getString("gender"), item.optString("personality", "Friendly and curious"), item.optString("interests"), item.optString("memories"), item.optString("conversationStyle", "Warm, natural, and concise"), item.optString("family"), item.optString("familyMembers"), item.optString("familyActivities"), item.optString("financialCondition"), item.optString("address"), item.optString("height"), item.optString("weight"), item.optString("facialFeatures"), item.optString("bodyFeatures"), item.optInt("friendshipScore", 0).coerceIn(0, 100), item.optInt("loveScore", 0).coerceIn(0, 100), item.optString("mood"), item.optString("photoUri"), item.optInt("busyStartHour", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 8 else 9), item.optInt("busyDurationHours", if ((item.optString("age").toIntOrNull() ?: 18) < 18) 6 else 8), item.optString("busyReason", if ((item.optString("age").toIntOrNull() ?: 18) < 18) "School" else "Work"), validZoneId(item.optString("timeZoneId", ZoneId.systemDefault().id)).id, item.optString("catalogId"), item.optBoolean("profilePending", false))
         }
     }.getOrDefault(mutableListOf())
 
-    fun saveFriends(friends: List<Friend>) {
+    fun updateFriend(friendId: String, transform: (Friend) -> Friend): Friend? = synchronized(preferences) {
+        val friends = loadFriends()
+        val index = friends.indexOfFirst { it.id == friendId }
+        if (index < 0) return null
+        val updated = transform(friends[index])
+        friends[index] = updated
+        saveFriends(friends)
+        updated
+    }
+
+    fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
+        val userAge = userAge()
         val json = JSONArray()
         friends.forEach { friend ->
             json.put(JSONObject().apply {
@@ -106,13 +130,14 @@ class DostStore(context: Context) {
                 put("family", friend.family); put("familyMembers", friend.familyMembers); put("familyActivities", friend.familyActivities)
                 put("financialCondition", friend.financialCondition); put("address", friend.address); put("height", friend.height); put("weight", friend.weight)
                 put("facialFeatures", friend.facialFeatures); put("bodyFeatures", friend.bodyFeatures)
-                put("friendshipScore", friend.friendshipScore); put("loveScore", friend.loveScore)
+                put("friendshipScore", friend.friendshipScore); put("loveScore", friend.withLoveMeterGated(userAge).loveScore)
                 put("mood", friend.mood)
                 put("photoUri", friend.photoUri)
                 put("busyStartHour", friend.busyStartHour); put("busyDurationHours", friend.busyDurationHours)
                 put("busyReason", friend.busyReason)
                 put("timeZoneId", friend.timeZoneId)
                 put("catalogId", friend.catalogId)
+                put("profilePending", friend.profilePending)
             })
         }
         preferences.edit().putString("friends", json.toString()).apply()
@@ -263,13 +288,16 @@ class DostStore(context: Context) {
         preferences.edit().putString("user_memories_$friendId", json.toString()).apply()
     }
 
+    fun updateUserMemory(friendId: String, original: UserMemory, updated: UserMemory) {
+        saveUserMemories(friendId, replaceUserMemory(loadUserMemories(friendId), original, updated))
+    }
+
+    fun deleteUserMemory(friendId: String, memory: UserMemory) {
+        saveUserMemories(friendId, withoutUserMemory(loadUserMemories(friendId), memory))
+    }
+
     fun addUserMemories(friendId: String, newMemories: List<UserMemory>) {
-        val memories = loadUserMemories(friendId)
-        newMemories.forEach { memory ->
-            val exists = memories.any { it.category.equals(memory.category, ignoreCase = true) && it.fact.equals(memory.fact, ignoreCase = true) }
-            if (!exists && memory.fact.isNotBlank()) memories.add(memory)
-        }
-        saveUserMemories(friendId, memories.takeLast(1000))
+        saveUserMemories(friendId, mergeUserMemories(loadUserMemories(friendId), newMemories))
     }
 
     fun language(): AppLanguage = when (preferences.getString("language", "bn")) {

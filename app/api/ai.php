@@ -1,5 +1,8 @@
 <?php
 
+require_once __DIR__ . '/app_credential.php';
+require_once __DIR__ . '/archive_store.php';
+
 header('Content-Type: application/json; charset=utf-8');
 
 function respond($status, $payload)
@@ -9,14 +12,6 @@ function respond($status, $payload)
     exit;
 }
 
-function conversation_storage_base_directory()
-{
-    $configured = getenv('DOST_CONVERSATION_STORAGE_DIR');
-    return is_string($configured) && trim($configured) !== ''
-        ? rtrim($configured, DIRECTORY_SEPARATOR)
-        : dirname(__DIR__) . DIRECTORY_SEPARATOR . 'log';
-}
-
 function write_ai_error_log($event, $details = array())
 {
     $entry = array_merge(array(
@@ -24,10 +19,8 @@ function write_ai_error_log($event, $details = array())
         'event' => $event
     ), $details);
     $encoded = json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-    $directory = conversation_storage_base_directory();
-    if (is_string($encoded)
-        && (is_dir($directory) || @mkdir($directory, 0700, true) || is_dir($directory))
-    ) {
+    $directory = dost_prepare_storage_directory(conversation_storage_base_directory());
+    if ($directory !== false && is_string($encoded)) {
         $path = $directory . DIRECTORY_SEPARATOR . 'ai-errors.jsonl';
         $handle = @fopen($path, 'ab');
         if ($handle !== false) {
@@ -62,11 +55,6 @@ function bounded_log_text($value, $maximumLength = 500, $secret = '')
     return substr(is_string($value) ? $value : '', 0, $maximumLength);
 }
 
-function valid_uuid($value)
-{
-    return is_string($value) && preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i', $value) === 1;
-}
-
 function limit_to_single_question($text)
 {
     $marks = array('?', '？', '؟');
@@ -91,207 +79,6 @@ function limit_to_single_question($text)
         }
     }
     return $secondPosition === false ? $text : rtrim(substr($text, 0, $start));
-}
-
-function safe_log_path_segment($value, $fallback)
-{
-    if (!is_string($value)) {
-        return $fallback;
-    }
-    $segment = preg_replace('/[^\p{L}\p{M}\p{N}._-]+/u', '_', trim($value));
-    if (!is_string($segment)) {
-        $segment = preg_replace('/[^A-Za-z0-9._-]+/', '_', trim($value));
-    }
-    $segment = preg_replace('/^(.{1,64}).*$/us', '$1', $segment);
-    $segment = trim($segment, " ._-");
-    return $segment === '' ? $fallback : $segment;
-}
-
-function conversation_storage_directory($userName, $clientIp, $friendName, $sessionId)
-{
-    $baseDirectory = conversation_storage_base_directory();
-    $userSegment = safe_log_path_segment($userName, 'unknown-user');
-    $ipSegment = safe_log_path_segment(str_replace(':', '-', $clientIp), 'unknown-ip');
-    $friendSegment = safe_log_path_segment($friendName, 'unknown-friend');
-    $directory = $baseDirectory . DIRECTORY_SEPARATOR . $userSegment . '_' . $ipSegment
-        . DIRECTORY_SEPARATOR . $friendSegment . DIRECTORY_SEPARATOR . strtolower($sessionId);
-    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
-        return false;
-    }
-    @chmod($directory, 0700);
-    return $directory;
-}
-
-function save_conversation_image($directory, $messageId, $imageData, $imageMime)
-{
-    if (!valid_uuid($messageId) || !is_string($imageData) || strlen($imageData) > 500000
-        || !in_array($imageMime, array('image/jpeg', 'image/png', 'image/webp'), true)
-    ) {
-        return false;
-    }
-    $bytes = base64_decode($imageData, true);
-    if (!is_string($bytes) || strlen($bytes) > 375000) {
-        return false;
-    }
-    $detectedMime = detect_image_mime($bytes);
-    if ($detectedMime !== $imageMime) {
-        return false;
-    }
-    $extension = $imageMime === 'image/jpeg' ? 'jpg' : substr($imageMime, 6);
-    $filename = strtolower($messageId) . '.' . $extension;
-    $path = $directory . DIRECTORY_SEPARATOR . $filename;
-    if (@file_put_contents($path, $bytes, LOCK_EX) !== strlen($bytes)) {
-        return false;
-    }
-    @chmod($path, 0600);
-    return $filename;
-}
-
-function detect_image_mime($bytes)
-{
-    if (class_exists('finfo')) {
-        return (new finfo(FILEINFO_MIME_TYPE))->buffer($bytes);
-    }
-    if (strncmp($bytes, "\x89PNG\r\n\x1a\n", 8) === 0) {
-        return 'image/png';
-    }
-    if (strncmp($bytes, "\xff\xd8\xff", 3) === 0) {
-        return 'image/jpeg';
-    }
-    if (strlen($bytes) >= 12 && substr($bytes, 0, 4) === 'RIFF' && substr($bytes, 8, 4) === 'WEBP') {
-        return 'image/webp';
-    }
-    return false;
-}
-
-function append_conversation_events($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, $events)
-{
-    if (!valid_uuid($installationId) || !valid_uuid($friendId) || !valid_uuid($sessionId) || !is_array($events)) {
-        return false;
-    }
-    foreach ($events as $event) {
-        if (!is_array($event) || !valid_uuid(isset($event['message_id']) ? $event['message_id'] : null)
-            || !isset($event['role'], $event['content'], $event['timestamp_ms'])
-            || !in_array($event['role'], array('user', 'assistant'), true)
-            || !is_string($event['content']) || strlen($event['content']) > 25000
-            || !is_numeric($event['timestamp_ms'])
-            || (isset($event['model']) && (!is_string($event['model']) || strlen($event['model']) > 160))
-            || (isset($event['image_data']) && (!isset($event['image_mime']) || !is_string($event['image_mime'])))
-        ) {
-            return false;
-        }
-    }
-
-    $directory = conversation_storage_directory($userName, $clientIp, $friendName, $sessionId);
-    if ($directory === false) {
-        return false;
-    }
-    $sessionLock = @fopen($directory . DIRECTORY_SEPARATOR . '.archive.lock', 'c+');
-    if ($sessionLock === false || !flock($sessionLock, LOCK_EX)) {
-        if (is_resource($sessionLock)) {
-            fclose($sessionLock);
-        }
-        return false;
-    }
-    @chmod($directory . DIRECTORY_SEPARATOR . '.archive.lock', 0600);
-
-    $existingFiles = glob($directory . DIRECTORY_SEPARATOR . '*.jsonl');
-    if (is_array($existingFiles) && count($existingFiles) > 0) {
-        sort($existingFiles, SORT_STRING);
-        $path = $existingFiles[0];
-    } else {
-        $firstTimestamp = null;
-        foreach ($events as $event) {
-            $timestamp = (int) $event['timestamp_ms'];
-            if ($timestamp > 0 && ($firstTimestamp === null || $timestamp < $firstTimestamp)) {
-                $firstTimestamp = $timestamp;
-            }
-        }
-        $timestampSeconds = $firstTimestamp === null ? time() : (int) floor($firstTimestamp / 1000);
-        $filename = gmdate('Y-m-d_H-i-s', $timestampSeconds) . '.jsonl';
-        $path = $directory . DIRECTORY_SEPARATOR . $filename;
-    }
-    $handle = @fopen($path, 'c+');
-    if ($handle === false || !flock($handle, LOCK_EX)) {
-        flock($sessionLock, LOCK_UN);
-        fclose($sessionLock);
-        if (is_resource($handle)) {
-            fclose($handle);
-        }
-        return false;
-    }
-    flock($sessionLock, LOCK_UN);
-    fclose($sessionLock);
-
-    $knownIds = array();
-    rewind($handle);
-    while (($line = fgets($handle)) !== false) {
-        $saved = json_decode($line, true);
-        if (is_array($saved) && isset($saved['message_id'])) {
-            $knownIds[$saved['message_id']] = true;
-        }
-    }
-
-    $newLines = array();
-    foreach ($events as $event) {
-        if (isset($knownIds[$event['message_id']])) {
-            continue;
-        }
-        $record = array(
-            'message_id' => $event['message_id'],
-            'role' => $event['role'],
-            'content' => $event['content'],
-            'timestamp_ms' => (int) $event['timestamp_ms'],
-            'saved_at' => gmdate(DATE_ATOM)
-        );
-        if (isset($event['model']) && is_string($event['model']) && $event['model'] !== '') {
-            $record['model'] = $event['model'];
-        }
-        if (isset($event['image_data'])) {
-            $imageMime = isset($event['image_mime']) ? $event['image_mime'] : '';
-            $imageFilename = save_conversation_image($directory, $event['message_id'], $event['image_data'], $imageMime);
-            if ($imageFilename === false) {
-                flock($handle, LOCK_UN);
-                fclose($handle);
-                return false;
-            }
-            $record['image_file'] = $imageFilename;
-        }
-        $encoded = json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        if (!is_string($encoded)) {
-            flock($handle, LOCK_UN);
-            fclose($handle);
-            return false;
-        }
-        $newLines[] = $encoded . "\n";
-        $knownIds[$event['message_id']] = true;
-    }
-    if (count($newLines) === 0) {
-        flock($handle, LOCK_UN);
-        fclose($handle);
-        return true;
-    }
-    fseek($handle, 0, SEEK_END);
-    $savedSuccessfully = true;
-    foreach ($newLines as $line) {
-        if (fwrite($handle, $line) !== strlen($line)) {
-            $savedSuccessfully = false;
-            break;
-        }
-    }
-    $savedSuccessfully = fflush($handle) && $savedSuccessfully;
-    if (function_exists('fsync')) {
-        $savedSuccessfully = fsync($handle) && $savedSuccessfully;
-    }
-    @chmod($path, 0600);
-    flock($handle, LOCK_UN);
-    fclose($handle);
-    return $savedSuccessfully;
-}
-
-function append_conversation_event($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, $event)
-{
-    return append_conversation_events($installationId, $userName, $clientIp, $friendName, $friendId, $sessionId, array($event));
 }
 
 function enforce_rate_limit($bucket, $maximum)
@@ -396,6 +183,22 @@ if (!is_string($serverApiKey) || trim($serverApiKey) === '') {
     $serverApiKey = isset($config['openrouter_api_key']) ? $config['openrouter_api_key'] : '';
 }
 $usesClientKey = $clientApiKey !== '';
+$credentialPresented = isset($_SERVER['HTTP_X_DOST_APP_CREDENTIAL']) && is_string($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+    ? trim($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+    : '';
+$credentialInstall = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) && is_string($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+    ? trim($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+    : '';
+$serverKeyDecision = dost_server_key_decision($usesClientKey, $credentialPresented, $credentialInstall, time(), $config);
+if ($serverKeyDecision !== null) {
+    if ($serverKeyDecision['status'] === 503) {
+        write_ai_error_log('app_credential_not_configured', array(
+            'model' => bounded_log_text(isset($request['model']) && is_string($request['model']) ? $request['model'] : '', 160, $clientApiKey),
+            'key_source' => 'server'
+        ));
+    }
+    respond($serverKeyDecision['status'], array('error' => $serverKeyDecision['error']));
+}
 $apiKey = $usesClientKey ? $clientApiKey : $serverApiKey;
 if (!is_string($apiKey) || trim($apiKey) === '') {
     write_ai_error_log('missing_api_key', array('model' => bounded_log_text($request['model'] ?? '')));

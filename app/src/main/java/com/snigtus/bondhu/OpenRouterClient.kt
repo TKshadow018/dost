@@ -10,6 +10,8 @@ import java.net.HttpURLConnection
 import java.io.IOException
 import java.net.URL
 import java.time.ZoneId
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -41,13 +43,18 @@ class OpenRouterClient {
             "mistralai/mistral-medium-3", "mistralai/mistral-small-3.1-24b-instruct",
             "x-ai/grok-3-mini", "perplexity/sonar", "cohere/command-a"
         )).distinct()
-        private const val MAX_MEMORY_ITEMS = 200
-        private const val MAX_SUMMARY_MESSAGES = 100
-        private const val MAX_SESSION_SUMMARY_ITEMS = 7
+        private const val MAX_MEMORY_ITEMS = MAX_INJECTED_USER_MEMORIES
+        internal const val MODEL_REPLY_LOG_LIMIT = 200
+        internal const val MAX_SUMMARY_MESSAGES = 100
+        internal const val MAX_SESSION_SUMMARY_ITEMS = 7
+
+        /** Messages fed to the session-summary prompt. The injection cap for stored summaries stays separate. */
+        internal fun summaryMessages(messages: List<ChatMessage>): List<ChatMessage> =
+            messages.takeLast(MAX_SUMMARY_MESSAGES)
     }
 
-    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = ""): AiReply = withContext(Dispatchers.IO) {
-        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction)
+    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = ""): AiReply = withContext(Dispatchers.IO) {
+        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction, userAge)
     }
 
     suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
@@ -59,9 +66,6 @@ class OpenRouterClient {
     }
 
     fun logConversationMessage(installationId: String, userName: String, friendId: String, friendName: String, message: ChatMessage): Boolean {
-        val connection = openConnection("").apply {
-            setRequestProperty("X-Dost-Install-ID", installationId)
-        }
         val body = JSONObject().apply {
             put("operation", "log_message")
             put("user_name", userName)
@@ -79,7 +83,7 @@ class OpenRouterClient {
                 put("image_data", Base64.encodeToString(imageFile.readBytes(), Base64.NO_WRAP))
             }
         }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post("", installationId, null, null, body.toString().toByteArray())
         val statusCode = connection.responseCode
         val responseStream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
         responseStream?.bufferedReader()?.use { it.readText() }
@@ -88,7 +92,7 @@ class OpenRouterClient {
         return false
     }
 
-    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = ""): AiReply {
+    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = ""): AiReply {
         val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
         val connection = openConnection(apiKey, installationId, friend.id, resolvedSessionId)
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
@@ -131,7 +135,7 @@ class OpenRouterClient {
             Extract separate items: 
             1) User lives in Sylhet. 2) User lives in a small apartment. 3) User teaches high school math. 4) User loves children. 5) User drinks green tea. 6) User drinks green tea in the mornings. 7) User has a younger brother named Rafi. 8) Rafi is in medical school. 9) Rafi goes to school in Dhaka. 10) Rafi is struggling with his medical studies.
             
-            PRECISION & CONFLICT RESOLUTION: Preserve exact quantities, dates, specific names, and constraints. Preserve negation (e.g., "User does not eat pork") and uncertainty (e.g., "User is unsure if they will quit their job"). If the user updates a detail (e.g., moving to a new city), explicitly format it as an update so it overrides older context. Never infer, invent, or guess details.
+            PRECISION & CONFLICT RESOLUTION: Preserve exact quantities, dates, specific names, and constraints. Preserve negation (e.g., "User does not eat pork") and uncertainty (e.g., "User is unsure if they will quit their job"). If the user updates a detail (e.g., moving to a new city), set replaces to the previous fact text so that stored fact is replaced. Leave replaces empty for a new fact. Never infer, invent, or guess details.
             
             SECURITY: Never store passwords, API keys, or authentication secrets. Store ordinary sensitive details (like health or finances) ONLY if explicitly volunteered by the user. Return an empty array only if the user explicitly provided zero new personal data in the current turn.
         """.trimIndent()
@@ -140,7 +144,7 @@ class OpenRouterClient {
             Full fictional character profile:
             $profileContext
             Current date and time for the user: $userDateTime (time zone: $userTimeZoneId). Current date and time for you: $friendDateTime (time zone: ${friend.timeZoneId}). Use the relevant clock for relative dates and schedules, distinguish the user's time from yours, and do not imply access to live events beyond this context.
-            Relationship state: friendship ${friendshipScore.coerceIn(0, 100)}/100 (${friendshipLevel(friendshipScore)}). Love meter: ${if (friendshipScore > 70) "$loveScore/100 (${loveLevel(loveScore)})" else "locked until friendship is above 70"}.
+            ${relationshipStatePrompt(friendshipScore, loveScore, userAge, friend.age)}
             Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Stay in character, never claim to be a real person, and answer naturally.
             The following are facts the user explicitly shared in earlier conversations. Use them only when relevant:
             $memoryContext
@@ -149,13 +153,13 @@ class OpenRouterClient {
             $sessionSummaryContext
 
             Return only valid JSON with this exact shape:
-            {"reply":"your natural response","memories":[{"category":"family|relatives|address|contact|profile|preferences|interests|goals|routines|important_dates|relationships|health|work_or_study|education|finances|travel|other","fact":"one explicitly stated personal fact"}],"follow_up_question":"one optional friendly question, or an empty string","follow_up_delay_minutes":null,"friendship_impact":0,"love_impact":0}
+            {"reply":"your natural response","memories":[{"category":"family|relatives|address|contact|profile|preferences|interests|goals|routines|important_dates|relationships|health|work_or_study|education|finances|travel|other","fact":"one explicitly stated personal fact","replaces":"previous fact this corrects, or an empty string"}],"follow_up_question":"one optional friendly question, or an empty string","follow_up_delay_minutes":null,"friendship_impact":0,"love_impact":0}
             Never include internal safety, moderation, or classifier metadata (for example, "User Safety: safe") in reply or follow_up_question.
             Extract every explicit personal detail the user gives in their latest messages, including seemingly small details and details about family members or other people they mention. For example, save separate facts for having three brothers, a father's workplace, a mother's age, and an address. Never infer or invent facts. Do not store passwords, API keys, security codes, or other authentication secrets. Store ordinary sensitive personal details only because the user explicitly gave them, and use them discreetly. Use an empty memories array when there is nothing personal to save.
-            Before replying, do a detail pass over the user's latest messages. Save one concise fact per memory item; preserve exact names, who each person is to the user, quantities, dates, time periods, locations, preferences, reasons, plans, constraints, and whether something is current, past, or only intended. Keep facts about the user distinct from facts about relatives, friends, coworkers, and other people. Preserve meaningful negation and uncertainty instead of turning it into certainty. If the user corrects a prior detail, save the correction explicitly without erasing the historical detail. Do not merge unrelated facts or infer missing links.
+            Before replying, do a detail pass over the user's latest messages. Save one concise fact per memory item; preserve exact names, who each person is to the user, quantities, dates, time periods, locations, preferences, reasons, plans, constraints, and whether something is current, past, or only intended. Keep facts about the user distinct from facts about relatives, friends, coworkers, and other people. Preserve meaningful negation and uncertainty instead of turning it into certainty. If the user corrects a prior detail, set replaces to the old fact text so the stored fact is replaced instead of keeping both. Do not merge unrelated facts or infer missing links.
             The combined reply and follow_up_question may contain at most one question total. Never ask stacked questions or put one question in each field. $questionGuidance Do not interrogate, repeat a question already answered, or ask for secrets. Make it playful or gently funny when it fits, while remaining respectful. If the user seems uncomfortable or asks not to share, ask no question.
             Set follow_up_delay_minutes to an integer from 1 to 1440 only when the user explicitly asks for a future check-in after a duration; otherwise set it to null. When a delay is requested, do not ask an immediate follow-up question.
-            Rate the latest conversation's relationship impact. friendship_impact must be an integer from -1 to 2. love_impact must be an integer from -1 to 2 only when friendship is above 70 and the conversation is clearly flirty or romantic; otherwise use 0. Apply friendship impact to warmth, trust, respectful openness, and shared conversation. A private question from a complete stranger should be met with a gentle boundary such as "Whoa, we just met" rather than a direct answer, and should not earn positive points. Do not unlock private or intimate talk early. Personal talk becomes more open around friendship 41+, private talk around 61+, and romantic/intimate-but-non-explicit talk only when friendship is above 70 and love is above 30. Never generate explicit sexual content.
+            ${relationshipImpactPrompt(userAge, friend.age)}
         """.trimIndent().let { prompt ->
             if (ephemeralInstruction.isBlank()) prompt else prompt + "\n\n" + ephemeralInstruction.trim()
         }
@@ -178,19 +182,32 @@ class OpenRouterClient {
             }) }
         }
         val body = JSONObject().apply { put("operation", "chat_reply"); put("user_name", userName); put("friend_name", friend.name); put("model", model); put("messages", messages); put("temperature", 0.8) }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post(apiKey, installationId, friend.id, resolvedSessionId, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-        return parseReply(raw, connection.getHeaderField("X-Dost-Message-ID"))
+        val parsed = parseReply(raw, connection.getHeaderField("X-Dost-Message-ID"))
+        if (parsed.parseFailed && BuildConfig.DEBUG) {
+            android.util.Log.w("OpenRouterClient", "Unparseable model reply: ${modelReplyDebugSnippet(raw)}")
+        }
+        return applyLoveImpactGate(parsed, userAge, friend.age)
+    }
+
+    internal fun modelReplyDebugSnippet(raw: String): String = raw.take(MODEL_REPLY_LOG_LIMIT)
+
+    internal fun parseModelReply(raw: String, serverMessageId: String? = null): AiReply = parseReply(raw, serverMessageId)
+
+    internal fun isPlainModelReply(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("```")) return false
+        return '{' !in trimmed && '}' !in trimmed
     }
 
     private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, language: AppLanguage): FriendProfile {
-        val connection = openConnection(apiKey)
         val system = """
             Create a complete fictional friend character for a social chat app. The user provided only name, age, and gender. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
             Return only valid JSON with these exact string fields: personality, interests, family, familyMembers, familyActivities, financialCondition, address, height, weight, facialFeatures, bodyFeatures, conversationStyle.
-            Include family, what the family members do, personality, interests, a modest non-stereotyping financial description, a fictional Bangladesh address, height, weight, facial features, body features, and conversation style. Keep details friendly and suitable for ongoing conversation. Do not create secrets, criminal history, medical diagnoses, or sexual content.
+            Include family, what the family members do, personality, interests, a modest non-stereotyping financial description, a fictional Bangladesh address, height, weight, facial features, body features, and conversation style. Keep details friendly and suitable for ongoing conversation. Do not create secrets, criminal history, medical diagnoses, or sexual content.${profileRomanceClause(age)}
         """.trimIndent()
         val user = "Create the profile for name=$name, age=$age, gender=$gender."
         val messages = JSONArray().apply {
@@ -198,7 +215,7 @@ class OpenRouterClient {
             put(JSONObject().apply { put("role", "user"); put("content", user) })
         }
         val body = JSONObject().apply { put("model", model); put("messages", messages); put("temperature", 0.9) }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post(apiKey, null, null, null, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Profile request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -212,8 +229,7 @@ class OpenRouterClient {
     }
 
     private fun requestSessionSummary(model: String, apiKey: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String {
-        val connection = openConnection(apiKey)
-        val transcript = messages.takeLast(MAX_SESSION_SUMMARY_ITEMS).joinToString("\n") { message ->
+        val transcript = summaryMessages(messages).joinToString("\n") { message ->
             "${if (message.role == "user") "User" else friendName}: ${message.content}"
         }
         val system = "Summarize this complete conversation in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Preserve important topics, decisions, emotions, plans, and explicitly stated personal details. Do not infer or invent facts. Return only the summary."
@@ -222,14 +238,15 @@ class OpenRouterClient {
             put(JSONObject().apply { put("role", "user"); put("content", transcript) })
         }
         val body = JSONObject().apply { put("model", model); put("messages", requestMessages); put("temperature", 0.2) }
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        val connection = post(apiKey, null, null, null, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Session summary request failed"))
         return JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
     }
 
     private fun parseReply(raw: String, serverMessageId: String?): AiReply {
-        val cleaned = removeSafetyMetadata(raw).removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val visible = removeSafetyMetadata(raw).trim()
+        val cleaned = visible.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         return runCatching {
             val json = JSONObject(cleaned)
             val memories = json.optJSONArray("memories") ?: JSONArray()
@@ -238,7 +255,7 @@ class OpenRouterClient {
                 val item = memories.optJSONObject(index) ?: continue
                 val category = item.optString("category", "other").trim().lowercase()
                 val fact = item.optString("fact").trim()
-                if (fact.isNotBlank()) extracted.add(UserMemory(category, fact))
+                if (fact.isNotBlank()) extracted.add(UserMemory(category, fact, item.optString("replaces").trim()))
             }
             AiReply(
                 text = removeSafetyMetadata(json.optString("reply", cleaned)),
@@ -249,7 +266,13 @@ class OpenRouterClient {
                 loveImpact = json.optInt("love_impact", 0).coerceIn(-1, 2),
                 serverMessageId = serverMessageId
             )
-        }.getOrElse { AiReply(removeSafetyMetadata(raw), serverMessageId = serverMessageId) }
+        }.getOrElse {
+            if (isPlainModelReply(visible)) {
+                AiReply(text = visible, serverMessageId = serverMessageId)
+            } else {
+                AiReply(text = "", memories = emptyList(), friendshipImpact = 0, loveImpact = 0, parseFailed = true, serverMessageId = serverMessageId)
+            }
+        }
     }
 
     private fun removeSafetyMetadata(text: String): String = text
@@ -258,7 +281,7 @@ class OpenRouterClient {
         .replace(Regex("\\n{3,}"), "\n\n")
         .trim()
 
-    private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
+    private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null, nowEpochSeconds: Long = System.currentTimeMillis() / 1000): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
         requestMethod = "POST"
         doOutput = true
         connectTimeout = 15_000
@@ -266,8 +289,51 @@ class OpenRouterClient {
         setRequestProperty("Content-Type", "application/json")
         setRequestProperty("Accept", "application/json")
         if (apiKey.isNotBlank()) setRequestProperty("X-OpenRouter-Key", apiKey.trim())
-        if (installationId != null) setRequestProperty("X-Dost-Install-ID", installationId)
+        val installHeader = installationId?.trim().orEmpty()
+        if (installationId != null) setRequestProperty("X-Dost-Install-ID", installHeader)
         if (friendId != null) setRequestProperty("X-Dost-Friend-ID", friendId)
         if (sessionId != null) setRequestProperty("X-Dost-Session-ID", sessionId)
+        val credential = dostAppCredentialValue(installHeader, nowEpochSeconds)
+        if (credential != null) setRequestProperty("X-Dost-App-Credential", credential)
     }
+
+    private fun post(apiKey: String, installationId: String?, friendId: String?, sessionId: String?, body: ByteArray): HttpURLConnection {
+        fun send(nowEpochSeconds: Long): HttpURLConnection {
+            val connection = openConnection(apiKey, installationId, friendId, sessionId, nowEpochSeconds)
+            connection.outputStream.use { it.write(body) }
+            return connection
+        }
+        val first = send(System.currentTimeMillis() / 1000)
+        if (first.responseCode != 401) return first
+        val serverMillis = first.getHeaderFieldDate("Date", -1L)
+        if (serverMillis < 0L) return first
+        val serverSeconds = serverMillis / 1000
+        if (kotlin.math.abs(serverSeconds - System.currentTimeMillis() / 1000) < 30) return first
+        first.disconnect()
+        return send(serverSeconds)
+    }
+}
+
+/**
+ * The release secret comes from DOST_APP_CREDENTIAL_SECRET in the environment
+ * or Gradle properties. An empty value omits X-Dost-App-Credential.
+ */
+internal object DostAppCredential {
+    val secret: String get() = BuildConfig.DOST_APP_CREDENTIAL_SECRET
+}
+
+internal fun dostAppCredentialValue(
+    installationId: String?,
+    nowEpochSeconds: Long,
+    secret: String = DostAppCredential.secret
+): String? {
+    if (secret.isEmpty()) return null
+    val install = installationId?.trim().orEmpty()
+    val payload = "v1\n$nowEpochSeconds\n$install"
+    val mac = Mac.getInstance("HmacSHA256")
+    mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+    val hex = mac.doFinal(payload.toByteArray(Charsets.UTF_8)).joinToString("") { byte ->
+        "%02x".format(byte.toInt() and 0xff)
+    }
+    return "v1.$nowEpochSeconds.$hex"
 }
