@@ -77,7 +77,7 @@ fun RegisterScreen(language: AppLanguage, step: Int, name: String, email: String
                 Button(onClick = onNext, enabled = name.isNotBlank() && email.isNotBlank() && accountAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(when { language == AppLanguage.BANGLA -> "চালিয়ে যান"; hindi -> "जारी रखें"; else -> "Continue" }) }
             } else {
                 Text(when { language == AppLanguage.BANGLA -> "আপনার প্রথম বন্ধু তৈরি করুন"; hindi -> "अपना पहला दोस्त बनाएं"; else -> "Create your first friend" }, style = MaterialTheme.typography.headlineSmall)
-                Text(when { language == AppLanguage.BANGLA -> "সাইন ইন করার পর আরও বন্ধু যোগ করতে পারবেন।"; hindi -> "साइन इन करने के बाद आप और दोस्त जोड़ सकते हैं।"; else -> "You can add more friends after signing in." })
+                Text(when { language == AppLanguage.BANGLA -> "হোম স্ক্রিন থেকে যেকোনো সময় আরও বন্ধু যোগ করতে পারবেন।"; hindi -> "आप होम स्क्रीन से कभी भी और दोस्त जोड़ सकते हैं।"; else -> "You can add more friends anytime from the home screen." })
                 OutlinedTextField(friendName, { friendName = it }, label = { Text(when { language == AppLanguage.BANGLA -> "বন্ধুর নাম"; hindi -> "दोस्त का नाम"; else -> "Friend name" }) }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(friendAge, { friendAge = it }, label = { Text(when { language == AppLanguage.BANGLA -> "বন্ধুর বয়স"; hindi -> "दोस्त की उम्र"; else -> "Friend age" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 friendAgeError(friendAge, language)?.let { message ->
