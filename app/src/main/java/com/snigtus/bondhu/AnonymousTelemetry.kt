@@ -13,7 +13,12 @@ internal enum class AnonymousTelemetryEvent(val wireName: String) {
     FRIEND_PROFILE_OPENED("friend_profile_opened"),
     MEMORY_SAVED("memory_saved"),
     MEMORY_FORGOTTEN("memory_forgotten"),
-    FAILED_SEND_RETRIED("failed_send_retried")
+    FAILED_SEND_RETRIED("failed_send_retried"),
+    FIRST_MESSAGE_TO_FRIEND("first_message_to_friend"),
+    SHARED_RITUAL_SAVED("shared_ritual_saved"),
+    PROACTIVE_MESSAGES_DISABLED("proactive_messages_disabled"),
+    PROACTIVE_MESSAGES_PAUSED("proactive_messages_paused"),
+    PROACTIVE_REPLY_COMPLETED("proactive_reply_completed")
 }
 
 internal object AnonymousTelemetry {

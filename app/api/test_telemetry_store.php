@@ -16,7 +16,13 @@ if (!mkdir($directory, 0700)) {
 $failures = array();
 $today = '2026-03-04';
 $oldDay = '2025-11-30';
-if (!dost_telemetry_is_allowed_event('memory_saved') || dost_telemetry_is_allowed_event('chat_content')) {
+if (!dost_telemetry_is_allowed_event('memory_saved')
+    || !dost_telemetry_is_allowed_event('first_message_to_friend')
+    || !dost_telemetry_is_allowed_event('shared_ritual_saved')
+    || !dost_telemetry_is_allowed_event('proactive_messages_disabled')
+    || !dost_telemetry_is_allowed_event('proactive_messages_paused')
+    || !dost_telemetry_is_allowed_event('proactive_reply_completed')
+    || dost_telemetry_is_allowed_event('chat_content')) {
     $failures[] = 'event allowlist accepts only approved event names';
 }
 if (!dost_telemetry_record($directory, 'memory_saved', $today) || !dost_telemetry_record($directory, 'memory_saved', $today)) {

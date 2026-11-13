@@ -231,7 +231,7 @@ class DostStore(context: Context) {
         require(model.matches(Regex("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?"))) {
             "The backup model is invalid."
         }
-        val proactiveEnabled = settings.optBoolean("proactiveEnabled", true)
+        val proactiveEnabled = settings.optBoolean("proactiveEnabled", false)
         val proactiveCadenceMinutes = settings.optInt("proactiveCadenceMinutes", 180)
         val automaticFollowUpMinutes = settings.optInt("automaticFollowUpMinutes", 30)
         val quietHoursStartMinute = settings.optInt("quietHoursStartMinute", 22 * 60)
@@ -852,7 +852,7 @@ class DostStore(context: Context) {
         preferences.edit().putBoolean("scheduled_reply_$friendId", pending).apply()
     }
 
-    fun proactiveEnabled(): Boolean = preferences.getBoolean("proactive_enabled", true)
+    fun proactiveEnabled(): Boolean = preferences.getBoolean("proactive_enabled", false)
     fun setProactiveEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("proactive_enabled", enabled).apply()
     }

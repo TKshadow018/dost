@@ -39,6 +39,7 @@ Home is your chat list. Each row shows the friend, recent conversation text or r
 - **Custom friend:** Enter a name, age, gender, personality, first greeting, and optionally a photo. You can also set their busy hours and time zone.
 - **Meet a friend:** Browse the character catalog by swiping right to add a character or left to pass. Catalog friends have their own persona, interests, greeting, relationship premise, and routine.
 - The app supports up to 3 custom friends and 7 catalog friends at a time.
+- Dost's friends are fictional characters. Each has their own personality; memories are friend-specific and can be reviewed, corrected, or deleted.
 - If a generated profile is still being prepared or fails, open the chat to retry or continue with the available basic profile.
 
 Deleting a friend removes that friend’s local profile and related local app data. It does not delete the server conversation archive; see [Settings and your data](#settings-and-your-data).
@@ -62,6 +63,7 @@ Deleting a friend removes that friend’s local profile and related local app da
 ### Shared topics and a quick game
 
 - Save an ongoing shared topic from the chat menu. It appears as a topic chip in the conversation; tap it to place a prompt in the composer and pick up the topic again.
+- Save a **shared ritual** from the chat menu to keep a repeatable activity with that friend. Tap its chip to prepare a prompt you can edit. Rituals never send messages or start on their own.
 - **Play a quick game** opens a small number-guessing game. It runs locally and is not added to the conversation or saved as a personal memory.
 
 ### Save a shared moment
@@ -92,7 +94,7 @@ Friends may learn useful details from conversation. Memories are per friend, so 
 
 ### Friend-initiated messages
 
-When friend-initiated messages are enabled, friends can send routine greetings and automatic conversation check-ins. Automatic messages respect the configured routine, quiet hours, spacing, and pause settings. Android notification permission is needed to show notifications, and Android battery restrictions may delay background delivery.
+Friend-initiated messages are off by default. When you enable them, friends can send routine greetings and automatic conversation check-ins. Automatic messages respect the configured routine, quiet hours, spacing, and pause settings. Android notification permission is requested only after you enable friend messages; Android battery restrictions may still delay background delivery.
 
 - In **Settings → Friend messages**, turn routine greetings and automatic check-ins on or off, choose quiet hours, set the minimum interval between proactive messages, and adjust automatic follow-up timing.
 - In a friend’s profile, snooze check-ins for 24 hours, pause them until you resume, or resume a paused friend.
@@ -113,7 +115,7 @@ Open Settings from Home to manage:
 - **AI provider and model:** Choose an available model and optionally provide your own OpenRouter API key. Your own key may incur charges from OpenRouter. Never put API keys or passwords in chat.
 - **Friend messages:** Configure routine greetings, follow-ups, quiet hours, and message spacing.
 - **Knowledge about me:** Review memory facts across friends.
-- **Export local data / Import local data:** Export or restore your profile, friends, routines, reminders, memories, summaries, and chat history. Import replaces the current local data. The JSON export is not encrypted; keep it somewhere private. It does not include your API key or installation ID.
+- **Export encrypted backup / Import backup:** Export or restore your profile, friends, routines, reminders, memories, summaries, and chat history. Choose a passphrase of at least 12 characters and keep it separate; it cannot be recovered. Import replaces the current local data. Older unencrypted JSON exports remain importable. Backups do not include your API key or installation ID.
 - **Delete server archive:** Request deletion of the indexed server conversations and attached images for this installation. Older records that were not indexed by installation ID may not be included.
 - **Sign out:** Signing out does not delete local profiles or chats.
 - **Manage friends:** Remove a friend from the device.
@@ -127,7 +129,7 @@ You can also export an individual chat from that conversation’s options menu. 
 - Chat messages and attached chat photos are sent to Dost’s API and the selected AI provider to generate responses. Conversation data may also be archived on Dost’s server. AI providers have their own processing and retention policies.
 - Friend-avatar photos selected from your device stay on your device. Photos attached to chat messages are sent with the message.
 - Local profiles, memories, and chats are not automatically synchronized between devices. Use the explicit JSON export/import to move data.
-- Optional **Share anonymous event counts** is available in Settings. When enabled, Dost sends allowlisted event names, not chat text or profile details; daily totals are retained for 90 days. The network host may see your IP address as part of a request.
+- Optional **Share anonymous event counts** is available in Settings. When enabled, Dost sends allowlisted event names, not chat text or profile details; daily totals are retained for 90 days. The network host may see your IP address as part of a request. These totals cannot measure individual or cohort retention.
 - Use **Delete server archive** to request deletion of indexed server records. This does not delete copies held by OpenRouter or model providers.
 - On Android 13 and later, allow notifications if you want friend replies and check-ins to appear outside the app.
 - The floating chat panel requires Android’s “display over other apps” permission. Use **Minimize chat** to start it.

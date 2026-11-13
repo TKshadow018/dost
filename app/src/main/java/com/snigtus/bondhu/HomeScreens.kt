@@ -229,6 +229,11 @@ private fun AddFriendOptionsDialog(
                         AppLanguage.ENGLISH -> "Create a custom friend"
                     })
                 }
+                Text(when (language) {
+                    AppLanguage.BANGLA -> "নিজের ব্যক্তিত্ব, আগ্রহ ও রুটিন নির্ধারণ করুন।"
+                    AppLanguage.HINDI -> "उनका व्यक्तित्व, रुचियाँ और दिनचर्या तय करें।"
+                    AppLanguage.ENGLISH -> "Choose their personality, interests, and routine."
+                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedButton(onClick = onBrowseSystem, modifier = Modifier.fillMaxWidth()) {
                     Text(when (language) {
                         AppLanguage.BANGLA -> "সিস্টেম বন্ধু বেছে নিন"
@@ -236,6 +241,11 @@ private fun AddFriendOptionsDialog(
                         AppLanguage.ENGLISH -> "Choose a system friend"
                     })
                 }
+                Text(when (language) {
+                    AppLanguage.BANGLA -> "নিজস্ব ব্যক্তিত্ব, আগ্রহ ও পরিচয়ের গল্পসহ কাল্পনিক চরিত্র দেখুন।"
+                    AppLanguage.HINDI -> "अलग व्यक्तित्व, रुचियों और मिलने की कहानी वाले काल्पनिक पात्र देखें।"
+                    AppLanguage.ENGLISH -> "Browse fictional characters with distinct personalities, interests, and relationship premises."
+                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(LocalizedText.CLOSE.resolve(language)) } }
@@ -244,12 +254,30 @@ private fun AddFriendOptionsDialog(
 
 @Composable
 private fun EmptyFriendsState(onAdd: () -> Unit, language: AppLanguage) {
-    val hindi = language == AppLanguage.HINDI
     Column(modifier = Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         DostBrand()
-        Text(when { language == AppLanguage.BANGLA -> "এখনও কোনো বন্ধু নেই"; hindi -> "अभी कोई दोस्त नहीं"; else -> "No friends yet" }, style = MaterialTheme.typography.titleLarge)
-        Text(when { language == AppLanguage.BANGLA -> "একজন AI বন্ধু যোগ করুন এবং কথা বলা শুরু করুন।"; hindi -> "एक AI दोस्त जोड़ें और बात करना शुरू करें।"; else -> "Add an AI friend and start a conversation." }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = onAdd) { Text(when { language == AppLanguage.BANGLA -> "বন্ধু যোগ করুন"; hindi -> "दोस्त जोड़ें"; else -> "Add a friend" }) }
+        Text(when (language) {
+            AppLanguage.BANGLA -> "এখনও কোনো বন্ধু নেই"
+            AppLanguage.HINDI -> "अभी कोई दोस्त नहीं"
+            AppLanguage.ENGLISH -> "No friends yet"
+        }, style = MaterialTheme.typography.titleLarge)
+        Text(when (language) {
+            AppLanguage.BANGLA -> "একজন কাল্পনিক AI বন্ধু বেছে নিন—প্রত্যেকের নিজস্ব ব্যক্তিত্ব আছে। কথোপকথনে তারা আপনার সম্পর্কে প্রাসঙ্গিক তথ্য মনে রাখতে পারে; আপনি তা পর্যালোচনা বা মুছে ফেলতে পারবেন।"
+            AppLanguage.HINDI -> "एक काल्पनिक AI दोस्त चुनें—हर एक का अपना व्यक्तित्व है। बातचीत से वे आपके बारे में उपयोगी बातें याद रख सकते हैं; आप उन्हें देख या हटा सकते हैं।"
+            AppLanguage.ENGLISH -> "Choose a fictional AI friend with their own personality. They can remember useful details from your conversations, and you can review or remove those memories."
+        }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(when (language) {
+            AppLanguage.BANGLA -> "বন্ধুরা নিজে থেকে বার্তা দিলে সেটি সেটিংসে চালু বা বন্ধ করতে পারবেন।"
+            AppLanguage.HINDI -> "दोस्तों के अपने-आप संदेश भेजने को सेटिंग्स में चालू या बंद कर सकते हैं।"
+            AppLanguage.ENGLISH -> "You can turn friend-initiated messages on or off in Settings."
+        }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Button(onClick = onAdd) {
+            Text(when (language) {
+                AppLanguage.BANGLA -> "বন্ধু যোগ করুন"
+                AppLanguage.HINDI -> "दोस्त जोड़ें"
+                AppLanguage.ENGLISH -> "Add a friend"
+            })
+        }
     }
 }
 
@@ -610,9 +638,9 @@ internal fun SettingsScreen(
                     }
                     Text(
                         when (language) {
-                            AppLanguage.BANGLA -> "রুটিন শুভেচ্ছা ও স্বয়ংক্রিয় কথোপকথন ফলো-আপ নিয়ন্ত্রিত হবে। আপনার নির্ধারিত অনুস্মারক চালু থাকবে।"
-                            AppLanguage.HINDI -> "नियमित अभिवादन और स्वचालित बातचीत फ़ॉलो-अप नियंत्रित होंगे। आपके सेट किए रिमाइंडर चलते रहेंगे।"
-                            AppLanguage.ENGLISH -> "Controls routine greetings and automatic conversation check-ins. Reminders you set yourself still run."
+                            AppLanguage.BANGLA -> "এটি ডিফল্টভাবে বন্ধ। চালু করলে রুটিন শুভেচ্ছা ও স্বয়ংক্রিয় ফলো-আপ নিয়ন্ত্রিত হবে; আপনার নির্ধারিত অনুস্মারক চালু থাকবে। Android 13 বা নতুন সংস্করণে চালু করার পর নোটিফিকেশনের অনুমতি চাওয়া হবে।"
+                            AppLanguage.HINDI -> "यह डिफ़ॉल्ट रूप से बंद है। चालू करने पर नियमित अभिवादन और स्वचालित फ़ॉलो-अप नियंत्रित होंगे; आपके सेट किए रिमाइंडर चलते रहेंगे। Android 13 या नए संस्करण पर चालू करने के बाद नोटिफ़िकेशन अनुमति माँगी जाएगी।"
+                            AppLanguage.ENGLISH -> "Off by default. When enabled, this controls routine greetings and automatic check-ins; reminders you set yourself still run. On Android 13+, notification permission is requested after you turn this on."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -703,11 +731,11 @@ internal fun SettingsScreen(
             }
             item {
                 SettingsSection("Local data") {
-                    Text("Move your profile, friends, routines, reminders, memories, summaries, and chat history between devices with a JSON backup. The backup does not include your API key.", style = MaterialTheme.typography.bodySmall)
+                    Text("Move your profile, friends, routines, reminders, memories, summaries, and chat history with a passphrase-encrypted backup. Your API key and installation id are not included. Keep the passphrase separate; it cannot be recovered.", style = MaterialTheme.typography.bodySmall)
                     Text("The installation id is not transferred. Delete the old phone's server archive from that phone before moving to a new one.", style = MaterialTheme.typography.bodySmall)
-                    Text("Importing replaces the current profile, friends, memories, summaries, and chat history.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    OutlinedButton(onClick = onExportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Export local data") }
-                    OutlinedButton(onClick = onImportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Import local data") }
+                    Text("Importing replaces the current profile, friends, memories, summaries, and chat history. Older unencrypted JSON backups can still be imported.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    OutlinedButton(onClick = onExportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Export encrypted backup") }
+                    OutlinedButton(onClick = onImportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Import backup") }
                     if (settingsNotice.isNotBlank()) {
                         Text(
                             settingsNotice,

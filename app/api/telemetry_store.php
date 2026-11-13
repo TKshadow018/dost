@@ -14,7 +14,12 @@ function dost_telemetry_allowed_events()
         'friend_profile_opened',
         'memory_saved',
         'memory_forgotten',
-        'failed_send_retried'
+        'failed_send_retried',
+        'first_message_to_friend',
+        'shared_ritual_saved',
+        'proactive_messages_disabled',
+        'proactive_messages_paused',
+        'proactive_reply_completed'
     );
 }
 

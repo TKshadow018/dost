@@ -69,6 +69,7 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
     var showReminderEditor by remember { mutableStateOf(false) }
     var reminderDraft by remember(friend.id) { mutableStateOf<PlannedEvent?>(null) }
     var showSharedTopicEditor by remember { mutableStateOf(false) }
+    var showSharedRitualEditor by remember { mutableStateOf(false) }
     var showQuickGame by remember { mutableStateOf(false) }
     var showChatMenu by remember { mutableStateOf(false) }
     var showConversationStarters by remember(friend.id) { mutableStateOf(true) }
@@ -84,6 +85,9 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
     val latestRecap = sessionSummaries.firstOrNull { it.summary.isNotBlank() }
     val sharedTopics = remember(friend.id, sharedTopicRevision) {
         store.loadSharedMoments(friend.id).filter { it.kind == "shared_topic" }
+    }
+    val sharedRituals = remember(friend.id, sharedTopicRevision) {
+        store.loadSharedMoments(friend.id).filter { it.kind == "shared_ritual" }
     }
     val userMemories = remember(friend.id, memoryRevision) { store.loadUserMemories(friend.id) }
     val displayedMessages = remember(messages, searchQuery) {
@@ -184,6 +188,10 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
                                 onClick = { showChatMenu = false; showSharedTopicEditor = true }
                             )
                             DropdownMenuItem(
+                                text = { Text(chatLabel(language, "Shared ritual", "একসঙ্গে করার অভ্যাস", "साझा गतिविधि")) },
+                                onClick = { showChatMenu = false; showSharedRitualEditor = true }
+                            )
+                            DropdownMenuItem(
                                 text = { Text(chatLabel(language, "Play a quick game", "ছোট খেলা খেলুন", "छोटा खेल खेलें")) },
                                 onClick = { showChatMenu = false; showQuickGame = true }
                             )
@@ -242,6 +250,32 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
                                 onDraftChange(draft)
                             },
                             label = { Text(topic.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        )
+                    }
+                }
+            }
+            if (sharedRituals.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    sharedRituals.forEach { ritual ->
+                        AssistChip(
+                            onClick = {
+                                draft = when (language) {
+                                    AppLanguage.BANGLA -> "চলো আমাদের ${ritual.title} আবার করি। ${ritual.detail}".trim()
+                                    AppLanguage.HINDI -> "चलो अपना ${ritual.title} फिर से करें। ${ritual.detail}".trim()
+                                    AppLanguage.ENGLISH -> "Let's continue our ${ritual.title}. ${ritual.detail}".trim()
+                                }
+                                onDraftChange(draft)
+                            },
+                            label = {
+                                Text(
+                                    chatLabel(language, "Ritual: ${ritual.title}", "অভ্যাস: ${ritual.title}", "गतिविधि: ${ritual.title}"),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         )
                     }
                 }
@@ -447,6 +481,14 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
                                 System.currentTimeMillis(),
                                 store.userTimeZoneId()
                             )
+                            if (messages.none { it.role == "user" }) {
+                                coroutineScope.launch {
+                                    AnonymousTelemetry.record(
+                                        store.anonymousTelemetryEnabled(),
+                                        AnonymousTelemetryEvent.FIRST_MESSAGE_TO_FRIEND
+                                    )
+                                }
+                            }
                             draft = ""
                             selectedImagePath = ""
                             onDraftChange("")
@@ -509,6 +551,31 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
                 showSharedTopicEditor = false
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar(chatLabel(language, "Shared topic saved", "একসঙ্গে আলোচনার বিষয় সংরক্ষিত", "साझा विषय सेव हुआ"))
+                }
+            }
+        )
+    }
+    if (showSharedRitualEditor) {
+        SharedRitualDialog(
+            language = language,
+            onDismiss = { showSharedRitualEditor = false },
+            onSave = { title, detail ->
+                store.saveSharedMoment(
+                    friend.id,
+                    SharedMoment(
+                        id = java.util.UUID.randomUUID().toString(),
+                        title = title,
+                        detail = detail,
+                        createdAtMillis = System.currentTimeMillis(),
+                        kind = "shared_ritual",
+                        pinned = true
+                    )
+                )
+                sharedTopicRevision += 1
+                showSharedRitualEditor = false
+                coroutineScope.launch {
+                    AnonymousTelemetry.record(store.anonymousTelemetryEnabled(), AnonymousTelemetryEvent.SHARED_RITUAL_SAVED)
+                    snackbarHostState.showSnackbar(chatLabel(language, "Shared ritual saved. Tap it to prepare it again.", "একসঙ্গে করার অভ্যাস সংরক্ষিত। আবার শুরু করতে ট্যাপ করুন।", "साझा गतिविधि सेव हुई। फिर शुरू करने के लिए टैप करें।"))
                 }
             }
         )
@@ -734,6 +801,57 @@ private fun SharedTopicDialog(
                 enabled = title.isNotBlank(),
                 onClick = { onSave(title.trim(), detail.trim()) }
             ) { Text(chatLabel(language, "Save topic", "সংরক্ষণ করুন", "सेव करें")) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(LocalizedText.CANCEL.resolve(language)) }
+        }
+    )
+}
+
+@Composable
+private fun SharedRitualDialog(
+    language: AppLanguage,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var activity by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(chatLabel(language, "Save a shared ritual", "একসঙ্গে করার অভ্যাস সংরক্ষণ করুন", "साझा गतिविधि सेव करें")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    chatLabel(
+                        language,
+                        "Save an activity you want to return to with this friend. It never schedules a message or starts by itself; tapping it prepares a prompt you can edit.",
+                        "এই বন্ধুর সঙ্গে পরে আবার করতে চান এমন কিছু সংরক্ষণ করুন। এটি নিজে থেকে বার্তা পাঠায় না বা শুরু হয় না; ট্যাপ করলে সম্পাদনাযোগ্য বার্তা তৈরি হবে।",
+                        "इस दोस्त के साथ दोबारा करने के लिए गतिविधि सेव करें। यह अपने-आप संदेश नहीं भेजती या शुरू नहीं होती; टैप करने पर आप संपादित करने के लिए संदेश मिलेगा।"
+                    ),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it.take(100) },
+                    label = { Text(chatLabel(language, "Activity name", "অভ্যাসের নাম", "गतिविधि का नाम")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = activity,
+                    onValueChange = { activity = it.take(500) },
+                    label = { Text(chatLabel(language, "What should you do together?", "একসঙ্গে কী করবেন?", "आप साथ में क्या करेंगे?")) },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = title.isNotBlank(),
+                onClick = { onSave(title.trim(), activity.trim()) }
+            ) { Text(chatLabel(language, "Save ritual", "সংরক্ষণ করুন", "सेव करें")) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(LocalizedText.CANCEL.resolve(language)) }

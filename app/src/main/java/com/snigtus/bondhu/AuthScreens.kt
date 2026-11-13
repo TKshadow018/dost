@@ -453,6 +453,15 @@ fun RegisterScreen(language: AppLanguage, step: Int, name: String, email: String
             } else {
                 Text(when { language == AppLanguage.BANGLA -> "আপনার প্রথম বন্ধু তৈরি করুন"; hindi -> "अपना पहला दोस्त बनाएं"; else -> "Create your first friend" }, style = MaterialTheme.typography.headlineSmall)
                 Text(when { language == AppLanguage.BANGLA -> "হোম স্ক্রিন থেকে যেকোনো সময় আরও বন্ধু যোগ করতে পারবেন।"; hindi -> "आप होम स्क्रीन से कभी भी और दोस्त जोड़ सकते हैं।"; else -> "You can add more friends anytime from the home screen." })
+                Text(
+                    when {
+                        language == AppLanguage.BANGLA -> "এটি একটি কাল্পনিক AI চরিত্র, বাস্তব মানুষ নয়। কথোপকথন থেকে সে প্রাসঙ্গিক তথ্য মনে রাখতে পারে; আপনি স্মৃতি পর্যালোচনা বা মুছতে পারবেন। নিজে থেকে বার্তা দেওয়া সেটিংসে চালু না করা পর্যন্ত বন্ধ থাকবে।"
+                        hindi -> "यह एक काल्पनिक AI पात्र है, असली व्यक्ति नहीं। बातचीत से यह उपयोगी बातें याद रख सकता है; आप यादें देख या हटा सकते हैं। अपने-आप संदेश भेजना सेटिंग्स में चालू करने तक बंद रहेगा।"
+                        else -> "This creates a fictional AI character, not a real person. They can remember useful details from conversation; you can review or delete memories. Friend-initiated messages stay off until you enable them in Settings."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 OutlinedTextField(friendName, { friendName = it }, label = { Text(when { language == AppLanguage.BANGLA -> "বন্ধুর নাম"; hindi -> "दोस्त का नाम"; else -> "Friend name" }) }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(friendAge, { friendAge = it }, label = { Text(when { language == AppLanguage.BANGLA -> "বন্ধুর বয়স"; hindi -> "दोस्त की उम्र"; else -> "Friend age" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 friendAgeError(friendAge, language)?.let { message ->

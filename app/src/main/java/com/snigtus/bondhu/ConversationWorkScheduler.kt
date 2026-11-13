@@ -350,6 +350,12 @@ internal class ConversationTaskWorker(context: Context, parameters: WorkerParame
                         else -> ProactiveDeliveryState.CANCELLED
                     }
                 )
+                if (completed && delivered && record.trigger != ProactiveTrigger.USER_REMINDER) {
+                    AnonymousTelemetry.record(
+                        store.anonymousTelemetryEnabled(),
+                        AnonymousTelemetryEvent.PROACTIVE_REPLY_COMPLETED
+                    )
+                }
             }
             if (completed) Result.success() else Result.retry()
         } catch (_: Exception) {

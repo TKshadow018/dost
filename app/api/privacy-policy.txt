@@ -1,5 +1,5 @@
 DOST PRIVACY POLICY
-Effective date: November 12, 2026
+Effective date: November 14, 2026
 
 ABOUT THIS POLICY
 Dost is an AI companion application for Android. This policy describes the information the current app stores on the device, what it sends to Dost's API server and to AI providers, how long the server archive is kept, and what is deleted when you remove a friend or remove the app. It matches this version of the app. The app is local-only: there is no Dost account or sync service. You can export or import local data and request deletion of this installation's indexed server archive from Settings.
@@ -13,7 +13,7 @@ Dost stores the following information in the app's private storage on your Andro
 - Language, preferred AI model, anonymous analytics preference, unread counts, and other app settings.
 - Compressed copies of photos that you attach to chat messages.
 
-Chat transcripts are stored as per-friend files under the app's private messages directory. Memories, summaries, and settings are stored in the app's private preferences. The email collected at registration is stored only on the device and is not used to sign in. Settings can export your profile, friend profiles, memories, summaries, transcripts, and available chat-image attachments to a JSON file, or import that file on a fresh install. The export does not include your OpenRouter API key or installation id. The export file is not encrypted; keep it somewhere private. Friend-avatar references may point to files or URIs that are not available on another device.
+Chat transcripts are stored as per-friend files under the app's private messages directory. Memories, summaries, and settings are stored in the app's private preferences. The email collected at registration is stored only on the device and is not used to sign in. Settings can export your profile, friend profiles, memories, summaries, transcripts, and available chat-image attachments to a passphrase-encrypted JSON file, or import that file on a fresh install. The backup uses AES-256-GCM with a key derived from your passphrase using PBKDF2-HMAC-SHA256. The passphrase is not stored or sent to Dost; if you lose it, Dost cannot recover the backup. The export does not include your OpenRouter API key or installation id. Older unencrypted JSON exports remain importable; protect those files yourself. Friend-avatar references may point to files or URIs that are not available on another device.
 
 Chat messages and chat-photo attachments are also sent to Dost's API server and AI services as described below. A friend photo selected as an avatar stays on the device. Choosing that photo does not upload it. A photo downloaded for a catalog friend is cached on the device.
 
@@ -32,7 +32,7 @@ This can include personal information you choose to share in the conversation, s
 
 The API server forwards AI prompts to OpenRouter, which routes them to the selected model provider. Chat requests and separately uploaded chat messages are archived on Dost's server for service operation and troubleshooting. The archive may contain user and AI messages, message timestamps and identifiers, the selected model ID, friend and user display names, the server-observed IP address used to organize the archive, chat-photo attachments, and, for lines written by the current server, the installation id. The archive is stored in folders named from the display name, that IP address, the friend name, and the session id. The server also keeps an index of those session folders for each installation id. Lines written before that index existed do not contain the installation id. API keys are not written into conversation logs.
 
-If you enable **Share anonymous event counts** in Settings, the app sends only one of these event names when the corresponding action occurs: opening a friend profile, saving a memory, forgetting a memory, or retrying a failed send. These requests do not include message content, profile details, account data, an installation id, or a client-supplied timestamp. Dost stores daily event totals for 90 days, without a user or device identifier. The API host may see your IP address as part of the network request. Turning the setting off stops future event requests; because the stored values are aggregate counts, individual past events cannot be removed.
+If you enable **Share anonymous event counts** in Settings, the app sends only an allowlisted event name when an action occurs: opening a friend profile, saving or forgetting a memory, retrying a failed send, starting a first message to a friend, saving a shared ritual, turning off or pausing friend-initiated messages, or completing an automatic friend reply. These requests do not include message content, profile details, account data, an installation id, or a client-supplied timestamp. Dost stores daily event totals for 90 days, without a user or device identifier. The API host may see your IP address as part of the network request. Turning the setting off stops future event requests; because the stored values are aggregate counts, individual past events cannot be removed.
 
 OpenRouter and the selected model provider may process request data under their own privacy policies and terms. Dost does not control their independent retention or deletion practices. Please do not share passwords, API keys, authentication codes, financial-account credentials, or other highly sensitive information in conversations.
 
@@ -82,4 +82,4 @@ We may update this Privacy Policy when the app or its data practices change. We 
 For questions, suggestions, or help requesting removal of a server archive, contact:
 tushartk018@gmail.com
 
-Dost Privacy Policy - Effective November 12, 2026
+Dost Privacy Policy - Effective November 14, 2026

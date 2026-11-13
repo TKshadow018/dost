@@ -89,6 +89,16 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (visibleFriends.isNotEmpty()) {
+                    Text(
+                        when {
+                            bangla -> "প্রতিটি বন্ধুর স্মৃতি আলাদা। যেকোনো তথ্য ঠিক করতে বা মুছতে পারবেন।"
+                            hindi -> "हर दोस्त की यादें अलग रहती हैं। आप किसी भी जानकारी को सुधार या हटा सकते हैं।"
+                            else -> "Each friend has separate memories. You can correct or delete any saved detail."
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 visibleFriends.filterNot { friend -> knowledge.any { it.first.id == friend.id } }.forEach { friend ->
                     OutlinedButton(onClick = { onOpenChat(friend) }, modifier = Modifier.fillMaxWidth()) {
                         Text(when {
@@ -111,6 +121,17 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(18.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
+                item(key = "memory-controls-hint") {
+                    Text(
+                        when {
+                            bangla -> "প্রতিটি বন্ধুর স্মৃতি আলাদা। ঠিক করুন বা মুছুন—পরিবর্তনটি পরের কথোপকথনে প্রযোজ্য হবে।"
+                            hindi -> "हर दोस्त की यादें अलग रहती हैं। सुधारें या हटाएँ—बदलाव अगली बातचीत में लागू होगा।"
+                            else -> "Each friend has separate memories. Correct or delete a detail; the change applies to future conversations."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 knowledge.forEach { (friend, memories) ->
                     item(key = "friend-${friend.id}") {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

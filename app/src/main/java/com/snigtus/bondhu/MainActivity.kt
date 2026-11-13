@@ -21,11 +21,24 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.CancellationException
@@ -124,6 +137,12 @@ fun DostApp(
     var authMode by rememberSaveable { mutableStateOf(AuthMode.SIGN_IN) }
     var authRequestState by remember { mutableStateOf<AuthRequestState>(AuthRequestState.Idle) }
     var settingsNotice by remember { mutableStateOf("") }
+    var backupPasswordMode by rememberSaveable { mutableStateOf<String?>(null) }
+    var backupPassword by rememberSaveable { mutableStateOf("") }
+    var backupPasswordConfirmation by rememberSaveable { mutableStateOf("") }
+    var pendingEncryptedBackup by remember { mutableStateOf<String?>(null) }
+    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
+    var backupPasswordError by remember { mutableStateOf("") }
     var settingsReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     var friendProfileReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     var knowledgeReturnScreen by rememberSaveable { mutableStateOf(AppScreen.SETTINGS) }
@@ -135,6 +154,27 @@ fun DostApp(
     var systemFriendCatalogLoading by remember { mutableStateOf(false) }
     var systemFriendCatalogError by remember { mutableStateOf<String?>(null) }
     var addingSystemFriendId by remember { mutableStateOf<String?>(null) }
+
+    suspend fun importBackupText(backupText: String) {
+        withContext(Dispatchers.IO) {
+            ConversationManager.importLocalData(JSONObject(backupText))
+        }
+        language = store.language()
+        name = store.userName()
+        email = store.userEmail()
+        age = store.userAge()
+        gender = store.userGender()
+        userTimeZoneId = store.userTimeZoneId()
+        openRouterApiKey = store.openRouterApiKey()
+        aiModel = store.aiModel()
+        friends.clear()
+        friends.addAll(store.loadFriends())
+        selectedFriend = null
+        knowledgeFriendFilter = null
+        screen = AppScreen.HOME
+        settingsNotice = "Local data imported."
+    }
+
     BackHandler(
         enabled = screen in setOf(
             AppScreen.CHAT,
@@ -160,39 +200,50 @@ fun DostApp(
     val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
             settingsNotice = try {
-                val backup = withContext(Dispatchers.IO) { store.exportLocalData().toString(2) }
+                val exportPassword = pendingExportPassword ?: error("The backup passphrase was lost.")
+                val password = exportPassword.toCharArray()
+                val backup = withContext(Dispatchers.IO) {
+                    try {
+                        LocalBackupCrypto.encrypt(store.exportLocalData().toString(2), password)
+                    } finally {
+                        password.fill('\u0000')
+                    }
+                }
                 require(backup.length <= MAX_LOCAL_BACKUP_CHARS) { "The backup is too large to export." }
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(backup) }
                         ?: throw java.io.IOException("Could not open the selected file.")
                 }
-                "Local data exported."
+                "Encrypted backup exported. Keep the passphrase separate; it cannot be recovered."
             } catch (error: Exception) {
                 "Export failed: ${error.message?.take(160) ?: "could not write the file"}"
+            } finally {
+                pendingExportPassword = null
+                backupPassword = ""
+                backupPasswordConfirmation = ""
             }
+        }
+        else {
+            pendingExportPassword = null
+            backupPassword = ""
+            backupPasswordConfirmation = ""
         }
     }
     val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             settingsNotice = "Importing local data…"
             try {
-                withContext(Dispatchers.IO) {
-                    ConversationManager.importLocalData(JSONObject(readLocalBackup(context, uri)))
+                val backupText = withContext(Dispatchers.IO) { readLocalBackup(context, uri) }
+                if (LocalBackupCrypto.isEncryptedBackup(backupText)) {
+                    pendingEncryptedBackup = backupText
+                    backupPassword = ""
+                    backupPasswordConfirmation = ""
+                    backupPasswordError = ""
+                    backupPasswordMode = "import"
+                    settingsNotice = "Enter the passphrase used to encrypt this backup."
+                } else {
+                    importBackupText(backupText)
                 }
-                language = store.language()
-                name = store.userName()
-                email = store.userEmail()
-                age = store.userAge()
-                gender = store.userGender()
-                userTimeZoneId = store.userTimeZoneId()
-                openRouterApiKey = store.openRouterApiKey()
-                aiModel = store.aiModel()
-                friends.clear()
-                friends.addAll(store.loadFriends())
-                selectedFriend = null
-                knowledgeFriendFilter = null
-                screen = AppScreen.HOME
-                settingsNotice = "Local data imported."
             } catch (error: Exception) {
                 settingsNotice = "Import failed: ${error.message?.take(160) ?: "the file is invalid"}"
             }
@@ -406,7 +457,11 @@ fun DostApp(
         closeAfterOverlayPermission = false
     }
 
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            settingsNotice = "Friend messages are enabled, but Android notifications are off. You can still read messages in Dost."
+        }
+    }
     val relationshipUpdates = ConversationManager.relationshipUpdates.collectAsState().value
     LaunchedEffect(relationshipUpdates) {
         if (relationshipUpdates.isEmpty()) return@LaunchedEffect
@@ -418,15 +473,6 @@ fun DostApp(
             if (selectedFriend?.id == friendId) selectedFriend = stored
         }
     }
-    LaunchedEffect(screen) {
-        if (screen == AppScreen.HOME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ReplyNotifier.ensureChannel(context)
-            if (!ReplyNotifier.canNotify(context)) {
-                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-    }
-
     fun requestFloatingChat(friendId: String? = null, closeApp: Boolean = false) {
         bubbleFriendId = friendId ?: selectedFriend?.id ?: friends.firstOrNull()?.id
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
@@ -770,6 +816,21 @@ fun DostApp(
                 store.setProactiveEnabled(it)
                 proactiveEnabled = it
                 ConversationManager.refreshProactiveWork()
+                if (!it) {
+                    scope.launch {
+                        AnonymousTelemetry.record(
+                            store.anonymousTelemetryEnabled(),
+                            AnonymousTelemetryEvent.PROACTIVE_MESSAGES_DISABLED
+                        )
+                    }
+                } else if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    ReplyNotifier.ensureChannel(context)
+                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
             },
             onProactiveCadenceChange = {
                 store.setProactiveCadenceMinutes(it)
@@ -801,7 +862,12 @@ fun DostApp(
                 authRequestState = AuthRequestState.Idle
                 screen = AppScreen.AUTH
             },
-            onExportLocalData = { backupExportLauncher.launch("dost-local-backup.json") },
+            onExportLocalData = {
+                backupPassword = ""
+                backupPasswordConfirmation = ""
+                backupPasswordError = ""
+                backupPasswordMode = "export"
+            },
             onImportLocalData = { backupImportLauncher.launch(arrayOf("application/json")) },
             onDeleteServerArchive = {
                 scope.launch {
@@ -866,7 +932,15 @@ fun DostApp(
                 },
                 onSaveMoment = { store.saveSharedMoment(friend.id, it) },
                 onDeleteMoment = { store.deleteSharedMoment(friend.id, it) },
-                onPauseProactive = { ConversationManager.pauseFriendProactive(friend.id, it) },
+                onPauseProactive = {
+                    ConversationManager.pauseFriendProactive(friend.id, it)
+                    scope.launch {
+                        AnonymousTelemetry.record(
+                            store.anonymousTelemetryEnabled(),
+                            AnonymousTelemetryEvent.PROACTIVE_MESSAGES_PAUSED
+                        )
+                    }
+                },
                 onResumeProactive = { ConversationManager.resumeFriendProactive(friend.id) }
             )
         }
@@ -902,6 +976,115 @@ fun DostApp(
         )
     }
     }
+    if (backupPasswordMode != null) {
+        val exporting = backupPasswordMode == "export"
+        BackupPassphraseDialog(
+            exporting = exporting,
+            password = backupPassword,
+            confirmation = backupPasswordConfirmation,
+            error = backupPasswordError,
+            onPasswordChange = { backupPassword = it },
+            onConfirmationChange = { backupPasswordConfirmation = it },
+            onDismiss = {
+                backupPasswordMode = null
+                backupPassword = ""
+                backupPasswordConfirmation = ""
+                backupPasswordError = ""
+                pendingEncryptedBackup = null
+            },
+            onConfirm = {
+                backupPasswordError = ""
+                if (exporting) {
+                    pendingExportPassword = backupPassword
+                    backupPasswordMode = null
+                    backupExportLauncher.launch("dost-encrypted-backup.json")
+                } else {
+                    val backup = pendingEncryptedBackup
+                    if (backup != null) {
+                        val password = backupPassword.toCharArray()
+                        scope.launch {
+                            try {
+                                val decrypted = withContext(Dispatchers.IO) {
+                                    LocalBackupCrypto.decrypt(backup, password)
+                                }
+                                require(decrypted.length <= MAX_LOCAL_BACKUP_CHARS) { "The backup is too large to import." }
+                                importBackupText(decrypted)
+                                backupPasswordMode = null
+                                pendingEncryptedBackup = null
+                                backupPassword = ""
+                                backupPasswordConfirmation = ""
+                            } catch (error: Exception) {
+                                backupPasswordError = error.message?.take(160) ?: "The encrypted backup could not be opened."
+                            } finally {
+                                password.fill('\u0000')
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun BackupPassphraseDialog(
+    exporting: Boolean,
+    password: String,
+    confirmation: String,
+    error: String,
+    onPasswordChange: (String) -> Unit,
+    onConfirmationChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val validPassword = password.length in 12..256
+    val validConfirmation = !exporting || password == confirmation
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (exporting) "Protect your backup" else "Unlock your backup") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    if (exporting) {
+                        "Choose a passphrase with at least 12 characters. You will need it to restore this file; Dost cannot recover it."
+                    } else {
+                        "Enter the passphrase used when this backup was created. Importing replaces the current local data."
+                    }
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { onPasswordChange(it.take(256)) },
+                    label = { Text(if (exporting) "Passphrase" else "Backup passphrase") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (exporting) {
+                    OutlinedTextField(
+                        value = confirmation,
+                        onValueChange = { onConfirmationChange(it.take(256)) },
+                        label = { Text("Confirm passphrase") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                when {
+                    error.isNotBlank() -> Text(error)
+                    !validPassword -> Text("Use 12 to 256 characters.")
+                    !validConfirmation -> Text("The passphrases do not match.")
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = validPassword && validConfirmation) {
+                Text(if (exporting) "Create encrypted backup" else "Unlock and import")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 private fun readLocalBackup(context: Context, uri: Uri): String {
@@ -919,7 +1102,7 @@ private fun readLocalBackup(context: Context, uri: Uri): String {
     }
 }
 
-private const val MAX_LOCAL_BACKUP_CHARS = 25_000_000
+private const val MAX_LOCAL_BACKUP_CHARS = 35_000_000
 
 @Preview(showBackground = true)
 @Composable
