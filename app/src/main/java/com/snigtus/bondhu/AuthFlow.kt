@@ -1,7 +1,5 @@
 package com.snigtus.dost
 
-enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, VERIFY_EMAIL }
-
 enum class AuthValidationError { INVALID_EMAIL, PASSWORD_REQUIRED, PASSWORD_TOO_SHORT }
 
 fun isValidAuthEmail(email: String): Boolean =
@@ -16,9 +14,6 @@ fun authValidationError(email: String, password: String, creatingAccount: Boolea
 
 fun canUseLocalProfile(linkedAccountId: String, authenticatedAccountId: String): Boolean =
     linkedAccountId.isBlank() || linkedAccountId == authenticatedAccountId
-
-fun requiresEmailVerification(emailVerified: Boolean, googleAccount: Boolean): Boolean =
-    !emailVerified && !googleAccount
 
 fun authenticatedDestination(hasEligibleProfile: Boolean): AppScreen =
     if (hasEligibleProfile) AppScreen.HOME else AppScreen.REGISTER

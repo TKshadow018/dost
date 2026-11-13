@@ -3,6 +3,17 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+def firebaseConfigFile = file("google-services.json")
+def firebaseConfig = firebaseConfigFile.isFile() ? new groovy.json.JsonSlurper().parse(firebaseConfigFile) : [:]
+def firebaseProjectInfo = firebaseConfig.project_info ?: [:]
+def firebaseClient = (firebaseConfig.client ?: []).find {
+    it.client_info?.android_client_info?.package_name == "com.snigtus.dost"
+} ?: [:]
+def firebaseApiKey = firebaseClient.api_key?.find { it.current_key }?.current_key ?: ""
+def firebaseAppId = firebaseClient.client_info?.mobilesdk_app_id ?: ""
+def firebaseProjectId = firebaseProjectInfo.project_id ?: ""
+def firebaseSenderId = firebaseProjectInfo.project_number ?: ""
+def googleWebClientId = firebaseClient.oauth_client?.find { it.client_type?.toString() == "3" }?.client_id ?: ""
 if (file("google-services.json").exists()) {
     apply plugin: 'com.google.gms.google-services'
 }
@@ -41,6 +52,11 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
+        buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseApiKey)
+        buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseAppId)
+        buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseProjectId)
+        buildConfigField "String", "FIREBASE_SENDER_ID", groovy.json.JsonOutput.toJson(firebaseSenderId)
+        buildConfigField "String", "GOOGLE_WEB_CLIENT_ID", groovy.json.JsonOutput.toJson(googleWebClientId)
     }
 
     buildTypes {
@@ -74,11 +90,11 @@ dependencies {
     implementation libs.androidx.material3
     implementation libs.kotlinx.coroutines.android
     implementation libs.androidx.work.runtime.ktx
-    implementation platform("com.google.firebase:firebase-bom:35.1.0")
-    implementation "com.google.firebase:firebase-auth"
-    implementation "androidx.credentials:credentials:1.6.0"
-    implementation "androidx.credentials:credentials-play-services-auth:1.6.0"
-    implementation "com.google.android.libraries.identity.googleid:googleid:1.2.1"
+    implementation platform(libs.firebase.bom)
+    implementation libs.firebase.auth
+    implementation libs.androidx.credentials
+    implementation libs.androidx.credentials.play.services.auth
+    implementation libs.google.id
     testImplementation libs.junit
     testImplementation libs.kotlinx.coroutines.test
     // Unit tests run against the Android SDK stubs, whose org.json throws. Use the real parser in tests only.

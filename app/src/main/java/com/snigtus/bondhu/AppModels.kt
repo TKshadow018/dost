@@ -4,8 +4,44 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-enum class AppScreen { SPLASH, LOGIN, REGISTER, HOME, CHAT, KNOWLEDGE }
+enum class AppScreen { SPLASH, AUTH, REGISTER, HOME, CHAT, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
+enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD, VERIFY_EMAIL }
+
+sealed interface AuthRequestState {
+    data object Idle : AuthRequestState
+    data object Loading : AuthRequestState
+    data class Error(val message: String) : AuthRequestState
+    data class Success(val message: String) : AuthRequestState
+}
+
+data class AuthAccount(
+    val uid: String,
+    val email: String,
+    val displayName: String,
+    val emailVerified: Boolean = false,
+    val googleAccount: Boolean = false
+) {
+    val needsEmailVerification: Boolean
+        get() = requiresEmailVerification(emailVerified, googleAccount)
+}
+
+fun requiresEmailVerification(emailVerified: Boolean, googleAccount: Boolean): Boolean =
+    !emailVerified && !googleAccount
+
+fun authenticationStartScreen(
+    hasSignedInUser: Boolean,
+    hasEligibleLocalProfile: Boolean,
+    authenticationRequired: Boolean,
+    signedInUserId: String? = null,
+    localAccountId: String? = null
+): AppScreen = when {
+    hasSignedInUser && !hasEligibleLocalProfile -> AppScreen.REGISTER
+    hasSignedInUser && !signedInUserId.isNullOrBlank() && signedInUserId == localAccountId -> AppScreen.HOME
+    hasSignedInUser -> AppScreen.AUTH
+    hasEligibleLocalProfile && !authenticationRequired && localAccountId.isNullOrBlank() -> AppScreen.HOME
+    else -> AppScreen.AUTH
+}
 
 internal const val MAX_CUSTOM_FRIENDS = 3
 internal const val MAX_SYSTEM_FRIENDS = 7

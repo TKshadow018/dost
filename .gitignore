@@ -16,6 +16,7 @@ local.properties
 /app/dost-upload.jks
 /app/google-services.json
 /app/keystore.properties
+/app/google-services.json
 /app/api/config.php
 /dost-private-data/
 /app/src/main/assets/emails_list.csv
