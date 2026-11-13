@@ -14,6 +14,9 @@ def firebaseAppId = firebaseClient.client_info?.mobilesdk_app_id ?: ""
 def firebaseProjectId = firebaseProjectInfo.project_id ?: ""
 def firebaseSenderId = firebaseProjectInfo.project_number ?: ""
 def googleWebClientId = firebaseClient.oauth_client?.find { it.client_type?.toString() == "3" }?.client_id ?: ""
+if (file("google-services.json").exists()) {
+    apply plugin: 'com.google.gms.google-services'
+}
 
 android {
     namespace 'com.snigtus.dost'

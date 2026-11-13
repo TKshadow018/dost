@@ -160,14 +160,28 @@ fun DostApp(
     var profileErrors by appViewModel.profileErrors
     val openFriendRequest by openFriendRequests.collectAsState()
 
+    fun storedAccountIds(): List<String> = listOf(
+        store.authenticationAccountId(),
+        store.firebaseAccountId()
+    ).filter(String::isNotBlank).distinct()
+
+    fun canBindLocalProfile(accountId: String): Boolean {
+        val storedIds = storedAccountIds()
+        return if (storedIds.isEmpty()) {
+            !store.hasUserProfile() || !store.authenticationRequired()
+        } else {
+            storedIds.all { it == accountId }
+        }
+    }
+
     fun hasLocalAccountAccess(): Boolean {
         if (!store.hasEligibleAccount()) return false
-        val currentAccountId = authRepository.currentAccount?.uid
-        val localAccountId = store.authenticationAccountId()
-        return if (store.authenticationRequired()) {
-            !currentAccountId.isNullOrBlank() && currentAccountId == localAccountId
+        val accountId = authRepository.currentAccount?.uid
+        val storedIds = storedAccountIds()
+        return if (accountId.isNullOrBlank()) {
+            storedIds.isEmpty() && !store.authenticationRequired()
         } else {
-            currentAccountId == null
+            storedIds.isNotEmpty() && storedIds.all { it == accountId }
         }
     }
 
@@ -178,18 +192,14 @@ fun DostApp(
     }
 
     fun completeAuthentication(account: AuthAccount) {
-        if (store.hasUserProfile()) {
-            val localAccountId = store.authenticationAccountId()
-            if ((localAccountId.isNotBlank() && localAccountId != account.uid)
-                || (localAccountId.isBlank() && store.authenticationRequired())
-            ) {
-                authRepository.signOut()
-                authMode = AuthMode.SIGN_IN
-                authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
-                return
-            }
-            if (localAccountId.isBlank()) store.bindAuthenticationAccount(account.uid)
+        if (!canBindLocalProfile(account.uid)) {
+            authRepository.signOut()
+            authMode = AuthMode.SIGN_IN
+            authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+            return
         }
+        store.bindAuthenticationAccount(account.uid)
+        store.linkFirebaseAccount(account.uid)
         store.markAuthenticationRequired()
         email = account.email.ifBlank { email }
         if (!store.hasEligibleAccount()) name = account.displayName.ifBlank { name }
@@ -200,7 +210,7 @@ fun DostApp(
             hasEligibleLocalProfile = store.hasEligibleAccount(),
             authenticationRequired = true,
             signedInUserId = account.uid,
-            localAccountId = store.authenticationAccountId()
+            localAccountId = store.authenticationAccountId().ifBlank { store.firebaseAccountId() }
         )
     }
 
@@ -310,7 +320,6 @@ fun DostApp(
         if (screen == AppScreen.SPLASH) return@LaunchedEffect
         openRequestedFriend(openFriendRequest?.friendId)
     }
-
     LaunchedEffect(screen, authRepository.currentAccount?.uid, authRepository.currentAccount?.emailVerified) {
         val currentAccount = authRepository.currentAccount
         if (currentAccount?.needsEmailVerification == true && screen != AppScreen.SPLASH) {
@@ -333,8 +342,7 @@ fun DostApp(
         }
         if (screen !in setOf(AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
-        val localAccountId = store.authenticationAccountId()
-        if (!currentAccountId.isNullOrBlank() && localAccountId.isNotBlank() && currentAccountId != localAccountId) {
+        if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
             authRepository.signOut()
             authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
         }
@@ -485,17 +493,14 @@ fun DostApp(
                 screen = AppScreen.AUTH
             } else {
                 if (currentAccount != null) {
-                    var localAccountId = store.authenticationAccountId()
-                    if (store.hasUserProfile() && localAccountId.isBlank() && !store.authenticationRequired()) {
-                        store.bindAuthenticationAccount(currentAccount.uid)
-                        localAccountId = currentAccount.uid
-                    }
-                    if (store.hasUserProfile() && localAccountId.isNotBlank() && localAccountId != currentAccount.uid) {
+                    if (!canBindLocalProfile(currentAccount.uid)) {
                         store.markAuthenticationRequired()
                         authRepository.signOut()
                         currentAccount = null
                         authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
                     } else {
+                        store.bindAuthenticationAccount(currentAccount.uid)
+                        store.linkFirebaseAccount(currentAccount.uid)
                         store.markAuthenticationRequired()
                         email = currentAccount.email.ifBlank { email }
                         if (!store.hasEligibleAccount()) name = currentAccount.displayName.ifBlank { name }
@@ -506,7 +511,7 @@ fun DostApp(
                     hasEligibleLocalProfile = store.hasEligibleAccount(),
                     authenticationRequired = store.authenticationRequired(),
                     signedInUserId = currentAccount?.uid,
-                    localAccountId = store.authenticationAccountId()
+                    localAccountId = store.authenticationAccountId().ifBlank { store.firebaseAccountId() }
                 )
                 val requestedId = openFriendRequests.value?.friendId
                 val resolved = ChatLaunch.friendToOpen(destination == AppScreen.HOME, requestedId, friends.map { it.id }.toSet())

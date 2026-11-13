@@ -581,7 +581,6 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
                 Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {
                     Text(when { language == AppLanguage.BANGLA -> "আমার সম্পর্কে জানা তথ্য"; hindi -> "मेरे बारे में जानकारी"; else -> "Knowledge about me" })
                 }
-                HorizontalDivider()
                 Text(when { language == AppLanguage.BANGLA -> "বন্ধু মুছুন"; hindi -> "दोस्त हटाएं"; else -> "Delete a friend" }, style = MaterialTheme.typography.titleMedium)
                 friends.forEach { friend ->
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

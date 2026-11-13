@@ -70,6 +70,10 @@ class DostStore(context: Context) {
     fun userEmail(): String = preferences.getString("user_email", "") ?: ""
     fun userAge(): String = preferences.getString("user_age", "") ?: ""
     fun userGender(): String = preferences.getString("user_gender", "") ?: ""
+    fun firebaseAccountId(): String = preferences.getString("firebase_account_id", "") ?: ""
+    fun linkFirebaseAccount(uid: String) {
+        if (uid.isNotBlank()) preferences.edit().putString("firebase_account_id", uid).apply()
+    }
     fun userTimeZoneId(): String = validZoneId(preferences.getString("user_time_zone", ZoneId.systemDefault().id) ?: ZoneId.systemDefault().id).id
     fun saveUserTimeZoneId(timeZoneId: String) {
         preferences.edit().putString("user_time_zone", validZoneId(timeZoneId).id).apply()

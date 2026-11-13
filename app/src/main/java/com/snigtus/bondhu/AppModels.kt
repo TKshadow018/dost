@@ -39,7 +39,7 @@ fun authenticationStartScreen(
     hasSignedInUser && !hasEligibleLocalProfile -> AppScreen.REGISTER
     hasSignedInUser && !signedInUserId.isNullOrBlank() && signedInUserId == localAccountId -> AppScreen.HOME
     hasSignedInUser -> AppScreen.AUTH
-    hasEligibleLocalProfile && !authenticationRequired -> AppScreen.HOME
+    hasEligibleLocalProfile && !authenticationRequired && localAccountId.isNullOrBlank() -> AppScreen.HOME
     else -> AppScreen.AUTH
 }
 

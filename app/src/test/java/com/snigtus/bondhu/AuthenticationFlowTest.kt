@@ -52,6 +52,19 @@ class AuthenticationFlowTest {
     }
 
     @Test
+    fun linkedLocalProfileRequiresItsAccountEvenIfAuthenticationFlagIsMissing() {
+        assertEquals(
+            AppScreen.AUTH,
+            authenticationStartScreen(
+                hasSignedInUser = false,
+                hasEligibleLocalProfile = true,
+                authenticationRequired = false,
+                localAccountId = "profile-owner-uid"
+            )
+        )
+    }
+
+    @Test
     fun signingOutDoesNotLetAnAuthenticatedProfileBypassSignIn() {
         assertEquals(
             AppScreen.AUTH,
