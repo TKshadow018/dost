@@ -4,6 +4,7 @@ package com.snigtus.dost
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -24,9 +25,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModelProvider
 import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val openFriendRequests = MutableStateFlow<OpenFriendRequest?>(null)
@@ -95,6 +99,47 @@ fun DostApp(
     var closeAfterOverlayPermission by appViewModel.closeAfterOverlayPermission
     var bubbleFriendId by appViewModel.bubbleFriendId
     val scope = rememberCoroutineScope()
+    var settingsNotice by remember { mutableStateOf("") }
+    val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) scope.launch {
+            settingsNotice = try {
+                val backup = withContext(Dispatchers.IO) { store.exportLocalData().toString(2) }
+                require(backup.length <= MAX_LOCAL_BACKUP_CHARS) { "The backup is too large to export." }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(backup) }
+                        ?: throw java.io.IOException("Could not open the selected file.")
+                }
+                "Local data exported."
+            } catch (error: Exception) {
+                "Export failed: ${error.message?.take(160) ?: "could not write the file"}"
+            }
+        }
+    }
+    val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            settingsNotice = "Importing local data…"
+            try {
+                withContext(Dispatchers.IO) {
+                    ConversationManager.importLocalData(JSONObject(readLocalBackup(context, uri)))
+                }
+                language = store.language()
+                name = store.userName()
+                email = store.userEmail()
+                age = store.userAge()
+                gender = store.userGender()
+                userTimeZoneId = store.userTimeZoneId()
+                openRouterApiKey = store.openRouterApiKey()
+                aiModel = store.aiModel()
+                friends.clear()
+                friends.addAll(store.loadFriends())
+                selectedFriend = null
+                screen = AppScreen.HOME
+                settingsNotice = "Local data imported."
+            } catch (error: Exception) {
+                settingsNotice = "Import failed: ${error.message?.take(160) ?: "the file is invalid"}"
+            }
+        }
+    }
     var generatingProfileIds by appViewModel.generatingProfileIds
     var profileErrors by appViewModel.profileErrors
     val openFriendRequest by openFriendRequests.collectAsState()
@@ -301,7 +346,21 @@ fun DostApp(
             onLanguageChange = { language = it; store.saveLanguage(it) },
             onKnowledge = { screen = AppScreen.KNOWLEDGE },
             generatingProfileIds = generatingProfileIds,
-            profileFailedIds = profileErrors.keys
+            profileFailedIds = profileErrors.keys,
+            onExportLocalData = { backupExportLauncher.launch("dost-local-backup.json") },
+            onImportLocalData = { backupImportLauncher.launch(arrayOf("application/json")) },
+            settingsNotice = settingsNotice,
+            onDeleteServerArchive = {
+                scope.launch {
+                    settingsNotice = "Deleting server archive…"
+                    settingsNotice = try {
+                        val deleted = OpenRouterClient().deleteServerArchive(store.installationId())
+                        "Server archive deleted ($deleted sessions)."
+                    } catch (error: Exception) {
+                        "Archive deletion failed: ${error.message?.take(160) ?: "please try again"}"
+                    }
+                }
+            }
         )
         AppScreen.CHAT -> selectedFriend?.let { friend ->
             ChatScreen(
@@ -336,6 +395,23 @@ fun DostApp(
     }
     }
 }
+
+private fun readLocalBackup(context: Context, uri: Uri): String {
+    val input = context.contentResolver.openInputStream(uri) ?: throw java.io.IOException("Could not open the selected file.")
+    return input.reader(Charsets.UTF_8).use { reader ->
+        val text = StringBuilder()
+        val buffer = CharArray(8192)
+        while (true) {
+            val count = reader.read(buffer)
+            if (count < 0) break
+            require(text.length + count <= MAX_LOCAL_BACKUP_CHARS) { "The backup file is too large to import." }
+            text.append(buffer, 0, count)
+        }
+        text.toString()
+    }
+}
+
+private const val MAX_LOCAL_BACKUP_CHARS = 25_000_000
 
 @Preview(showBackground = true)
 @Composable

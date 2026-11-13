@@ -35,7 +35,7 @@ import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.*
 
 @Composable
-internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
+internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -184,7 +184,7 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
         onSelect = ::addCatalogFriend,
         onDismiss = { showSystemFriendPicker = false }
     )
-    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() })
+    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() }, onExportLocalData = onExportLocalData, onImportLocalData = onImportLocalData, settingsNotice = settingsNotice, onDeleteServerArchive = onDeleteServerArchive)
     if (showAiSettings) AiSettingsDialog(language, openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
 }
 
@@ -496,13 +496,14 @@ internal fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange:
 }
 
 @Composable
-private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit) {
+private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
     val hindi = language == AppLanguage.HINDI
+    var confirmArchiveDelete by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(when { language == AppLanguage.BANGLA -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(when { language == AppLanguage.BANGLA -> "অ্যাপের ভাষা"; hindi -> "ऐप की भाषा"; else -> "App language" })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { onLanguageChange(AppLanguage.ENGLISH) }, enabled = language != AppLanguage.ENGLISH) { Text("English") }
@@ -514,6 +515,20 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
                 HorizontalDivider()
                 Button(onClick = onAiSettings, modifier = Modifier.fillMaxWidth()) { Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) }
                 Text(LocalizedText.CHAT_ARCHIVE_NOTICE.resolve(language), style = MaterialTheme.typography.bodySmall)
+                HorizontalDivider()
+                Text("Local data", style = MaterialTheme.typography.titleMedium)
+                Text("Move your profile, friends, memories, summaries, and chat history between devices with a JSON backup. The backup does not include your API key.", style = MaterialTheme.typography.bodySmall)
+                Text("The installation id is not transferred. Delete the old phone's server archive from that phone before moving to a new one.", style = MaterialTheme.typography.bodySmall)
+                Text("Importing replaces the current profile, friends, memories, summaries, and chat history.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                OutlinedButton(onClick = onExportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Export local data") }
+                OutlinedButton(onClick = onImportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Import local data") }
+                if (settingsNotice.isNotBlank()) {
+                    Text(settingsNotice, color = if (settingsNotice.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                }
+                HorizontalDivider()
+                Text("Server archive", style = MaterialTheme.typography.titleMedium)
+                Text("Delete this installation's indexed chat archive and attached images from Dost's server. Older records without an installation id cannot be matched.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = { confirmArchiveDelete = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete server archive") }
                 HorizontalDivider()
                 Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {
                     Text(when { language == AppLanguage.BANGLA -> "আমার সম্পর্কে জানা তথ্য"; hindi -> "मेरे बारे में जानकारी"; else -> "Knowledge about me" })
@@ -530,6 +545,19 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(when { language == AppLanguage.BANGLA -> "বন্ধ করুন"; hindi -> "बंद करें"; else -> "Close" }) } }
     )
+    if (confirmArchiveDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmArchiveDelete = false },
+            title = { Text("Delete server archive?") },
+            text = { Text("This permanently removes the indexed chat sessions and images for this installation from Dost's server. It does not delete copies held by OpenRouter or model providers.") },
+            confirmButton = {
+                TextButton(onClick = { confirmArchiveDelete = false; onDeleteServerArchive() }) {
+                    Text("Delete archive", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmArchiveDelete = false }) { Text("Cancel") } }
+        )
+    }
 }
 
 @Composable

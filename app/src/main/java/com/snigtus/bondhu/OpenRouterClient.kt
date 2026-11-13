@@ -91,6 +91,31 @@ class OpenRouterClient {
         return false
     }
 
+    suspend fun deleteServerArchive(installationId: String): Int = withContext(Dispatchers.IO) {
+        require(installationId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
+            "The installation id is invalid."
+        }
+        val connection = URL("https://bisque-bear-900175.hostingersite.com/api/delete_archive.php")
+            .openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.connectTimeout = 15_000
+        connection.readTimeout = 15_000
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("X-Dost-Install-ID", installationId)
+        try {
+            val statusCode = connection.responseCode
+            val stream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (statusCode !in 200..299) {
+                val message = runCatching { JSONObject(body).optString("error") }.getOrNull()
+                throw IOException(message?.takeIf(String::isNotBlank) ?: "Could not delete the server archive (HTTP $statusCode)")
+            }
+            JSONObject(body).getInt("deleted_sessions")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile): AiReply {
         val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
         val connection = openConnection(apiKey, installationId, friend.id, resolvedSessionId)
