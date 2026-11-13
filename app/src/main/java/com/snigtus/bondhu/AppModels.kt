@@ -121,6 +121,9 @@ data class SystemFriendListing(
     val photoUrl: String
 )
 
+fun availableSystemFriendDeck(catalog: List<SystemFriendListing>, addedCatalogIds: Set<String>): List<SystemFriendListing> =
+    catalog.filterNot { it.id in addedCatalogIds }
+
 fun initialGreetingMessage(friend: Friend, history: List<ChatMessage>, sessionId: String): ChatMessage? {
     val greeting = friend.greeting.trim()
     if (greeting.isBlank() || history.isNotEmpty()) return null
