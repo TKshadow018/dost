@@ -2,6 +2,7 @@ package com.snigtus.dost
 
 import android.app.Application
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 
@@ -19,6 +20,8 @@ class DostAppViewModel(application: Application) : AndroidViewModel(application)
     val aiModel = mutableStateOf(store.aiModel())
     val friends = mutableStateListOf<Friend>()
     val selectedFriend = mutableStateOf<Friend?>(null)
+    val chatDrafts = mutableStateMapOf<String, String>()
+    val chatImageDrafts = mutableStateMapOf<String, String>()
     val closeAfterOverlayPermission = mutableStateOf(false)
     val bubbleFriendId = mutableStateOf<String?>(null)
     val generatingProfileIds = mutableStateOf(setOf<String>())

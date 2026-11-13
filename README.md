@@ -1,5 +1,9 @@
 # Dost
 
+## User guide
+
+For an overview of the app’s features and how to use them, see the [Dost User Guide](USER-GUIDE.md).
+
 ## Firebase Authentication setup
 
 Firebase Authentication provides email/password accounts, email verification, password reset, and Google sign-in. Account identity is stored with Firebase; profiles, friends, and conversations remain local to the device.

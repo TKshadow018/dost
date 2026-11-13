@@ -58,7 +58,11 @@ $required = array(
     'up to the seven most recent summaries' => 'names session summaries sent with each turn',
     'friendship score and love score' => 'names relationship scores sent with each turn',
     'does not display the installation id' => 'says the app does not display the installation id',
-    'installation id' => 'describes install-id lookup for newer archives'
+    'installation id' => 'describes install-id lookup for newer archives',
+    'Share anonymous event counts' => 'discloses optional event-only analytics',
+    'daily event totals for 90 days' => 'states analytics data retention',
+    'does not receive message content, profile details, account data, or installation ids' => 'states analytics excludes conversation and identity data',
+    'may see your IP address' => 'discloses IP visibility to the API host'
 );
 foreach ($required as $needle => $reason) {
     if (strpos($text, $needle) === false) {

@@ -51,7 +51,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.Modifier
@@ -67,12 +66,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import com.snigtus.dost.ui.theme.DostAuthBorder
-import com.snigtus.dost.ui.theme.DostAuthCanvas
-import com.snigtus.dost.ui.theme.DostAuthInk
-import com.snigtus.dost.ui.theme.DostAuthMuted
-import com.snigtus.dost.ui.theme.DostAuthTint
-import com.snigtus.dost.ui.theme.DostTeal
 
 @Composable
 fun AuthScreen(
@@ -150,7 +143,7 @@ fun AuthScreen(
         modifier = Modifier
             .fillMaxSize()
             .imePadding()
-            .background(Brush.verticalGradient(listOf(DostAuthCanvas, DostAuthTint, DostAuthCanvas)))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Column(
             modifier = Modifier
@@ -168,7 +161,7 @@ fun AuthScreen(
             Text(
                 text = authLabel(language, "দোস্ত", "दोस्त", "Dost"),
                 style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                color = DostAuthInk,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.semantics { heading() }
             )
             Text(
@@ -179,17 +172,17 @@ fun AuthScreen(
                     "A little conversation, a little understanding—just for you."
                 ),
                 style = MaterialTheme.typography.bodyMedium,
-                color = DostAuthMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 22.dp)
             )
 
             Surface(
                 modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
                 shape = RoundedCornerShape(28.dp),
-                color = Color.White,
-                contentColor = DostAuthInk,
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 shadowElevation = 8.dp,
-                border = BorderStroke(1.dp, DostAuthBorder)
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Column(
                     modifier = Modifier.padding(24.dp),
@@ -199,7 +192,7 @@ fun AuthScreen(
                         Text(
                             authLabel(language, "পাসওয়ার্ড রিসেট", "पासवर्ड रीसेट करें", "Reset your password"),
                             style = MaterialTheme.typography.headlineSmall,
-                            color = DostAuthInk,
+                            color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.semantics { heading() }
                         )
                         Text(
@@ -209,13 +202,13 @@ fun AuthScreen(
                                 "हम आपके ईमेल पर रीसेट लिंक भेजेंगे।",
                                 "We’ll send a reset link to your email."
                             ),
-                            color = DostAuthMuted
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else if (mode == AuthMode.VERIFY_EMAIL) {
                         Text(
                             authLabel(language, "ইমেইল যাচাই করুন", "ईमेल सत्यापित करें", "Verify your email"),
                             style = MaterialTheme.typography.headlineSmall,
-                            color = DostAuthInk,
+                            color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.semantics { heading() }
                         )
                         Text(
@@ -225,13 +218,13 @@ fun AuthScreen(
                                 "सत्यापन लिंक भेज दिया गया है। ईमेल सत्यापित करके यहाँ लौटें: $email",
                                 "A verification link was sent. Verify your email, then return here: $email"
                             ),
-                            color = DostAuthMuted
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
                         Text(
                             authLabel(language, "তোমার দোস্তের কাছে ফিরে এসো", "अपने दोस्त के पास लौटें", "Come on in"),
                             style = MaterialTheme.typography.headlineSmall,
-                            color = DostAuthInk,
+                            color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.semantics { heading() }
                         )
                         Text(
@@ -241,21 +234,21 @@ fun AuthScreen(
                                 "अपने खाते में आएँ या नई शुरुआत करें।",
                                 "Sign in to your account, or create a new one."
                             ),
-                            color = DostAuthMuted
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (mode == AuthMode.SIGN_IN) {
-                                Button(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)) {
+                                Button(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp)) {
                                     Text(authLabel(language, "লগ ইন", "लॉग इन", "Sign in"))
                                 }
-                                OutlinedButton(onClick = { onModeChange(AuthMode.CREATE_ACCOUNT); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = DostTeal)) {
+                                OutlinedButton(onClick = { onModeChange(AuthMode.CREATE_ACCOUNT); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp)) {
                                     Text(authLabel(language, "নতুন অ্যাকাউন্ট", "नया खाता", "Create account"))
                                 }
                             } else {
-                                OutlinedButton(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = DostTeal)) {
+                                OutlinedButton(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp)) {
                                     Text(authLabel(language, "লগ ইন", "लॉग इन", "Sign in"))
                                 }
-                                Button(onClick = { onModeChange(AuthMode.CREATE_ACCOUNT); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)) {
+                                Button(onClick = { onModeChange(AuthMode.CREATE_ACCOUNT); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp)) {
                                     Text(authLabel(language, "নতুন অ্যাকাউন্ট", "नया खाता", "Create account"))
                                 }
                             }
@@ -273,8 +266,8 @@ fun AuthScreen(
                             enabled = googleSignInEnabled && !loading,
                             modifier = Modifier.fillMaxWidth().height(52.dp),
                             shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = DostAuthInk),
-                            border = BorderStroke(1.dp, DostAuthBorder)
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Text("G", color = Color(0xFF4285F4), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                             Text(
@@ -290,16 +283,16 @@ fun AuthScreen(
                                     "Google साइन-इन चालू करने के लिए Firebase वेब OAuth क्लाइंट सेट करें।",
                                     "Google sign-in needs a Firebase web OAuth client ID."
                                 ),
-                                color = DostAuthMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }
                     if (mode != AuthMode.FORGOT_PASSWORD && mode != AuthMode.VERIFY_EMAIL) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            HorizontalDivider(modifier = Modifier.weight(1f), color = DostAuthBorder)
-                            Text(authLabel(language, "অথবা ইমেইল", "या ईमेल", "or email"), color = DostAuthMuted, style = MaterialTheme.typography.labelMedium)
-                            HorizontalDivider(modifier = Modifier.weight(1f), color = DostAuthBorder)
+                            HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+                            Text(authLabel(language, "অথবা ইমেইল", "या ईमेल", "or email"), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                            HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
                         }
                     }
 
@@ -307,7 +300,7 @@ fun AuthScreen(
                         value = email,
                         onValueChange = { email = it; localError = null; dismissRequestMessage = true },
                         label = { Text(authLabel(language, "ইমেইল", "ईमेल", "Email address")) },
-                        leadingIcon = { Text("@", color = DostAuthMuted) },
+                        leadingIcon = { Text("@", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                         singleLine = true,
                         enabled = !loading && mode != AuthMode.VERIFY_EMAIL,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = if (mode == AuthMode.FORGOT_PASSWORD || mode == AuthMode.VERIFY_EMAIL) ImeAction.Done else ImeAction.Next),
@@ -342,7 +335,7 @@ fun AuthScreen(
                     (localError ?: requestMessage)?.let { message ->
                         Text(
                             message,
-                            color = if (requestState is AuthRequestState.Success && localError == null) DostTeal else MaterialTheme.colorScheme.error,
+                            color = if (requestState is AuthRequestState.Success && localError == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                         )
@@ -355,7 +348,7 @@ fun AuthScreen(
                                 "ईमेल साइन-इन चालू करने के लिए Firebase Authentication सेट अप करें।",
                                 "Set up Firebase Authentication to enable email sign-in."
                             ),
-                            color = DostAuthMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -365,7 +358,6 @@ fun AuthScreen(
                         enabled = emailSignInEnabled && !loading,
                         modifier = Modifier.fillMaxWidth().height(54.dp),
                         shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)
                     ) {
                         if (loading) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -403,7 +395,7 @@ fun AuthScreen(
                     } else {
                         Text(
                             authLabel(language, "পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের রাখুন।", "पासवर्ड कम से कम 6 अक्षरों का रखें।", "Use at least 6 characters for your password."),
-                            color = DostAuthMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -445,7 +437,7 @@ fun RegisterScreen(language: AppLanguage, step: Int, name: String, email: String
         }
     }
     val hindi = language == AppLanguage.HINDI
-    Scaffold(topBar = { TopAppBar(title = { Text(when { language == AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি - ধাপ $step/২"; hindi -> "खाता बनाएं - चरण $step/2"; else -> "Create account - Step $step of 2" }) }, navigationIcon = { TextButton(onClick = onBack) { Text(when { language == AppLanguage.BANGLA -> "ফিরুন"; hindi -> "वापस"; else -> "Back" }) } }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Text(when { language == AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি - ধাপ $step/২"; hindi -> "खाता बनाएं - चरण $step/2"; else -> "Create account - Step $step of 2" }) }, navigationIcon = { DostBackButton(language, onBack) }) }) { padding ->
         Column(modifier = Modifier.padding(padding).padding(24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (step == 1) {
                 Text(when { language == AppLanguage.BANGLA -> "আপনার প্রোফাইল তৈরি করুন"; hindi -> "अपनी प्रोफ़ाइल बनाएं"; else -> "Create your profile" }, style = MaterialTheme.typography.headlineSmall)

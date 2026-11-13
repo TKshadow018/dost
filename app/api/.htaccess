@@ -4,6 +4,10 @@ Options -Indexes
     Require all denied
 </Files>
 
+<Files "telemetry_store.php">
+    Require all denied
+</Files>
+
 <FilesMatch "^(test_.*\.php|.*\.txt)$">
     Require all denied
 </FilesMatch>

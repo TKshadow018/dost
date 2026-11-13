@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,6 +21,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
@@ -108,6 +110,12 @@ fun DostApp(
     var userTimeZoneId by appViewModel.userTimeZoneId
     var openRouterApiKey by appViewModel.openRouterApiKey
     var aiModel by appViewModel.aiModel
+    var anonymousTelemetryEnabled by remember { mutableStateOf(store.anonymousTelemetryEnabled()) }
+    var proactiveEnabled by remember { mutableStateOf(store.proactiveEnabled()) }
+    var proactiveCadenceMinutes by remember { mutableIntStateOf(store.proactiveCadenceMinutes()) }
+    var automaticFollowUpMinutes by remember { mutableIntStateOf(store.automaticFollowUpMinutes()) }
+    var quietHoursStartMinute by remember { mutableIntStateOf(store.quietHoursStartMinute()) }
+    var quietHoursEndMinute by remember { mutableIntStateOf(store.quietHoursEndMinute()) }
     val friends = appViewModel.friends
     var selectedFriend by appViewModel.selectedFriend
     var closeAfterOverlayPermission by appViewModel.closeAfterOverlayPermission
@@ -116,6 +124,39 @@ fun DostApp(
     var authMode by rememberSaveable { mutableStateOf(AuthMode.SIGN_IN) }
     var authRequestState by remember { mutableStateOf<AuthRequestState>(AuthRequestState.Idle) }
     var settingsNotice by remember { mutableStateOf("") }
+    var settingsReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var friendProfileReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var knowledgeReturnScreen by rememberSaveable { mutableStateOf(AppScreen.SETTINGS) }
+    var knowledgeFriendFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var chatReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    val homeListState = rememberLazyListState()
+    val knowledgeListState = rememberLazyListState()
+    var systemFriendCatalog by remember { mutableStateOf(emptyList<SystemFriendListing>()) }
+    var systemFriendCatalogLoading by remember { mutableStateOf(false) }
+    var systemFriendCatalogError by remember { mutableStateOf<String?>(null) }
+    var addingSystemFriendId by remember { mutableStateOf<String?>(null) }
+    BackHandler(
+        enabled = screen in setOf(
+            AppScreen.CHAT,
+            AppScreen.FRIEND_PROFILE,
+            AppScreen.SYSTEM_FRIEND_PICKER,
+            AppScreen.KNOWLEDGE,
+            AppScreen.SETTINGS,
+            AppScreen.REGISTER
+        ) || screen == AppScreen.AUTH && authMode != AuthMode.SIGN_IN
+    ) {
+        when (screen) {
+            AppScreen.CHAT -> screen = chatReturnScreen
+            AppScreen.FRIEND_PROFILE -> screen = friendProfileReturnScreen
+            AppScreen.SYSTEM_FRIEND_PICKER -> screen = AppScreen.HOME
+            AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
+            AppScreen.SETTINGS -> screen = settingsReturnScreen
+            AppScreen.REGISTER -> if (registerStep == 2) registerStep = 1 else screen = AppScreen.AUTH
+            AppScreen.AUTH -> authMode = AuthMode.SIGN_IN
+            else -> Unit
+        }
+    }
+    val systemFriendClient = remember { SystemFriendClient() }
     val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
             settingsNotice = try {
@@ -149,6 +190,7 @@ fun DostApp(
                 friends.clear()
                 friends.addAll(store.loadFriends())
                 selectedFriend = null
+                knowledgeFriendFilter = null
                 screen = AppScreen.HOME
                 settingsNotice = "Local data imported."
             } catch (error: Exception) {
@@ -340,7 +382,7 @@ fun DostApp(
             }
             return@LaunchedEffect
         }
-        if (screen !in setOf(AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
+        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
         if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
             authRepository.signOut()
@@ -466,11 +508,84 @@ fun DostApp(
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
     }
 
+    fun loadSystemFriendCatalog() {
+        systemFriendCatalogLoading = true
+        systemFriendCatalogError = null
+        scope.launch {
+            try {
+                systemFriendCatalog = systemFriendClient.getCatalog()
+            } catch (error: java.io.IOException) {
+                systemFriendCatalogError = LocalizedText.LOAD_FRIENDS_FAILED.resolve(language)
+            } catch (error: org.json.JSONException) {
+                systemFriendCatalogError = LocalizedText.INVALID_FRIEND_CATALOG.resolve(language)
+            } finally {
+                systemFriendCatalogLoading = false
+            }
+        }
+    }
+
+    fun addCatalogFriend(listing: SystemFriendListing) {
+        val addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet()
+        if (addingSystemFriendId != null || listing.id in addedCatalogIds || friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS) return
+        addingSystemFriendId = listing.id
+        systemFriendCatalogError = null
+        scope.launch {
+            try {
+                val profile = systemFriendClient.getProfile(listing.id)
+                val friendWithCachedPhoto = systemFriendClient.savePhotoForOfflineUse(context, profile)
+                addSystemFriend(friendWithCachedPhoto)
+                screen = AppScreen.HOME
+            } catch (error: java.io.IOException) {
+                systemFriendCatalogError = LocalizedText.ADD_SYSTEM_FRIEND_FAILED.resolve(language)
+            } catch (error: org.json.JSONException) {
+                systemFriendCatalogError = LocalizedText.INVALID_SYSTEM_FRIEND.resolve(language)
+            } finally {
+                addingSystemFriendId = null
+            }
+        }
+    }
+
+    fun openFriendProfile(friend: Friend, returnTo: AppScreen) {
+        selectedFriend = friend
+        friendProfileReturnScreen = returnTo
+        screen = AppScreen.FRIEND_PROFILE
+    }
+
+    fun updateFriendTimeZone(friend: Friend, timeZoneId: String) {
+        val updated = store.updateFriend(friend.id) { current ->
+            current.copy(timeZoneId = validZoneId(timeZoneId).id)
+        } ?: return
+        val index = friends.indexOfFirst { it.id == friend.id }
+        if (index >= 0) friends[index] = updated
+        selectedFriend = updated
+        ConversationManager.refreshBusyReply(updated)
+        ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+    }
+
+    fun updateFriendSchedule(friend: Friend, blocks: List<RoutineBlock>, behavior: BusyReplyBehavior, delayMinutes: Int) {
+        val primaryBlock = blocks.firstOrNull() ?: return
+        val updated = store.updateFriend(friend.id) { current ->
+            current.copy(
+                routineBlocks = blocks,
+                busyReplyBehavior = behavior,
+                busyReplyDelayMinutes = delayMinutes.coerceIn(0, 120),
+                busyStartHour = primaryBlock.startMinute / 60,
+                busyDurationHours = (primaryBlock.durationMinutes / 60).coerceIn(4, 8),
+                busyReason = primaryBlock.reason
+            )
+        } ?: return
+        val index = friends.indexOfFirst { it.id == friend.id }
+        if (index >= 0) friends[index] = updated
+        selectedFriend = updated
+        ConversationManager.refreshBusyReply(updated)
+        ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+    }
+
     androidx.compose.animation.AnimatedContent(
         targetState = screen,
         label = "pageTransition",
         transitionSpec = {
-            val order = listOf(AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE)
+            val order = listOf(AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.FRIEND_PROFILE, AppScreen.SETTINGS, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.KNOWLEDGE)
             val forward = order.indexOf(targetState) >= order.indexOf(initialState)
             val slideIn = slideInHorizontally(animationSpec = tween(300)) { if (forward) it else -it }
             val slideOut = slideOutHorizontally(animationSpec = tween(300)) { if (forward) -it else it }
@@ -517,6 +632,7 @@ fun DostApp(
                 val resolved = ChatLaunch.friendToOpen(destination == AppScreen.HOME, requestedId, friends.map { it.id }.toSet())
                 if (resolved != null) {
                     selectedFriend = friends.first { it.id == resolved }
+                    chatReturnScreen = AppScreen.HOME
                     screen = AppScreen.CHAT
                 } else {
                     screen = destination
@@ -584,10 +700,18 @@ fun DostApp(
         AppScreen.HOME -> if (hasLocalAccountAccess()) HomeScreen(
             language = language,
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
-            signedInEmail = authRepository.currentAccount?.email,
             friends = friends,
+            listState = homeListState,
             onAddFriend = { addFriendWithProfile(it) },
-            onAddSystemFriend = { addSystemFriend(it) },
+            onBrowseSystemFriends = {
+                screen = AppScreen.SYSTEM_FRIEND_PICKER
+                loadSystemFriendCatalog()
+            },
+            onOpenSettings = {
+                settingsReturnScreen = AppScreen.HOME
+                screen = AppScreen.SETTINGS
+            },
+            onOpenFriendProfile = { openFriendProfile(it, AppScreen.HOME) },
             onDeleteFriend = { friend ->
                 friends.remove(friend)
                 store.saveFriends(friends)
@@ -596,19 +720,79 @@ fun DostApp(
                 generatingProfileIds = generatingProfileIds - friend.id
                 profileErrors = profileErrors - friend.id
             },
-            onOpenChat = { selectedFriend = it; screen = AppScreen.CHAT },
+            onToggleFavorite = { friend ->
+                val updated = store.updateFriend(friend.id) { it.copy(favorite = !it.favorite) }
+                val index = friends.indexOfFirst { it.id == friend.id }
+                if (updated != null && index >= 0) friends[index] = updated
+            },
+            onOpenChat = { chatReturnScreen = AppScreen.HOME; selectedFriend = it; screen = AppScreen.CHAT },
+            generatingProfileIds = generatingProfileIds,
+            profileFailedIds = profileErrors.keys
+        )
+        AppScreen.SETTINGS -> if (hasLocalAccountAccess()) SettingsScreen(
+            language = language,
+            friends = friends,
             userTimeZoneId = userTimeZoneId,
-            onUserTimeZoneChange = { userTimeZoneId = it; store.saveUserTimeZoneId(it) },
+            signedInEmail = authRepository.currentAccount?.email,
             openRouterApiKey = openRouterApiKey,
             aiModel = aiModel,
+            anonymousTelemetryEnabled = anonymousTelemetryEnabled,
+            proactiveEnabled = proactiveEnabled,
+            proactiveCadenceMinutes = proactiveCadenceMinutes,
+            automaticFollowUpMinutes = automaticFollowUpMinutes,
+            quietHoursStartMinute = quietHoursStartMinute,
+            quietHoursEndMinute = quietHoursEndMinute,
+            settingsNotice = settingsNotice,
+            onBack = { screen = settingsReturnScreen },
+            onDeleteFriend = { friend ->
+                friends.remove(friend)
+                store.saveFriends(friends)
+                ConversationManager.removeFriend(friend.id)
+                store.deleteFriendData(friend)
+                generatingProfileIds = generatingProfileIds - friend.id
+                profileErrors = profileErrors - friend.id
+            },
+            onLanguageChange = {
+                language = it
+                store.saveLanguage(it)
+                ConversationManager.refreshProactiveWork()
+            },
+            onUserTimeZoneChange = {
+                userTimeZoneId = it
+                store.saveUserTimeZoneId(it)
+                ConversationManager.refreshProactiveWork()
+            },
+            onAnonymousTelemetryChange = {
+                store.setAnonymousTelemetryEnabled(it)
+                anonymousTelemetryEnabled = it
+            },
+            onProactiveEnabledChange = {
+                store.setProactiveEnabled(it)
+                proactiveEnabled = it
+                ConversationManager.refreshProactiveWork()
+            },
+            onProactiveCadenceChange = {
+                store.setProactiveCadenceMinutes(it)
+                proactiveCadenceMinutes = it
+                ConversationManager.refreshProactiveWork()
+            },
+            onAutomaticFollowUpChange = {
+                store.setAutomaticFollowUpMinutes(it)
+                automaticFollowUpMinutes = it
+            },
+            onQuietHoursChange = { start, end ->
+                store.setQuietHours(start, end)
+                quietHoursStartMinute = start
+                quietHoursEndMinute = end
+                ConversationManager.refreshProactiveWork()
+            },
             onAiSettingsSave = { apiKey, model ->
                 openRouterApiKey = apiKey
                 aiModel = model
                 store.saveOpenRouterApiKey(apiKey)
                 store.saveAiModel(model)
             },
-            onLanguageChange = { language = it; store.saveLanguage(it) },
-            onKnowledge = { screen = AppScreen.KNOWLEDGE },
+            onKnowledge = { knowledgeReturnScreen = AppScreen.SETTINGS; knowledgeFriendFilter = null; screen = AppScreen.KNOWLEDGE },
             onSignOut = {
                 authRepository.signOut()
                 store.markAuthenticationRequired()
@@ -617,11 +801,8 @@ fun DostApp(
                 authRequestState = AuthRequestState.Idle
                 screen = AppScreen.AUTH
             },
-            generatingProfileIds = generatingProfileIds,
-            profileFailedIds = profileErrors.keys,
             onExportLocalData = { backupExportLauncher.launch("dost-local-backup.json") },
             onImportLocalData = { backupImportLauncher.launch(arrayOf("application/json")) },
-            settingsNotice = settingsNotice,
             onDeleteServerArchive = {
                 scope.launch {
                     settingsNotice = "Deleting server archive…"
@@ -634,35 +815,90 @@ fun DostApp(
                 }
             }
         )
+        AppScreen.SYSTEM_FRIEND_PICKER -> if (hasLocalAccountAccess()) SystemFriendPickerScreen(
+            language = language,
+            catalog = systemFriendCatalog,
+            isLoading = systemFriendCatalogLoading,
+            error = systemFriendCatalogError,
+            addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet(),
+            addingCatalogId = addingSystemFriendId,
+            systemLimitReached = friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
+            onRefresh = ::loadSystemFriendCatalog,
+            onSelect = ::addCatalogFriend,
+            onManageFriends = {
+                settingsReturnScreen = AppScreen.SYSTEM_FRIEND_PICKER
+                screen = AppScreen.SETTINGS
+            },
+            onBack = { screen = AppScreen.HOME }
+        )
+        AppScreen.FRIEND_PROFILE -> if (hasLocalAccountAccess()) selectedFriend?.let { friend ->
+            FriendProfileScreen(
+                friend = friend,
+                language = language,
+                userAge = store.userAge(),
+                userTimeZoneId = store.userTimeZoneId(),
+                memoryCount = store.loadUserMemories(friend.id).size,
+                plannedEvents = store.loadPlannedEvents(friend.id),
+                sharedMoments = store.loadSharedMoments(friend.id),
+                anonymousTelemetryEnabled = anonymousTelemetryEnabled,
+                proactivePausedUntil = store.proactivePausedUntil(friend.id),
+                onBack = { screen = friendProfileReturnScreen },
+                onOpenMemories = {
+                    knowledgeReturnScreen = AppScreen.FRIEND_PROFILE
+                    knowledgeFriendFilter = friend.id
+                    screen = AppScreen.KNOWLEDGE
+                },
+                onTimeZoneChange = { updateFriendTimeZone(friend, it) },
+                onSaveSchedule = { blocks, behavior, delayMinutes ->
+                    updateFriendSchedule(friend, blocks, behavior, delayMinutes)
+                },
+                onSaveReminder = { event ->
+                    if (event.state == PlannedEventState.COMPLETED) {
+                        store.completePlannedEvent(friend.id, event.id)
+                    } else {
+                        store.savePlannedEvent(friend.id, event)
+                    }
+                    if (event.state == PlannedEventState.UPCOMING && event.followUpRequested) {
+                        ConversationWorkScheduler.scheduleUserReminder(context, friend, event, language)
+                    } else {
+                        ConversationWorkScheduler.cancelUserReminder(context, event.id)
+                    }
+                },
+                onSaveMoment = { store.saveSharedMoment(friend.id, it) },
+                onDeleteMoment = { store.deleteSharedMoment(friend.id, it) },
+                onPauseProactive = { ConversationManager.pauseFriendProactive(friend.id, it) },
+                onResumeProactive = { ConversationManager.resumeFriendProactive(friend.id) }
+            )
+        }
         AppScreen.CHAT -> if (hasLocalAccountAccess()) selectedFriend?.let { friend ->
             ChatScreen(
                 friend = friend,
                 store = store,
-                onBack = { screen = AppScreen.HOME },
+                onBack = { screen = chatReturnScreen },
                 language = language,
+                initialDraft = appViewModel.chatDrafts[friend.id].orEmpty(),
+                initialImagePath = appViewModel.chatImageDrafts[friend.id].orEmpty(),
+                onDraftChange = { appViewModel.chatDrafts[friend.id] = it },
+                onImageDraftChange = { path ->
+                    if (path.isBlank()) appViewModel.chatImageDrafts.remove(friend.id)
+                    else appViewModel.chatImageDrafts[friend.id] = path
+                },
+                onFriendProfile = { openFriendProfile(friend, AppScreen.CHAT) },
                 profileGenerating = friend.id in generatingProfileIds,
                 profileError = profileErrors[friend.id],
                 onRetryProfile = { startProfileGeneration(friend.id) },
                 onUseBasicProfile = { continueWithBasicProfile(friend.id) },
-                onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) },
-                onFriendTimeZoneChange = { timeZoneId ->
-                    val updated = store.updateFriend(friend.id) { current ->
-                        current.copy(timeZoneId = validZoneId(timeZoneId).id)
-                    }
-                    if (updated != null) {
-                        val index = friends.indexOfFirst { it.id == friend.id }
-                        if (index >= 0) friends[index] = updated
-                        selectedFriend = updated
-                        ConversationManager.refreshBusyReply(updated)
-                    }
-                }
+                onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) }
             )
         }
         AppScreen.KNOWLEDGE -> if (hasLocalAccountAccess()) KnowledgeScreen(
             language = language,
             friends = friends,
             store = store,
-            onBack = { screen = AppScreen.HOME }
+            listState = knowledgeListState,
+            friendIdFilter = knowledgeFriendFilter,
+            onBack = { screen = knowledgeReturnScreen },
+            onOpenChat = { chatReturnScreen = AppScreen.KNOWLEDGE; selectedFriend = it; screen = AppScreen.CHAT }
         )
     }
     }

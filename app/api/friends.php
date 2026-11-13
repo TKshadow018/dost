@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'catalog_validation.php';
 
 function respond_json($status, $payload)
 {
@@ -38,6 +39,9 @@ function load_system_friend($friendId, $catalogDirectory)
     if (!is_array($source) || json_last_error() !== JSON_ERROR_NONE) {
         return array('status' => 500, 'error' => 'Friend profile is not valid JSON');
     }
+    if (count(validate_system_friend_profile($source)) > 0) {
+        return array('status' => 500, 'error' => 'Friend profile does not match the catalog schema');
+    }
     foreach (array('name', 'age', 'gender') as $requiredField) {
         if (!isset($source[$requiredField]) || !is_scalar($source[$requiredField])
             || trim((string) $source[$requiredField]) === ''
@@ -48,6 +52,7 @@ function load_system_friend($friendId, $catalogDirectory)
 
     $profile = array(
         'id' => $friendId,
+        'schemaVersion' => $source['schemaVersion'],
         'name' => trim((string) $source['name']),
         'age' => trim((string) $source['age']),
         'gender' => trim((string) $source['gender'])

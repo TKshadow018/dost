@@ -10,7 +10,7 @@ Dost stores the following information in the app's private storage on your Andro
 - A random installation id created on the device.
 - Friend profiles, selected friend photos, schedules, time zones, and relationship scores.
 - Chat history, conversation summaries, and facts learned from conversations.
-- Language, preferred AI model, unread counts, and other app settings.
+- Language, preferred AI model, anonymous analytics preference, unread counts, and other app settings.
 - Compressed copies of photos that you attach to chat messages.
 
 Chat transcripts are stored as per-friend files under the app's private messages directory. Memories, summaries, and settings are stored in the app's private preferences. The email collected at registration is stored only on the device and is not used to sign in. Settings can export your profile, friend profiles, memories, summaries, transcripts, and available chat-image attachments to a JSON file, or import that file on a fresh install. The export does not include your OpenRouter API key or installation id. The export file is not encrypted; keep it somewhere private. Friend-avatar references may point to files or URIs that are not available on another device.
@@ -32,6 +32,8 @@ This can include personal information you choose to share in the conversation, s
 
 The API server forwards AI prompts to OpenRouter, which routes them to the selected model provider. Chat requests and separately uploaded chat messages are archived on Dost's server for service operation and troubleshooting. The archive may contain user and AI messages, message timestamps and identifiers, the selected model ID, friend and user display names, the server-observed IP address used to organize the archive, chat-photo attachments, and, for lines written by the current server, the installation id. The archive is stored in folders named from the display name, that IP address, the friend name, and the session id. The server also keeps an index of those session folders for each installation id. Lines written before that index existed do not contain the installation id. API keys are not written into conversation logs.
 
+If you enable **Share anonymous event counts** in Settings, the app sends only one of these event names when the corresponding action occurs: opening a friend profile, saving a memory, forgetting a memory, or retrying a failed send. These requests do not include message content, profile details, account data, an installation id, or a client-supplied timestamp. Dost stores daily event totals for 90 days, without a user or device identifier. The API host may see your IP address as part of the network request. Turning the setting off stops future event requests; because the stored values are aggregate counts, individual past events cannot be removed.
+
 OpenRouter and the selected model provider may process request data under their own privacy policies and terms. Dost does not control their independent retention or deletion practices. Please do not share passwords, API keys, authentication codes, financial-account credentials, or other highly sensitive information in conversations.
 
 3. RETENTION AND DELETION
@@ -49,6 +51,8 @@ This version has no control that deletes your profile or all local Dost data at 
 
 Dost server conversation archives are retained for no more than 3,650 days (10 years) after the most recent activity in each conversation session. Activity is the last modification time of that session's archive file. A scheduled server cleanup removes expired session archives and their attached chat-photo files, including older archive files stored directly in the archive directory. The cleanup job does not run when you delete a friend, clear storage, or uninstall. The 10-year limit is Dost's chosen retention period.
 
+Optional anonymous daily event totals are retained for 90 days and then removed. They are separate from chat archives and are not associated with an installation id.
+
 Use Settings > Delete server archive to ask the API to remove the conversation sessions and attached images indexed for the current installation id. A small hashed-installation deletion marker remains to prevent delayed messages created before deletion from being archived again; new messages can still be archived. This removes server records written by versions that stored and indexed that id; removing a friend, clearing app storage, or uninstalling does not make this request automatically. Archives written before install-id indexing existed cannot be associated with an installation by this control and remain subject to the 3,650-day cleanup. The app does not display the installation id, and there is no account to look archives up by. If the delete request cannot reach the server, the archive remains until a later successful request or the scheduled cleanup.
 
 Once data has been sent to OpenRouter or a model provider, their own deletion and retention policies apply.
@@ -64,7 +68,7 @@ Dost uses Android's file picker when you choose a friend photo. The selected ava
 The optional floating chat feature requires Android's draw-over-other-apps permission. Dost uses this permission to show the floating chat bubble and panel when you enable the feature.
 
 6. DATA SHARING, ANALYTICS, AND ADVERTISING
-Dost does not operate its own advertising, analytics, or tracking service. Chat and profile-generation data is shared with Dost's API host, OpenRouter, and the model provider selected for the request to provide AI functionality. The API host also receives the network address of the connecting device as part of normal HTTP requests.
+Dost does not use advertising or tracking services. Anonymous usage analytics are optional and off by default. When enabled, Dost's API host receives only allowlisted event names and stores daily event totals for 90 days; it does not receive message content, profile details, account data, or installation ids for analytics. The host may see your IP address as part of normal HTTP requests. Chat and profile-generation data is separately shared with Dost's API host, OpenRouter, and the model provider selected for the request to provide AI functionality.
 
 7. AGE AND AUDIENCE
 Registration requires a whole-number age from 13 through 120 and rejects ages under 13. Ages 13 through 17 may use the app. The romantic relationship meter and romantic prompts are turned off when the user or friend is under 18, or when either age is missing or unusable. The app does not verify the age entered or ask for parental consent. There is no children's mode and no parental controls.

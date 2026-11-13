@@ -28,6 +28,8 @@ import androidx.compose.ui.draw.*
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.*
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.tooling.preview.*
 import androidx.compose.ui.unit.*
@@ -35,63 +37,33 @@ import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.*
 
 @Composable
-internal fun HomeScreen(language: AppLanguage, userName: String, signedInEmail: String?, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
+internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, listState: LazyListState, onAddFriend: (Friend) -> Unit, onBrowseSystemFriends: () -> Unit, onOpenSettings: () -> Unit, onOpenFriendProfile: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onToggleFavorite: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
-    var showSystemFriendPicker by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var showAiSettings by remember { mutableStateOf(false) }
-    var systemFriendCatalog by remember { mutableStateOf(emptyList<SystemFriendListing>()) }
-    var catalogLoading by remember { mutableStateOf(false) }
-    var catalogError by remember { mutableStateOf<String?>(null) }
-    var addingCatalogId by remember { mutableStateOf<String?>(null) }
     val unreadCounts = ConversationManager.unread.collectAsState().value
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val systemFriendClient = remember { SystemFriendClient() }
+    val messageMap = ConversationManager.messages.collectAsState().value
+    var friendFilter by remember { mutableStateOf("all") }
+    var searchQuery by remember { mutableStateOf("") }
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     val customFriendCount = friends.count { it.catalogId.isBlank() }
     val systemFriendCount = friends.size - customFriendCount
     val canAddCustomFriend = customFriendCount < MAX_CUSTOM_FRIENDS
     val canAddAnyFriend = canAddCustomFriend || systemFriendCount < MAX_SYSTEM_FRIENDS
-    val addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet()
-
-    fun loadSystemFriendCatalog() {
-        catalogLoading = true
-        catalogError = null
-        scope.launch {
-            try {
-                systemFriendCatalog = systemFriendClient.getCatalog()
-            } catch (error: java.io.IOException) {
-                catalogError = LocalizedText.LOAD_FRIENDS_FAILED.resolve(language)
-            } catch (error: org.json.JSONException) {
-                catalogError = LocalizedText.INVALID_FRIEND_CATALOG.resolve(language)
-            } finally {
-                catalogLoading = false
+    val visibleFriends = friends
+        .filter { friend ->
+            val matchesFilter = when (friendFilter) {
+                "unread" -> (unreadCounts[friend.id] ?: 0) > 0
+                "available" -> !friend.profilePending
+                    && friend.replyAvailableAt(ZonedDateTime.now(validZoneId(friend.timeZoneId))) == null
+                else -> true
             }
+            val query = searchQuery.trim()
+            val matchesSearch = query.isBlank() || friend.name.contains(query, ignoreCase = true)
+                || messageMap[friend.id].orEmpty().any { it.content.contains(query, ignoreCase = true) }
+            matchesFilter && matchesSearch
         }
-    }
-
-    fun addCatalogFriend(listing: SystemFriendListing) {
-        if (addingCatalogId != null || listing.id in addedCatalogIds || systemFriendCount >= MAX_SYSTEM_FRIENDS) return
-        addingCatalogId = listing.id
-        catalogError = null
-        scope.launch {
-            try {
-                val profile = systemFriendClient.getProfile(listing.id)
-                val friendWithCachedPhoto = systemFriendClient.savePhotoForOfflineUse(context, profile)
-                onAddSystemFriend(friendWithCachedPhoto)
-                showSystemFriendPicker = false
-            } catch (error: java.io.IOException) {
-                catalogError = LocalizedText.ADD_SYSTEM_FRIEND_FAILED.resolve(language)
-            } catch (error: org.json.JSONException) {
-                catalogError = LocalizedText.INVALID_SYSTEM_FRIEND.resolve(language)
-            } finally {
-                addingCatalogId = null
-            }
-        }
-    }
+        .sortedByDescending { it.favorite }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -100,18 +72,30 @@ internal fun HomeScreen(language: AppLanguage, userName: String, signedInEmail: 
             TopAppBar(
                 title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
                 actions = {
-                    TextButton(onClick = { showSettings = true }) { Text(when { bangla -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) }
+                    TextButton(onClick = onOpenSettings) { Text(when { bangla -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) }
                     TextButton(onClick = { showAddOptions = true }, enabled = canAddAnyFriend) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }
                 }
             )
         },
         floatingActionButton = {
             if (canAddAnyFriend) {
-                FloatingActionButton(onClick = { showAddOptions = true }, containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+") }
+                FloatingActionButton(
+                    onClick = { showAddOptions = true },
+                    modifier = Modifier.semantics {
+                        contentDescription = when { bangla -> "বন্ধু যোগ করুন"; hindi -> "दोस्त जोड़ें"; else -> "Add a friend" }
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_add),
+                        contentDescription = when { bangla -> "বন্ধু যোগ করুন"; hindi -> "दोस्त जोड़ें"; else -> "Add a friend" }
+                    )
+                }
             }
         }
     ) { padding ->
-        LazyColumn(modifier = Modifier.padding(padding), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        LazyColumn(state = listState, modifier = Modifier.padding(padding), verticalArrangement = Arrangement.spacedBy(0.dp)) {
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -127,6 +111,36 @@ internal fun HomeScreen(language: AppLanguage, userName: String, signedInEmail: 
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        singleLine = true,
+                        label = {
+                            Text(when {
+                                bangla -> "বন্ধু বা কথোপকথন খুঁজুন"
+                                hindi -> "दोस्त या बातचीत खोजें"
+                                else -> "Search friends or conversations"
+                            })
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            "all" to Triple("All", "সব", "सभी"),
+                            "unread" to Triple("Unread", "অপঠিত", "अपठित"),
+                            "available" to Triple("Available", "উপলভ্য", "उपलब्ध")
+                        ).forEach { (key, labels) ->
+                            FilterChip(
+                                selected = friendFilter == key,
+                                onClick = { friendFilter = key },
+                                label = { Text(when (language) {
+                                    AppLanguage.BANGLA -> labels.second
+                                    AppLanguage.HINDI -> labels.third
+                                    AppLanguage.ENGLISH -> labels.first
+                                }) }
+                            )
+                        }
+                    }
                     if (friends.any { it.profilePending }) {
                         val creating = friends.any { it.profilePending && it.id !in profileFailedIds }
                         Text(
@@ -146,15 +160,28 @@ internal fun HomeScreen(language: AppLanguage, userName: String, signedInEmail: 
             }
             item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
             if (friends.isEmpty()) item { EmptyFriendsState(onAdd = { showAddOptions = true }, language = language) }
-            items(friends) { friend ->
+            items(visibleFriends, key = { it.id }) { friend ->
                 FriendRow(
                     friend,
                     unread = unreadCounts[friend.id] ?: 0,
                     onOpenChat = { onOpenChat(friend) },
+                    onOpenFriendProfile = { onOpenFriendProfile(friend) },
                     onDelete = { onDeleteFriend(friend) },
+                    onToggleFavorite = { onToggleFavorite(friend) },
                     language = language,
                     profileGenerating = friend.id in generatingProfileIds || friend.id !in profileFailedIds,
                     profileFailed = friend.id in profileFailedIds
+                )
+            }
+            if (visibleFriends.isEmpty() && friends.isNotEmpty()) item {
+                Text(
+                    when (language) {
+                        AppLanguage.BANGLA -> "এই ফিল্টারে কোনো বন্ধু পাওয়া যায়নি।"
+                        AppLanguage.HINDI -> "इस फ़िल्टर में कोई दोस्त नहीं मिला।"
+                        AppLanguage.ENGLISH -> "No friends match this filter."
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -165,28 +192,9 @@ internal fun HomeScreen(language: AppLanguage, userName: String, signedInEmail: 
         customCount = customFriendCount,
         systemCount = systemFriendCount,
         onCreateCustom = { showAddOptions = false; showAddFriend = true },
-        onBrowseSystem = {
-            showAddOptions = false
-            showSystemFriendPicker = true
-            loadSystemFriendCatalog()
-        },
+        onBrowseSystem = { showAddOptions = false; onBrowseSystemFriends() },
         onDismiss = { showAddOptions = false }
     )
-    if (showSystemFriendPicker) SystemFriendPickerDialog(
-        language = language,
-        catalog = systemFriendCatalog,
-        isLoading = catalogLoading,
-        error = catalogError,
-        addedCatalogIds = addedCatalogIds,
-        addingCatalogId = addingCatalogId,
-        systemLimitReached = systemFriendCount >= MAX_SYSTEM_FRIENDS,
-        onRefresh = ::loadSystemFriendCatalog,
-        onSelect = ::addCatalogFriend,
-        onManageFriends = { showSystemFriendPicker = false; showSettings = true },
-        onDismiss = { showSystemFriendPicker = false }
-    )
-    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, signedInEmail, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() }, onSignOut = { showSettings = false; onSignOut() }, onExportLocalData = onExportLocalData, onImportLocalData = onImportLocalData, settingsNotice = settingsNotice, onDeleteServerArchive = onDeleteServerArchive)
-    if (showAiSettings) AiSettingsDialog(language, openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
 }
 
 @Composable
@@ -246,7 +254,8 @@ private fun EmptyFriendsState(onAdd: () -> Unit, language: AppLanguage) {
 }
 
 @Composable
-private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDelete: () -> Unit, language: AppLanguage, profileGenerating: Boolean, profileFailed: Boolean) {
+private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onOpenFriendProfile: () -> Unit, onDelete: () -> Unit, onToggleFavorite: () -> Unit, language: AppLanguage, profileGenerating: Boolean, profileFailed: Boolean) {
+    var menuExpanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val lastMessage = ConversationManager.messages.collectAsState().value[friend.id]?.lastOrNull()
     val bangla = language == AppLanguage.BANGLA
@@ -262,13 +271,29 @@ private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDel
             hindi -> "प्रोफ़ाइल नहीं बनी। फिर कोशिश के लिए खोलें।"
             else -> "Profile wasn't created. Open to retry."
         }
-        else -> lastMessage?.content?.take(48) ?: "${friendshipLevel(friend.friendshipScore, language)} · ${friend.friendshipScore}/100"
+        else -> {
+            val lastActivity = lastMessage?.content?.take(36) ?: friendshipLevel(friend.friendshipScore, language)
+            val available = friend.replyAvailableAt(ZonedDateTime.now(validZoneId(friend.timeZoneId))) == null
+            val status = when {
+                bangla && available -> "উপলভ্য"
+                bangla -> "ব্যস্ত"
+                hindi && available -> "उपलब्ध"
+                hindi -> "व्यस्त"
+                available -> "Available"
+                else -> "Busy"
+            }
+            "$status · $lastActivity"
+        }
     }
     androidx.compose.foundation.layout.Box {
-        Row(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onOpenChat, onLongClick = { confirmDelete = true }).padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenChat).padding(start = 18.dp, end = 8.dp, top = 14.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             FriendPhoto(friend.photoUri, friend.name, Modifier.size(46.dp).clip(CircleShape))
             Column(modifier = Modifier.weight(1f)) {
-                Text(friend.name + if (friend.mood.isNotBlank()) " ${friend.mood}" else "", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    (if (friend.favorite) "★ " else "") + friend.name +
+                        if (friend.mood.isNotBlank()) " ${friend.mood}" else "",
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodyMedium, maxLines = 1,
@@ -277,10 +302,54 @@ private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onDel
             }
             LinearProgressIndicator(progress = { friend.friendshipScore / 100f }, modifier = Modifier.size(width = 56.dp, height = 6.dp))
             if (unread > 0) Badge { Text(unread.coerceAtMost(99).toString()) }
+            IconButton(onClick = { menuExpanded = true }) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_more_vert),
+                    contentDescription = when { bangla -> "বন্ধুর বিকল্প"; hindi -> "दोस्त के विकल्प"; else -> "Friend options" }
+                )
+            }
         }
-        DropdownMenu(expanded = confirmDelete, onDismissRequest = { confirmDelete = false }) {
-            DropdownMenuItem(text = { Text(when { language == AppLanguage.BANGLA -> "মুছুন"; language == AppLanguage.HINDI -> "हटाएं"; else -> "Delete" }, color = MaterialTheme.colorScheme.error) }, onClick = { confirmDelete = false; onDelete() })
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(
+                text = {
+                    Text(when {
+                        bangla -> "বন্ধুর প্রোফাইল"
+                        hindi -> "दोस्त की प्रोफ़ाइल"
+                        else -> "Friend profile"
+                    })
+                },
+                onClick = { menuExpanded = false; onOpenFriendProfile() }
+            )
+            DropdownMenuItem(
+                text = { Text(when {
+                    bangla && friend.favorite -> "প্রিয় থেকে সরান"
+                    bangla -> "প্রিয় হিসেবে চিহ্নিত করুন"
+                    hindi && friend.favorite -> "पसंदीदा से हटाएँ"
+                    hindi -> "पसंदीदा बनाएँ"
+                    friend.favorite -> "Remove from favorites"
+                    else -> "Add to favorites"
+                }) },
+                onClick = { menuExpanded = false; onToggleFavorite() }
+            )
+            DropdownMenuItem(text = { Text(when { language == AppLanguage.BANGLA -> "মুছুন"; language == AppLanguage.HINDI -> "हटाएं"; else -> "Delete" }, color = MaterialTheme.colorScheme.error) }, onClick = { menuExpanded = false; confirmDelete = true })
         }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(when { bangla -> "বন্ধুকে মুছবেন?"; hindi -> "दोस्त हटाएँ?"; else -> "Delete friend?" }) },
+            text = { Text(when { bangla -> "${friend.name} এবং তার চ্যাট মুছে যাবে।"; hindi -> "${friend.name} और उसकी चैट हटा दी जाएगी।"; else -> "${friend.name} and this chat will be removed." }) },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) {
+                    Text(when { bangla -> "মুছুন"; hindi -> "हटाएँ"; else -> "Delete" }, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" })
+                }
+            }
+        )
     }
 }
 
@@ -395,67 +464,321 @@ internal fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange:
 }
 
 @Composable
-private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, signedInEmail: String?, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
-    val hindi = language == AppLanguage.HINDI
+internal fun SettingsScreen(
+    language: AppLanguage,
+    friends: List<Friend>,
+    userTimeZoneId: String,
+    signedInEmail: String?,
+    openRouterApiKey: String,
+    aiModel: String,
+    anonymousTelemetryEnabled: Boolean,
+    proactiveEnabled: Boolean,
+    proactiveCadenceMinutes: Int,
+    automaticFollowUpMinutes: Int,
+    quietHoursStartMinute: Int,
+    quietHoursEndMinute: Int,
+    settingsNotice: String,
+    onBack: () -> Unit,
+    onDeleteFriend: (Friend) -> Unit,
+    onLanguageChange: (AppLanguage) -> Unit,
+    onUserTimeZoneChange: (String) -> Unit,
+    onAnonymousTelemetryChange: (Boolean) -> Unit,
+    onProactiveEnabledChange: (Boolean) -> Unit,
+    onProactiveCadenceChange: (Int) -> Unit,
+    onAutomaticFollowUpChange: (Int) -> Unit,
+    onQuietHoursChange: (Int, Int) -> Unit,
+    onAiSettingsSave: (String, String) -> Unit,
+    onKnowledge: () -> Unit,
+    onSignOut: () -> Unit,
+    onExportLocalData: () -> Unit,
+    onImportLocalData: () -> Unit,
+    onDeleteServerArchive: () -> Unit
+) {
+    var showAiSettings by remember { mutableStateOf(false) }
     var confirmArchiveDelete by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(when { language == AppLanguage.BANGLA -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) },
-        text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (!signedInEmail.isNullOrBlank()) {
-                    Text(
-                        when {
-                            language == AppLanguage.BANGLA -> "সাইন ইন করা অ্যাকাউন্ট: $signedInEmail"
-                            hindi -> "साइन इन खाता: $signedInEmail"
-                            else -> "Signed in as $signedInEmail"
-                        },
-                        style = MaterialTheme.typography.bodySmall
-                    )
+    var friendToDelete by remember { mutableStateOf<Friend?>(null) }
+    val context = LocalContext.current
+    val title = when (language) {
+        AppLanguage.BANGLA -> "সেটিংস"
+        AppLanguage.HINDI -> "सेटिंग्स"
+        AppLanguage.ENGLISH -> "Settings"
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(title) },
+                navigationIcon = { DostBackButton(language, onBack) }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            if (!signedInEmail.isNullOrBlank()) item {
+                SettingsSection(when (language) {
+                    AppLanguage.BANGLA -> "অ্যাকাউন্ট"
+                    AppLanguage.HINDI -> "खाता"
+                    AppLanguage.ENGLISH -> "Account"
+                }) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "সাইন ইন করা অ্যাকাউন্ট: $signedInEmail"
+                        AppLanguage.HINDI -> "साइन इन खाता: $signedInEmail"
+                        AppLanguage.ENGLISH -> "Signed in as $signedInEmail"
+                    }, style = MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
-                        Text(when { language == AppLanguage.BANGLA -> "সাইন আউট"; hindi -> "साइन आउट"; else -> "Sign out" })
-                    }
-                    HorizontalDivider()
-                }
-                Text(when { language == AppLanguage.BANGLA -> "অ্যাপের ভাষা"; hindi -> "ऐप की भाषा"; else -> "App language" })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onLanguageChange(AppLanguage.ENGLISH) }, enabled = language != AppLanguage.ENGLISH) { Text("English") }
-                    Button(onClick = { onLanguageChange(AppLanguage.BANGLA) }, enabled = language != AppLanguage.BANGLA) { Text("বাংলা") }
-                    Button(onClick = { onLanguageChange(AppLanguage.HINDI) }, enabled = language != AppLanguage.HINDI) { Text("हिन्दी") }
-                }
-                HorizontalDivider()
-                TimeZonePicker(LocalizedText.YOUR_TIMEZONE.resolve(language), userTimeZoneId, onTimeZoneChange = onUserTimeZoneChange)
-                HorizontalDivider()
-                Button(onClick = onAiSettings, modifier = Modifier.fillMaxWidth()) { Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) }
-                Text(LocalizedText.CHAT_ARCHIVE_NOTICE.resolve(language), style = MaterialTheme.typography.bodySmall)
-                HorizontalDivider()
-                Text("Local data", style = MaterialTheme.typography.titleMedium)
-                Text("Move your profile, friends, memories, summaries, and chat history between devices with a JSON backup. The backup does not include your API key.", style = MaterialTheme.typography.bodySmall)
-                Text("The installation id is not transferred. Delete the old phone's server archive from that phone before moving to a new one.", style = MaterialTheme.typography.bodySmall)
-                Text("Importing replaces the current profile, friends, memories, summaries, and chat history.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                OutlinedButton(onClick = onExportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Export local data") }
-                OutlinedButton(onClick = onImportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Import local data") }
-                if (settingsNotice.isNotBlank()) {
-                    Text(settingsNotice, color = if (settingsNotice.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
-                }
-                HorizontalDivider()
-                Text("Server archive", style = MaterialTheme.typography.titleMedium)
-                Text("Delete this installation's indexed chat archive and attached images from Dost's server. Older records without an installation id cannot be matched.", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { confirmArchiveDelete = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete server archive") }
-                HorizontalDivider()
-                Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {
-                    Text(when { language == AppLanguage.BANGLA -> "আমার সম্পর্কে জানা তথ্য"; hindi -> "मेरे बारे में जानकारी"; else -> "Knowledge about me" })
-                }
-                Text(when { language == AppLanguage.BANGLA -> "বন্ধু মুছুন"; hindi -> "दोस्त हटाएं"; else -> "Delete a friend" }, style = MaterialTheme.typography.titleMedium)
-                friends.forEach { friend ->
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(friend.name)
-                        TextButton(onClick = { onDeleteFriend(friend) }) { Text(when { language == AppLanguage.BANGLA -> "মুছুন"; hindi -> "हटाएं"; else -> "Delete" }) }
+                        Text(when (language) {
+                            AppLanguage.BANGLA -> "সাইন আউট"
+                            AppLanguage.HINDI -> "साइन आउट"
+                            AppLanguage.ENGLISH -> "Sign out"
+                        })
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(when { language == AppLanguage.BANGLA -> "বন্ধ করুন"; hindi -> "बंद करें"; else -> "Close" }) } }
+            item {
+                SettingsSection(when (language) {
+                    AppLanguage.BANGLA -> "অ্যাপ পছন্দ"
+                    AppLanguage.HINDI -> "ऐप प्राथमिकताएँ"
+                    AppLanguage.ENGLISH -> "App preferences"
+                }) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "অ্যাপের ভাষা"
+                        AppLanguage.HINDI -> "ऐप की भाषा"
+                        AppLanguage.ENGLISH -> "App language"
+                    }, style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { onLanguageChange(AppLanguage.ENGLISH) }, enabled = language != AppLanguage.ENGLISH) { Text("English") }
+                        Button(onClick = { onLanguageChange(AppLanguage.BANGLA) }, enabled = language != AppLanguage.BANGLA) { Text("বাংলা") }
+                        Button(onClick = { onLanguageChange(AppLanguage.HINDI) }, enabled = language != AppLanguage.HINDI) { Text("हिन्दी") }
+                    }
+                    TimeZonePicker(LocalizedText.YOUR_TIMEZONE.resolve(language), userTimeZoneId, onTimeZoneChange = onUserTimeZoneChange)
+                }
+            }
+            item {
+                SettingsSection(when (language) {
+                    AppLanguage.BANGLA -> "ঐচ্ছিক ব্যবহার বিশ্লেষণ"
+                    AppLanguage.HINDI -> "वैकल्पिक उपयोग विश्लेषण"
+                    AppLanguage.ENGLISH -> "Optional usage analytics"
+                }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            when (language) {
+                                AppLanguage.BANGLA -> "বেনামী ইভেন্ট কাউন্টার শেয়ার করুন"
+                                AppLanguage.HINDI -> "गुमनाम इवेंट काउंटर साझा करें"
+                                AppLanguage.ENGLISH -> "Share anonymous event counts"
+                            },
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Switch(
+                            checked = anonymousTelemetryEnabled,
+                            onCheckedChange = onAnonymousTelemetryChange
+                        )
+                    }
+                    Text(
+                        when (language) {
+                            AppLanguage.BANGLA -> "ঐচ্ছিক। বার্তা, প্রোফাইলের তথ্য, অ্যাকাউন্ট বা ইনস্টলেশন আইডি পাঠানো হয় না। সার্ভার শুধু ইভেন্টের দৈনিক মোট সংখ্যা ৯০ দিন রাখে; নেটওয়ার্ক অনুরোধে সার্ভার আপনার IP ঠিকানা দেখতে পারে।"
+                            AppLanguage.HINDI -> "वैकल्पिक। संदेश, प्रोफ़ाइल जानकारी, खाता या इंस्टॉलेशन ID नहीं भेजी जाती। सर्वर केवल इवेंट की दैनिक कुल संख्या 90 दिनों तक रखता है; नेटवर्क अनुरोध में सर्वर आपका IP पता देख सकता है।"
+                            AppLanguage.ENGLISH -> "Optional. Messages, profile details, account data, and installation IDs are not sent. The server keeps only daily event totals for 90 days; it may see your IP address as part of the network request."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            item {
+                SettingsSection(when (language) {
+                    AppLanguage.BANGLA -> "বন্ধুর বার্তা"
+                    AppLanguage.HINDI -> "दोस्तों के संदेश"
+                    AppLanguage.ENGLISH -> "Friend messages"
+                }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            when (language) {
+                                AppLanguage.BANGLA -> "বন্ধুদের নিজে থেকে বার্তা দিতে দিন"
+                                AppLanguage.HINDI -> "दोस्तों को बातचीत शुरू करने दें"
+                                AppLanguage.ENGLISH -> "Let friends start conversations"
+                            },
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Switch(checked = proactiveEnabled, onCheckedChange = onProactiveEnabledChange)
+                    }
+                    Text(
+                        when (language) {
+                            AppLanguage.BANGLA -> "রুটিন শুভেচ্ছা ও স্বয়ংক্রিয় কথোপকথন ফলো-আপ নিয়ন্ত্রিত হবে। আপনার নির্ধারিত অনুস্মারক চালু থাকবে।"
+                            AppLanguage.HINDI -> "नियमित अभिवादन और स्वचालित बातचीत फ़ॉलो-अप नियंत्रित होंगे। आपके सेट किए रिमाइंडर चलते रहेंगे।"
+                            AppLanguage.ENGLISH -> "Controls routine greetings and automatic conversation check-ins. Reminders you set yourself still run."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        when (language) {
+                            AppLanguage.BANGLA -> "শান্ত সময়"
+                            AppLanguage.HINDI -> "शांत समय"
+                            AppLanguage.ENGLISH -> "Quiet hours"
+                        },
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            when (language) { AppLanguage.BANGLA -> "শুরু"; AppLanguage.HINDI -> "शुरू"; else -> "Start" } to quietHoursStartMinute,
+                            when (language) { AppLanguage.BANGLA -> "শেষ"; AppLanguage.HINDI -> "समाप्त"; else -> "End" } to quietHoursEndMinute
+                        ).forEachIndexed { index, (label, minute) ->
+                            OutlinedButton(
+                                enabled = proactiveEnabled,
+                                onClick = {
+                                    android.app.TimePickerDialog(
+                                        context,
+                                        { _, hour, selectedMinute ->
+                                            val selected = hour * 60 + selectedMinute
+                                            val start = if (index == 0) selected else quietHoursStartMinute
+                                            val end = if (index == 1) selected else quietHoursEndMinute
+                                            if (start != end) onQuietHoursChange(start, end)
+                                        },
+                                        minute / 60,
+                                        minute % 60,
+                                        false
+                                    ).show()
+                                }
+                            ) {
+                                Text("$label ${LocalTime.of(minute / 60, minute % 60).format(DateTimeFormatter.ofPattern("h:mm a"))}")
+                            }
+                        }
+                    }
+                    Text(
+                        when (language) {
+                            AppLanguage.BANGLA -> "বন্ধুদের বার্তার মধ্যে ন্যূনতম ব্যবধান: $proactiveCadenceMinutes মিনিট"
+                            AppLanguage.HINDI -> "दोस्तों के संदेशों के बीच न्यूनतम अंतर: $proactiveCadenceMinutes मिनट"
+                            AppLanguage.ENGLISH -> "Minimum interval between proactive messages: $proactiveCadenceMinutes minutes"
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    listOf(60, 180, 360, 720).forEach { minutes ->
+                        TextButton(
+                            enabled = proactiveEnabled && minutes != proactiveCadenceMinutes,
+                            onClick = { onProactiveCadenceChange(minutes) }
+                        ) {
+                            Text(when (language) {
+                                AppLanguage.BANGLA -> "$minutes মিনিট"
+                                AppLanguage.HINDI -> "$minutes मिनट"
+                                AppLanguage.ENGLISH -> "$minutes min"
+                            })
+                        }
+                    }
+                    Text(
+                        when (language) {
+                            AppLanguage.BANGLA -> "স্বয়ংক্রিয় কথোপকথন ফলো-আপ: $automaticFollowUpMinutes মিনিট"
+                            AppLanguage.HINDI -> "स्वचालित बातचीत फ़ॉलो-अप: $automaticFollowUpMinutes मिनट"
+                            AppLanguage.ENGLISH -> "Automatic conversation follow-up: $automaticFollowUpMinutes minutes"
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    listOf(5, 15, 30, 60, 120).forEach { minutes ->
+                        TextButton(
+                            enabled = proactiveEnabled && minutes != automaticFollowUpMinutes,
+                            onClick = { onAutomaticFollowUpChange(minutes) }
+                        ) {
+                            Text(when (language) {
+                                AppLanguage.BANGLA -> "$minutes মিনিট"
+                                AppLanguage.HINDI -> "$minutes मिनट"
+                                AppLanguage.ENGLISH -> "$minutes min"
+                            })
+                        }
+                    }
+                }
+            }
+            item {
+                SettingsSection(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) {
+                    Button(onClick = { showAiSettings = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language))
+                    }
+                    Text(LocalizedText.CHAT_ARCHIVE_NOTICE.resolve(language), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            item {
+                SettingsSection("Local data") {
+                    Text("Move your profile, friends, routines, reminders, memories, summaries, and chat history between devices with a JSON backup. The backup does not include your API key.", style = MaterialTheme.typography.bodySmall)
+                    Text("The installation id is not transferred. Delete the old phone's server archive from that phone before moving to a new one.", style = MaterialTheme.typography.bodySmall)
+                    Text("Importing replaces the current profile, friends, memories, summaries, and chat history.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    OutlinedButton(onClick = onExportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Export local data") }
+                    OutlinedButton(onClick = onImportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Import local data") }
+                    if (settingsNotice.isNotBlank()) {
+                        Text(
+                            settingsNotice,
+                            color = if (settingsNotice.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+            item {
+                SettingsSection("Server archive") {
+                    Text("Delete this installation's indexed chat archive and attached images from Dost's server. Older records without an installation id cannot be matched.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { confirmArchiveDelete = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Delete server archive")
+                    }
+                }
+            }
+            item {
+                SettingsSection(when (language) {
+                    AppLanguage.BANGLA -> "আপনার তথ্য"
+                    AppLanguage.HINDI -> "आपकी जानकारी"
+                    AppLanguage.ENGLISH -> "Your information"
+                }) {
+                    Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {
+                        Text(when (language) {
+                            AppLanguage.BANGLA -> "আমার সম্পর্কে জানা তথ্য"
+                            AppLanguage.HINDI -> "मेरे बारे में जानकारी"
+                            AppLanguage.ENGLISH -> "Knowledge about me"
+                        })
+                    }
+                }
+            }
+            item {
+                SettingsSection(when (language) {
+                    AppLanguage.BANGLA -> "বন্ধু পরিচালনা"
+                    AppLanguage.HINDI -> "दोस्त प्रबंधित करें"
+                    AppLanguage.ENGLISH -> "Manage friends"
+                }) {
+                    if (friends.isEmpty()) {
+                        Text(when (language) {
+                            AppLanguage.BANGLA -> "এখনও কোনো বন্ধু নেই"
+                            AppLanguage.HINDI -> "अभी कोई दोस्त नहीं"
+                            AppLanguage.ENGLISH -> "No friends yet"
+                        }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    friends.forEach { friend ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(friend.name, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { friendToDelete = friend }) {
+                                Text(when (language) {
+                                    AppLanguage.BANGLA -> "মুছুন"
+                                    AppLanguage.HINDI -> "हटाएँ"
+                                    AppLanguage.ENGLISH -> "Delete"
+                                }, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (showAiSettings) AiSettingsDialog(
+        language = language,
+        apiKey = openRouterApiKey,
+        initialModel = aiModel,
+        onDismiss = { showAiSettings = false },
+        onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false }
     )
     if (confirmArchiveDelete) {
         AlertDialog(
@@ -468,6 +791,49 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
                 }
             },
             dismissButton = { TextButton(onClick = { confirmArchiveDelete = false }) { Text("Cancel") } }
+        )
+    }
+    friendToDelete?.let { friend ->
+        AlertDialog(
+            onDismissRequest = { friendToDelete = null },
+            title = { Text(when (language) {
+                AppLanguage.BANGLA -> "বন্ধুকে মুছবেন?"
+                AppLanguage.HINDI -> "दोस्त हटाएँ?"
+                AppLanguage.ENGLISH -> "Delete friend?"
+            }) },
+            text = { Text(when (language) {
+                AppLanguage.BANGLA -> "${friend.name} এবং তার চ্যাট মুছে যাবে।"
+                AppLanguage.HINDI -> "${friend.name} और उसकी चैट हटा दी जाएगी।"
+                AppLanguage.ENGLISH -> "${friend.name} and this chat will be removed."
+            }) },
+            confirmButton = {
+                TextButton(onClick = { friendToDelete = null; onDeleteFriend(friend) }) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "মুছুন"
+                        AppLanguage.HINDI -> "हटाएँ"
+                        AppLanguage.ENGLISH -> "Delete"
+                    }, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { friendToDelete = null }) {
+                    Text(LocalizedText.CANCEL.resolve(language))
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            content = {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                content()
+            }
         )
     }
 }

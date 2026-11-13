@@ -75,4 +75,16 @@ class MemoryRetrievalTest {
         assertEquals(MAX_RETRIEVED_USER_MEMORIES, retrieved.size)
         assertEquals((11 downTo 6).map { "Rafi fact $it" }, retrieved.map { it.fact })
     }
+
+    @Test
+    fun promptContextIsCappedWithoutExceedingItsCharacterBudget() {
+        val context = boundedPromptContext(
+            listOf("first fact", "second fact", "third fact"),
+            maxCharacters = 20,
+            separator = "\n"
+        )
+
+        assertEquals(20, context.length)
+        assertEquals("first fact\nsecond...", context)
+    }
 }
