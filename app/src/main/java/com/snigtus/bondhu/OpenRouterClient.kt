@@ -143,10 +143,11 @@ class OpenRouterClient {
         """.trimIndent().let { prompt ->
             if (ephemeralInstruction.isBlank()) prompt else prompt + "\n\n" + ephemeralInstruction.trim()
         }
-        val imageMessages = history.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
+        val promptHistory = messagesForPrompt(history)
+        val imageMessages = promptHistory.filter { it.imagePath.isNotBlank() }.takeLast(2).map { it.messageId }.toSet()
         val messages = JSONArray().apply {
             put(JSONObject().apply { put("role", "system"); put("content", system) })
-            history.forEach { message -> put(JSONObject().apply {
+            promptHistory.forEach { message -> put(JSONObject().apply {
                 put("role", message.role)
                 put("content", message.content)
                 put("message_id", message.messageId)
@@ -161,7 +162,16 @@ class OpenRouterClient {
                 }
             }) }
         }
-        val body = JSONObject().apply { put("operation", "chat_reply"); put("user_name", userName); put("friend_name", friend.name); put("model", model); put("messages", messages); put("temperature", 0.8) }
+        val body = JSONObject().apply {
+            put("operation", "chat_reply")
+            put("user_name", userName)
+            put("friend_name", friend.name)
+            put("user_age", userAge)
+            put("friend_age", friend.age)
+            put("model", model)
+            put("messages", messages)
+            put("temperature", 0.8)
+        }
         val connection = post(apiKey, installationId, friend.id, resolvedSessionId, body.toString().toByteArray())
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
