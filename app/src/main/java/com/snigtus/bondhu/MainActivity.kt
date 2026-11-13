@@ -214,7 +214,7 @@ fun DostApp(
         scope.launch {
             try {
                 val profile = OpenRouterClient().generateFriendProfile(
-                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, requestLanguage
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, friend.personality, requestLanguage
                 )
                 val index = friends.indexOfFirst { it.id == friendId }
                 if (index >= 0 && friends[index].profilePending) {

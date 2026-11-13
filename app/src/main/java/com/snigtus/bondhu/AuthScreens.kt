@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -49,6 +51,8 @@ fun RegisterScreen(language: AppLanguage, step: Int, name: String, email: String
     var friendName by remember { mutableStateOf("") }
     var friendAge by remember { mutableStateOf("") }
     var friendGender by remember { mutableStateOf("") }
+    var friendPersonality by remember { mutableStateOf("") }
+    var friendGreeting by remember { mutableStateOf("") }
     var friendPhotoUri by remember { mutableStateOf("") }
     val context = LocalContext.current
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -59,7 +63,7 @@ fun RegisterScreen(language: AppLanguage, step: Int, name: String, email: String
     }
     val hindi = language == AppLanguage.HINDI
     Scaffold(topBar = { TopAppBar(title = { Text(when { language == AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি - ধাপ $step/২"; hindi -> "खाता बनाएं - चरण $step/2"; else -> "Create account - Step $step of 2" }) }, navigationIcon = { TextButton(onClick = onBack) { Text(when { language == AppLanguage.BANGLA -> "ফিরুন"; hindi -> "वापस"; else -> "Back" }) } }) }) { padding ->
-        Column(modifier = Modifier.padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(modifier = Modifier.padding(padding).padding(24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (step == 1) {
                 Text(when { language == AppLanguage.BANGLA -> "আপনার প্রোফাইল তৈরি করুন"; hindi -> "अपनी प्रोफ़ाइल बनाएं"; else -> "Create your profile" }, style = MaterialTheme.typography.headlineSmall)
                 Text(when { language == AppLanguage.BANGLA -> "নিজের সম্পর্কে কিছু তথ্য দিন।"; hindi -> "अपने बारे में कुछ जानकारी दें।"; else -> "Tell us a little about yourself." })
@@ -87,8 +91,22 @@ fun RegisterScreen(language: AppLanguage, step: Int, name: String, email: String
                     }
                 }
                 GenderField(friendGender, { friendGender = it }, language)
+                OutlinedTextField(
+                    friendPersonality,
+                    { friendPersonality = it },
+                    label = { Text(when (language) { AppLanguage.BANGLA -> "ব্যক্তিত্ব"; AppLanguage.HINDI -> "व्यक्तित्व"; AppLanguage.ENGLISH -> "Personality" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+                OutlinedTextField(
+                    friendGreeting,
+                    { friendGreeting = it },
+                    label = { Text(when (language) { AppLanguage.BANGLA -> "প্রথম বার্তা"; AppLanguage.HINDI -> "पहला संदेश"; AppLanguage.ENGLISH -> "First message" }) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
                 OutlinedButton(onClick = { photoPicker.launch(arrayOf("image/*")) }, modifier = Modifier.fillMaxWidth()) { Text(if (friendPhotoUri.isBlank()) if (hindi) "दोस्त की फोटो जोड़ें" else "Add friend photo" else if (hindi) "फोटो चुनी गई" else "Photo selected") }
-                Button(onClick = { onFinish(Friend(id = java.util.UUID.randomUUID().toString(), name = friendName, age = friendAge.trim(), gender = friendGender, photoUri = friendPhotoUri)) }, enabled = friendName.isNotBlank() && friendAgeResult(friendAge) == AccountAgeResult.VALID && friendGender.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(when { language == AppLanguage.BANGLA -> "শেষ করুন"; hindi -> "समाप्त करें"; else -> "Finish" }) }
+                Button(onClick = { onFinish(Friend(id = java.util.UUID.randomUUID().toString(), name = friendName, age = friendAge.trim(), gender = friendGender, personality = friendPersonality.trim(), photoUri = friendPhotoUri, greeting = friendGreeting.trim())) }, enabled = friendName.isNotBlank() && friendAgeResult(friendAge) == AccountAgeResult.VALID && friendGender.isNotBlank() && friendPersonality.isNotBlank() && friendGreeting.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(when { language == AppLanguage.BANGLA -> "শেষ করুন"; hindi -> "समाप्त करें"; else -> "Finish" }) }
                 TextButton(onClick = { onFinish(null) }, modifier = Modifier.fillMaxWidth()) { Text(when { language == AppLanguage.BANGLA -> "এখন বাদ দিন"; hindi -> "अभी छोड़ें"; else -> "Skip for now" }) }
             }
         }

@@ -83,6 +83,7 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
     }
     DisposableEffect(friend.id) {
         ConversationManager.openChat(friend.id)
+        ConversationManager.seedInitialGreeting(friend)
         onDispose { ConversationManager.closeChat(friend.id) }
     }
     LaunchedEffect(messages.size, sending, error) {
@@ -183,6 +184,7 @@ private fun FriendInfoDialog(friend: Friend, userAge: String, onTimeZoneChange: 
                 TimeZonePicker("Friend timezone", friend.timeZoneId, onTimeZoneChange)
                 listOf(
                     "Age" to friend.age, "Gender" to friend.gender, "Personality" to friend.personality,
+                    "How you met" to friend.relationship, "First message" to friend.greeting,
                     "Interests" to friend.interests, "Memories" to friend.memories, "Conversation style" to friend.conversationStyle,
                     "Family" to friend.family, "Family members" to friend.familyMembers, "Family activities" to friend.familyActivities,
                     "Financial condition" to friend.financialCondition, "Address" to friend.address, "Height" to friend.height,

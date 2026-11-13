@@ -446,7 +446,9 @@ class DostStore(context: Context) {
         item.optString("busyReason", if ((item.optString("age").toIntOrNull() ?: 18) < 18) "School" else "Work"),
         validZoneId(item.optString("timeZoneId", ZoneId.systemDefault().id)).id,
         item.optString("catalogId"),
-        item.optBoolean("profilePending", false)
+        item.optBoolean("profilePending", false),
+        item.optString("greeting"),
+        item.optString("relationship")
     )
 
     private fun friendToJson(friend: Friend, userAge: String): JSONObject = JSONObject().apply {
@@ -463,6 +465,8 @@ class DostStore(context: Context) {
         put("timeZoneId", friend.timeZoneId)
         put("catalogId", friend.catalogId)
         put("profilePending", friend.profilePending)
+        put("greeting", friend.greeting)
+        put("relationship", friend.relationship)
     }
 
     private fun backupString(json: JSONObject, key: String, maximumLength: Int): String {
