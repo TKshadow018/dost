@@ -13,13 +13,17 @@ Archives written after this change store installation_id on every JSONL line
 Each line is a session directory relative to the archive root. cleanup_logs.php
 removes a line when that session directory is gone and deletes an index file
 that becomes empty, so the index does not outlive the 3,650-day retention.
-There is no
-delete API. To honor a deletion request, an operator with shell access to the
-private archive deletes those session directories, including their chat-image
-files, and removes the index file. cleanup_logs.php does not do this. It only
-removes a session whose archive file was last modified more than 3,650 days ago.
+The app's “Delete server chat archive” control sends this UUID to
+`delete_archive.php` using HTTPS. The endpoint removes the indexed session
+directories and their chat-image files, then removes the index. The endpoint is
+idempotent. It also retains a small hashed-installation deletion marker so
+queued messages created before deletion are not re-archived after the request;
+new messages can still be archived. `cleanup_logs.php` remains a separate
+retention job and removes sessions only after more than 3,650 days.
 
-If the index file is missing, search the private archive:
+Archives written before the installation id and index existed cannot be
+identified by the API. If an index is missing, an operator can search the
+private archive for records that do have the UUID:
 
   grep -R -l --include='*.jsonl' '"installation_id":"<uuid>"' <archive-root>
 

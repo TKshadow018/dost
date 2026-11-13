@@ -39,7 +39,10 @@ foreach ($forbidden as $pattern => $reason) {
 
 $required = array(
     '3,650' => 'states the 3,650-day server retention period',
-    'no delete-archive' => 'states that the app has no delete-archive control',
+    'Delete server archive' => 'describes the in-app server archive deletion control',
+    'export or import local data' => 'describes local data export and import',
+    'does not include your OpenRouter API key or installation id' => 'states sensitive data is excluded from backup',
+    'hashed-installation deletion marker' => 'discloses metadata retained to suppress delayed uploads',
     'chat transcript file' => 'states that friend removal deletes the local transcript',
     'learned memories' => 'states that friend removal deletes local memories',
     'session summaries' => 'states that friend removal deletes local summaries',
@@ -54,7 +57,7 @@ $required = array(
     'up to the 200 most recent saved facts' => 'names learned facts sent with each turn',
     'up to the seven most recent summaries' => 'names session summaries sent with each turn',
     'friendship score and love score' => 'names relationship scores sent with each turn',
-    'does not show the installation id' => 'says the app does not display the installation id',
+    'does not display the installation id' => 'says the app does not display the installation id',
     'installation id' => 'describes install-id lookup for newer archives'
 );
 foreach ($required as $needle => $reason) {
