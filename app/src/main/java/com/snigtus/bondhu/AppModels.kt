@@ -43,6 +43,10 @@ fun authenticationStartScreen(
     else -> AppScreen.AUTH
 }
 
+internal const val MAX_CUSTOM_FRIENDS = 3
+internal const val MAX_SYSTEM_FRIENDS = 7
+internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
+
 data class Friend(
     val id: String,
     val name: String,
@@ -71,6 +75,8 @@ data class Friend(
     ,val timeZoneId: String = ZoneId.systemDefault().id
     ,val catalogId: String = ""
     ,val profilePending: Boolean = false
+    ,val greeting: String = ""
+    ,val relationship: String = ""
 )
 
 data class ProfileFailure(val message: String, val detail: String?)
@@ -87,7 +93,7 @@ fun profileFailureText(language: AppLanguage, causeMessage: String?, detailLimit
 }
 
 fun Friend.withGeneratedProfile(profile: FriendProfile): Friend = copy(
-    personality = profile.personality,
+    personality = personality.ifBlank { profile.personality },
     interests = profile.interests,
     family = profile.family,
     familyMembers = profile.familyMembers,
@@ -107,25 +113,19 @@ data class SystemFriendListing(
     val name: String,
     val age: String,
     val gender: String,
-    val personality: String,
-    val interests: String,
-    val memories: String,
-    val conversationStyle: String,
-    val family: String,
-    val familyMembers: String,
-    val familyActivities: String,
-    val financialCondition: String,
-    val address: String,
-    val height: String,
-    val weight: String,
-    val facialFeatures: String,
-    val bodyFeatures: String,
-    val busyStartHour: Int,
-    val busyDurationHours: Int,
-    val busyReason: String,
-    val timeZoneId: String,
+    val category: String,
+    val description: String,
+    val tags: String,
+    val relationship: String,
+    val greeting: String,
     val photoUrl: String
 )
+
+fun initialGreetingMessage(friend: Friend, history: List<ChatMessage>, sessionId: String): ChatMessage? {
+    val greeting = friend.greeting.trim()
+    if (greeting.isBlank() || history.isNotEmpty()) return null
+    return ChatMessage("assistant", greeting, category = "greeting", sessionId = sessionId)
+}
 
 fun validZoneId(timeZoneId: String): ZoneId = runCatching { ZoneId.of(timeZoneId) }.getOrDefault(ZoneId.systemDefault())
 
@@ -169,8 +169,86 @@ data class ChatMessage(
 
 data class UserMemory(val category: String, val fact: String, val replaces: String = "")
 
+data class StructuredUserProfile(
+    val name: String = "",
+    val people: List<String> = emptyList(),
+    val preferences: List<String> = emptyList()
+)
+
 const val MAX_STORED_USER_MEMORIES = 1000
-const val MAX_INJECTED_USER_MEMORIES = 200
+const val MAX_PROFILE_FACTS = 20
+const val MAX_RETRIEVED_USER_MEMORIES = 6
+const val MAX_RETRIEVED_SESSION_SUMMARIES = 3
+
+fun structuredProfileFromMemories(name: String, memories: List<UserMemory>): StructuredUserProfile {
+    val peopleCategories = setOf("family", "relatives", "relationships", "people")
+    val preferenceCategories = setOf("preferences", "interests", "routines")
+    fun facts(categories: Set<String>) = memories
+        .filter { it.category.trim().lowercase().replace(' ', '_') in categories }
+        .map { it.fact.trim() }
+        .filter { it.isNotBlank() }
+        .distinctBy { it.lowercase() }
+        .takeLast(MAX_PROFILE_FACTS)
+
+    return StructuredUserProfile(name.trim(), facts(peopleCategories), facts(preferenceCategories))
+}
+
+fun retrieveRelevantUserMemories(
+    query: String,
+    memories: List<UserMemory>,
+    profile: StructuredUserProfile,
+    limit: Int = MAX_RETRIEVED_USER_MEMORIES
+): List<UserMemory> {
+    val candidates = (memories +
+        profile.people.map { UserMemory("people", it) } +
+        profile.preferences.map { UserMemory("preferences", it) })
+        .filter { it.fact.isNotBlank() }
+        .distinctBy { it.fact.trim().lowercase() }
+    val terms = memorySearchTerms(query)
+    if (terms.isEmpty() || limit <= 0) return emptyList()
+
+    return candidates.withIndex()
+        .mapNotNull { (index, memory) ->
+            val score = memorySearchTerms("${memory.category} ${memory.fact}").count { it in terms }
+            if (score == 0) null else Triple(index, score, memory)
+        }
+        .sortedWith(compareByDescending<Triple<Int, Int, UserMemory>> { it.second }.thenByDescending { it.first })
+        .take(limit)
+        .map { it.third }
+}
+
+fun retrieveRelevantSessionSummaries(
+    query: String,
+    summaries: List<SessionSummary>,
+    limit: Int = MAX_RETRIEVED_SESSION_SUMMARIES
+): List<SessionSummary> {
+    val terms = memorySearchTerms(query)
+    if (terms.isEmpty() || limit <= 0) return emptyList()
+
+    return summaries.withIndex()
+        .mapNotNull { (index, summary) ->
+            val score = memorySearchTerms(summary.summary).count { it in terms }
+            if (score == 0) null else Triple(index, score, summary)
+        }
+        .sortedWith(compareByDescending<Triple<Int, Int, SessionSummary>> { it.second }.thenByDescending { it.first })
+        .take(limit)
+        .map { it.third }
+}
+
+private val MEMORY_SEARCH_STOP_WORDS = setOf(
+    "about", "after", "again", "and", "are", "because", "before", "been", "being", "but",
+    "can", "could", "did", "does", "doing", "for", "from", "have", "her", "here", "him",
+    "his", "how", "into", "its", "just", "like", "more", "most", "not", "our", "out",
+    "over", "she", "should", "that", "the", "their", "them", "then", "there", "these",
+    "they", "this", "those", "through", "too", "under", "very", "was", "were", "what",
+    "when", "where", "which", "who", "why", "will", "with", "would", "you", "your"
+)
+
+private fun memorySearchTerms(text: String): Set<String> = Regex("[\\p{L}\\p{N}]{2,}")
+    .findAll(text.lowercase())
+    .map { it.value }
+    .filterNot { it in MEMORY_SEARCH_STOP_WORDS }
+    .toSet()
 
 fun displayMemoryCategory(category: String): String {
     val cleaned = category.trim().replace('_', ' ').replace(Regex("\\s+"), " ").lowercase()
@@ -337,17 +415,19 @@ fun applyRegeneratedReply(
     @Suppress("UNUSED_PARAMETER") loveImpact: Int
 ): RelationshipScores = current
 
-fun friendshipLevel(score: Int): String = when (score.coerceIn(0, 100)) {
-    in 0..10 -> "Complete stranger"
-    in 11..20 -> "Stranger"
-    in 21..30 -> "Acquaintance"
-    in 31..40 -> "Casual friend"
-    in 41..50 -> "Friend"
-    in 51..60 -> "Good friend"
-    in 61..70 -> "Close friend"
-    in 71..80 -> "Trusted friend"
-    in 81..90 -> "Very close friend"
-    else -> "Best friend"
+fun friendshipLevel(score: Int): String = friendshipLevel(score, AppLanguage.ENGLISH)
+
+fun friendshipLevel(score: Int, language: AppLanguage): String = when (score.coerceIn(0, 100)) {
+    in 0..10 -> when (language) { AppLanguage.ENGLISH -> "Complete stranger"; AppLanguage.BANGLA -> "সম্পূর্ণ অপরিচিত"; AppLanguage.HINDI -> "बिल्कुल अजनबी" }
+    in 11..20 -> when (language) { AppLanguage.ENGLISH -> "Stranger"; AppLanguage.BANGLA -> "অপরিচিত"; AppLanguage.HINDI -> "अजनबी" }
+    in 21..30 -> when (language) { AppLanguage.ENGLISH -> "Acquaintance"; AppLanguage.BANGLA -> "পরিচিত"; AppLanguage.HINDI -> "जान-पहचान" }
+    in 31..40 -> when (language) { AppLanguage.ENGLISH -> "Casual friend"; AppLanguage.BANGLA -> "সাধারণ বন্ধু"; AppLanguage.HINDI -> "सामान्य दोस्त" }
+    in 41..50 -> when (language) { AppLanguage.ENGLISH -> "Friend"; AppLanguage.BANGLA -> "বন্ধু"; AppLanguage.HINDI -> "दोस्त" }
+    in 51..60 -> when (language) { AppLanguage.ENGLISH -> "Good friend"; AppLanguage.BANGLA -> "ভালো বন্ধু"; AppLanguage.HINDI -> "अच्छा दोस्त" }
+    in 61..70 -> when (language) { AppLanguage.ENGLISH -> "Close friend"; AppLanguage.BANGLA -> "ঘনিষ্ঠ বন্ধু"; AppLanguage.HINDI -> "करीबी दोस्त" }
+    in 71..80 -> when (language) { AppLanguage.ENGLISH -> "Trusted friend"; AppLanguage.BANGLA -> "বিশ্বস্ত বন্ধু"; AppLanguage.HINDI -> "भरोसेमंद दोस्त" }
+    in 81..90 -> when (language) { AppLanguage.ENGLISH -> "Very close friend"; AppLanguage.BANGLA -> "খুব ঘনিষ্ঠ বন্ধু"; AppLanguage.HINDI -> "बहुत करीबी दोस्त" }
+    else -> when (language) { AppLanguage.ENGLISH -> "Best friend"; AppLanguage.BANGLA -> "সবচেয়ে ভালো বন্ধু"; AppLanguage.HINDI -> "सबसे अच्छा दोस्त" }
 }
 
 fun loveLevel(score: Int): String = when (score.coerceIn(0, 100)) {

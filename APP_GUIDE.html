@@ -311,7 +311,7 @@
           </tbody>
         </table>
         <p>The model catalog contains the free IDs listed by the PHP API as well as other OpenRouter IDs. Without a personal key, the API accepts only its server-side allowlist. With a personal key, the PHP API accepts syntactically valid provider/model IDs, and paid models may bill the user's OpenRouter account. The key is encrypted on-device with Android Keystore-backed AES-GCM and is not added to server conversation logs.</p>
-        <p>The settings screen also links to learned knowledge and supports deleting friends. Deleting a friend removes that friend from the local friend list; server archives have no automatic deletion or retention behavior in the inspected API.</p>
+        <p>The settings screen links to learned knowledge, supports deleting friends, and provides JSON export/import for a local device transfer. The export includes the profile, friends, memories, summaries, transcripts, and available chat-image attachments; it excludes the OpenRouter API key and installation id. The JSON file is not encrypted. Because the installation id is not transferred, delete the old phone's server archive there before moving to a new device. Settings also has a “Delete server archive” action that removes indexed chat sessions and images for the current installation.</p>
       </section>
 
       <section id="data">
@@ -327,9 +327,9 @@
         <p>Chat requests include message history and prompt context required to generate a reply. Profile generation sends the new friend's name, age, and gender. The PHP service saves chat events as JSON Lines, including text, timestamps, model IDs, and optional image filenames; chat images are stored alongside those logs. The API obtains the client IP from the web server and uses sanitized user and friend labels in archive paths.</p>
         <div class="plain-panel gold">
           <h3>Retention and access</h3>
-          <p>The API README states that server logs have no automatic deletion or retention period and are not exposed through an HTTP read endpoint. Operators must protect the storage directory, define retention, and secure backups. The documented default is a <code>log</code> directory beside the API; a private directory outside the web root can be configured with <code>DOST_CONVERSATION_STORAGE_DIR</code>.</p>
+          <p>The server keeps active conversation archives for no more than 3,650 days and exposes no HTTP read endpoint. The in-app delete action removes sessions found by the current installation id and retains a small hashed deletion marker to block delayed pre-deletion messages from being archived again. Records written before install-id indexing cannot be matched that way and remain subject to scheduled cleanup. Operators must protect the storage directory and account for hosting-provider backups. The default archive directory is outside the web root; <code>DOST_CONVERSATION_STORAGE_DIR</code> can select another private path.</p>
         </div>
-        <p>The Android manifest keeps auto-backup enabled, and both <code>backup_rules.xml</code> and <code>data_extraction_rules.xml</code> exclude <code>dost_local_data.xml</code>, <code>messages/</code>, <code>chat_images/</code>, and <code>system-friend-photos/</code> from cloud backup and device-to-device transfer. Chat transcripts and photos stay on the device. Server retention is still an operator setting; see the API README.</p>
+        <p>The Android manifest keeps auto-backup enabled, and both <code>backup_rules.xml</code> and <code>data_extraction_rules.xml</code> exclude <code>dost_local_data.xml</code>, <code>messages/</code>, <code>chat_images/</code>, and <code>system-friend-photos/</code> from cloud backup and device-to-device transfer. Chat transcripts and photos stay on the device unless included in a user-created JSON export. See the API README for server deployment and deletion details.</p>
       </section>
 
       <section id="backend">
