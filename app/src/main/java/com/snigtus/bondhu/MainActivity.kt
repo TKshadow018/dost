@@ -532,7 +532,7 @@ fun DostApp(
             emailSignInEnabled = authRepository.emailSignInEnabled,
             googleSignInEnabled = authRepository.googleSignInEnabled,
             onSignIn = { authEmail, password ->
-                authenticate { authRepository.signIn(authEmail, password) }
+                authenticate({ authRepository.signIn(authEmail, password) })
             },
             onCreateAccount = { authEmail, password ->
                 authenticate({ authRepository.createAccount(authEmail, password) }, sendVerificationEmail = true)
@@ -551,7 +551,7 @@ fun DostApp(
                         }
                     )
                 } else {
-                    authenticate { authRepository.signInWithGoogle(activity) }
+                    authenticate({ authRepository.signInWithGoogle(activity) })
                 }
             }
         )
