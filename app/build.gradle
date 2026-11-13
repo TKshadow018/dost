@@ -3,13 +3,36 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+def firebaseConfigFile = file("google-services.json")
+def firebaseConfig = firebaseConfigFile.isFile() ? new groovy.json.JsonSlurper().parse(firebaseConfigFile) : [:]
+def firebaseProjectInfo = firebaseConfig.project_info ?: [:]
+def firebaseClient = (firebaseConfig.client ?: []).find {
+    it.client_info?.android_client_info?.package_name == "com.snigtus.dost"
+} ?: [:]
+def firebaseApiKey = firebaseClient.api_key?.find { it.current_key }?.current_key ?: ""
+def firebaseAppId = firebaseClient.client_info?.mobilesdk_app_id ?: ""
+def firebaseProjectId = firebaseProjectInfo.project_id ?: ""
+def firebaseSenderId = firebaseProjectInfo.project_number ?: ""
+def googleWebClientId = firebaseClient.oauth_client?.find { it.client_type?.toString() == "3" }?.client_id ?: ""
+if (file("google-services.json").exists()) {
+    apply plugin: 'com.google.gms.google-services'
+}
+
 android {
     namespace 'com.snigtus.dost'
-    compileSdk 37
+    // Integer 37 makes AGP 9.1.0 look up the unpublished hash "android-37".
+    // minorApiLevel 0 resolves the published platform android-37.0. targetSdk stays 36.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 0
+        }
+    }
 
     def uploadKeystore = file("dost-upload.jks")
     def uploadStorePassword = System.getenv("DOST_KEYSTORE_PASSWORD") ?: providers.gradleProperty("DOST_KEYSTORE_PASSWORD").orNull
     def uploadKeyPassword = System.getenv("DOST_KEY_PASSWORD") ?: providers.gradleProperty("DOST_KEY_PASSWORD").orNull
+    def dostAppCredentialSecret = System.getenv("DOST_APP_CREDENTIAL_SECRET") ?: providers.gradleProperty("DOST_APP_CREDENTIAL_SECRET").orNull ?: ""
+    def escapedDostAppCredentialSecret = dostAppCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")
 
     signingConfigs {
         release {
@@ -28,6 +51,12 @@ android {
         versionName "0.1.1"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
+        buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseApiKey)
+        buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseAppId)
+        buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseProjectId)
+        buildConfigField "String", "FIREBASE_SENDER_ID", groovy.json.JsonOutput.toJson(firebaseSenderId)
+        buildConfigField "String", "GOOGLE_WEB_CLIENT_ID", groovy.json.JsonOutput.toJson(googleWebClientId)
     }
 
     buildTypes {
@@ -44,6 +73,7 @@ android {
     }
     buildFeatures {
         compose true
+        buildConfig true
     }
 }
 
@@ -51,6 +81,7 @@ dependencies {
 
     implementation libs.androidx.core.ktx
     implementation libs.androidx.lifecycle.runtime.ktx
+    implementation libs.androidx.lifecycle.viewmodel.ktx
     implementation libs.androidx.activity.compose
     implementation platform(libs.androidx.compose.bom)
     implementation libs.androidx.ui
@@ -59,8 +90,15 @@ dependencies {
     implementation libs.androidx.material3
     implementation libs.kotlinx.coroutines.android
     implementation libs.androidx.work.runtime.ktx
+    implementation platform(libs.firebase.bom)
+    implementation libs.firebase.auth
+    implementation libs.androidx.credentials
+    implementation libs.androidx.credentials.play.services.auth
+    implementation libs.google.id
     testImplementation libs.junit
     testImplementation libs.kotlinx.coroutines.test
+    // Unit tests run against the Android SDK stubs, whose org.json throws. Use the real parser in tests only.
+    testImplementation "org.json:json:20240303"
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
     androidTestImplementation platform(libs.androidx.compose.bom)

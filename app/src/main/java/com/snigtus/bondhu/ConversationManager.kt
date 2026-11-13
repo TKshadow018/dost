@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.File
 import java.time.ZonedDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -20,7 +21,12 @@ object ConversationManager {
     private val unreadState = MutableStateFlow<Map<String, Int>>(emptyMap())
     private val sendingState = MutableStateFlow<Set<String>>(emptySet())
     private val waitingForScheduleState = MutableStateFlow<Set<String>>(emptySet())
+    private val relationshipState = MutableStateFlow<Map<String, RelationshipUpdate>>(emptyMap())
     private val jobs = ConcurrentHashMap.newKeySet<String>()
+    private val outboundQueue = OutboundSendQueue()
+    private val sendGuards = ConcurrentHashMap<String, Any>()
+    private val dataImportGuard = Any()
+    @Volatile private var dataImportGeneration = 0L
     @Volatile private var activeFriendId: String? = null
     private lateinit var appContext: Context
     private lateinit var store: DostStore
@@ -29,6 +35,7 @@ object ConversationManager {
     val unread: StateFlow<Map<String, Int>> = unreadState.asStateFlow()
     val sending: StateFlow<Set<String>> = sendingState.asStateFlow()
     val waitingForSchedule: StateFlow<Set<String>> = waitingForScheduleState.asStateFlow()
+    val relationshipUpdates: StateFlow<Map<String, RelationshipUpdate>> = relationshipState.asStateFlow()
 
     fun initialize(context: Context) {
         if (!::appContext.isInitialized) {
@@ -59,80 +66,124 @@ object ConversationManager {
                 messagesFor(friend.id).filterNot { store.isMessageLogged(it.messageId) }.forEach { message ->
                     ConversationWorkScheduler.scheduleMessageLog(appContext, friend.id, message.messageId)
                 }
+                publish(friend.id, messagesFor(friend.id))
             }
         }
     }
 
     fun messagesFor(friendId: String): List<ChatMessage> = messageState.value[friendId] ?: store.loadMessages(friendId)
 
+    fun importLocalData(backup: JSONObject) {
+        if (!::store.isInitialized) return
+        synchronized(dataImportGuard) {
+            dataImportGeneration++
+            val friendIds = messageState.value.keys + store.loadFriends().map { it.id }
+            friendIds.forEach { friendId ->
+                ConversationWorkScheduler.cancelAllForFriend(appContext, friendId)
+                outboundQueue.clear(friendId)
+            }
+            jobs.clear()
+            sendingState.value = emptySet()
+            waitingForScheduleState.value = emptySet()
+            relationshipState.value = emptyMap()
+            try {
+                store.importLocalData(backup)
+            } finally {
+                val importedFriends = store.loadFriends()
+                messageState.value = importedFriends.associate { it.id to store.loadMessages(it.id) }
+                unreadState.value = store.unreadCounts(importedFriends.map { it.id })
+            }
+        }
+    }
+
+    private inline fun withCurrentImportGeneration(generation: Long, action: () -> Unit): Boolean =
+        synchronized(dataImportGuard) {
+            if (generation != dataImportGeneration) {
+                false
+            } else {
+                action()
+                true
+            }
+        }
+
     fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "") {
         if (text.isBlank() && imagePath.isBlank()) return
-        val selectedModel = store.aiModel()
+        if (friend.profilePending) return
+        val requestGeneration = dataImportGeneration
+        lateinit var selectedModel: String
         val messageContent = text.ifBlank { "Shared an image" }
-        if (store.hasScheduledReply(friend.id)) {
-            val sessionId = store.currentSessionId(friend.id)
-            if (sessionId == null) {
-                store.setScheduledReply(friend.id, false)
+        val sessionId = synchronized(dataImportGuard) {
+            if (requestGeneration != dataImportGeneration) return
+            selectedModel = store.aiModel()
+            if (store.hasScheduledReply(friend.id)) {
+                val scheduledSessionId = store.currentSessionId(friend.id)
+                if (scheduledSessionId == null) {
+                    store.setScheduledReply(friend.id, false)
+                    return
+                }
+                appendUserMessage(friend.id, messageContent, scheduledSessionId, selectedModel, imagePath)
+                scheduleSessionEnd(friend.id, scheduledSessionId, SESSION_INACTIVITY_MILLIS)
+                if (friend.id !in waitingForScheduleState.value) {
+                    sendingState.update { it + friend.id }
+                    waitingForScheduleState.update { it + friend.id }
+                    ConversationWorkScheduler.scheduleBusyReply(appContext, friend, scheduledSessionId, language)
+                }
                 return
             }
-            appendUserMessage(friend.id, messageContent, sessionId, selectedModel, imagePath)
-            scheduleSessionEnd(friend.id, sessionId, SESSION_INACTIVITY_MILLIS)
-            if (friend.id !in waitingForScheduleState.value) {
-                // A reply was marked scheduled but no worker is waiting (state lost or a
-                // worker already running). Re-schedule so this message is not dropped.
+            synchronized(sendGuard(friend.id)) {
+                if (jobs.contains(friend.id)) {
+                    queueOutbound(friend, messageContent, selectedModel, language, imagePath)
+                    return
+                }
+                ConversationWorkScheduler.cancelCheckIn(appContext, friend.id)
+                val id = store.currentSessionId(friend.id) ?: java.util.UUID.randomUUID().toString()
+                store.saveCurrentSessionId(friend.id, id)
+                appendUserMessage(friend.id, messageContent, id, selectedModel, imagePath)
+                scheduleSessionEnd(friend.id, id, SESSION_INACTIVITY_MILLIS)
+                if (friend.replyAvailableAt(ZonedDateTime.now()) != null) {
+                    store.setScheduledReply(friend.id, true)
+                    sendingState.update { it + friend.id }
+                    waitingForScheduleState.update { it + friend.id }
+                    ConversationWorkScheduler.scheduleBusyReply(appContext, friend, id, language)
+                    return
+                }
+                jobs.add(friend.id)
                 sendingState.update { it + friend.id }
-                waitingForScheduleState.update { it + friend.id }
-                ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, language)
+                id
             }
-            return
         }
-        if (jobs.contains(friend.id)) return
-        ConversationWorkScheduler.cancelCheckIn(appContext, friend.id)
-        val sessionId = store.currentSessionId(friend.id) ?: java.util.UUID.randomUUID().toString()
-        store.saveCurrentSessionId(friend.id, sessionId)
-        appendUserMessage(friend.id, messageContent, sessionId, selectedModel, imagePath)
-        scheduleSessionEnd(friend.id, sessionId, SESSION_INACTIVITY_MILLIS)
-        if (friend.replyAvailableAt(ZonedDateTime.now()) != null) {
-            store.setScheduledReply(friend.id, true)
-            sendingState.update { it + friend.id }
-            waitingForScheduleState.update { it + friend.id }
-            ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, language)
-            return
-        }
-        jobs.add(friend.id)
-        sendingState.update { it + friend.id }
         scope.launch {
             try {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
-                store.addUserMemories(friend.id, answer.memories)
-                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
-                val friendship = (friend.friendshipScore + answer.friendshipImpact).coerceIn(0, 100)
-                val love = if (friendship > 70) (friend.loveScore + answer.loveImpact).coerceIn(0, 100) else 0
-                val currentFriend = store.loadFriends().firstOrNull { it.id == friend.id }
-                if (currentFriend != null) {
-                    val friends = store.loadFriends()
-                    val index = friends.indexOfFirst { it.id == friend.id }
-                    if (index >= 0) {
-                        friends[index] = currentFriend.copy(friendshipScore = friendship, loveScore = love)
-                        store.saveFriends(friends)
+                if (!withCurrentImportGeneration(requestGeneration) {
+                    if (answer.parseFailed) {
+                        appendAssistant(friend.id, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
+                        return@withCurrentImportGeneration
                     }
+                    store.addUserMemories(friend.id, answer.memories)
+                    updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
+                    updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
+                    val response = listOf(
+                        answer.text,
+                        answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+                    ).filter { it.isNotBlank() }.joinToString("\n\n")
+                    appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
+                    when {
+                        answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
+                        shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
+                    }
+                }) {
+                    return@launch
                 }
-                val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
-                val response = listOf(
-                    answer.text,
-                    answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
-                ).filter { it.isNotBlank() }.joinToString("\n\n")
-                appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
-                when {
-                    answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
-                    !hasQuestion -> scheduleInactivityQuestion(friend, language, sessionId)
+            } catch (error: Throwable) {
+                withCurrentImportGeneration(requestGeneration) {
+                    appendAssistant(friend.id, failureReply(error, language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
                 }
-            } catch (_: Throwable) {
-                appendAssistant(friend.id, connectionIssueReply(language), modelId = selectedModel)
             } finally {
-                jobs.remove(friend.id)
-                sendingState.update { it - friend.id }
+                withCurrentImportGeneration(requestGeneration) {
+                    finishJobAndResumeQueue(friend.id, requestGeneration)
+                }
             }
         }
     }
@@ -147,6 +198,17 @@ object ConversationManager {
     fun openChat(friendId: String) {
         activeFriendId = friendId
         clearUnread(friendId)
+    }
+
+    fun seedInitialGreeting(friend: Friend) {
+        if (friend.greeting.isBlank()) return
+        synchronized(sendGuard(friend.id)) {
+            val history = messagesFor(friend.id)
+            val sessionId = store.currentSessionId(friend.id) ?: java.util.UUID.randomUUID().toString()
+            val greeting = initialGreetingMessage(friend, history, sessionId) ?: return
+            store.saveCurrentSessionId(friend.id, sessionId)
+            appendAssistant(friend.id, greeting.content, greeting.messageId, category = greeting.category)
+        }
     }
 
     fun closeChat(friendId: String) {
@@ -164,6 +226,7 @@ object ConversationManager {
         unreadState.update { it - friendId }
         sendingState.update { it - friendId }
         waitingForScheduleState.update { it - friendId }
+        outboundQueue.clear(friendId)
         jobs.remove(friendId)
         if (::appContext.isInitialized) ConversationWorkScheduler.cancelAllForFriend(appContext, friendId)
     }
@@ -179,30 +242,36 @@ object ConversationManager {
         ConversationWorkScheduler.scheduleCheckIn(appContext, friend, sessionId, language, delayMillis, latestUserMessage.timestampMillis)
     }
 
-    private fun appendUserMessage(friendId: String, text: String, sessionId: String, modelId: String, imagePath: String) {
-        val userMessage = ChatMessage("user", text, sessionId = sessionId, modelId = modelId, imagePath = imagePath)
-        val updated = messagesFor(friendId).map { message ->
-            if (message.sessionId.isBlank()) message.copy(sessionId = sessionId) else message
-        }.toMutableList().apply { add(userMessage) }
-        publish(friendId, updated)
-        store.saveMessages(friendId, updated)
-        ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, userMessage.messageId)
+    private fun appendUserMessage(friendId: String, text: String, sessionId: String, modelId: String, imagePath: String): ChatMessage {
+        return synchronized(dataImportGuard) {
+            val userMessage = ChatMessage("user", text, sessionId = sessionId, modelId = modelId, imagePath = imagePath)
+            val updated = messagesFor(friendId).map { message ->
+                if (message.sessionId.isBlank()) message.copy(sessionId = sessionId) else message
+            }.toMutableList().apply { add(userMessage) }
+            publish(friendId, updated)
+            store.saveMessages(friendId, updated)
+            ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, userMessage.messageId)
+            userMessage
+        }
     }
 
-    private fun appendAssistant(friendId: String, response: String, messageId: String? = null, modelId: String = store.aiModel()) {
-        val sessionId = store.currentSessionId(friendId) ?: java.util.UUID.randomUUID().toString()
-        store.saveCurrentSessionId(friendId, sessionId)
-        val assistantMessage = ChatMessage("assistant", response, sessionId = sessionId, messageId = messageId ?: java.util.UUID.randomUUID().toString(), modelId = modelId)
-        val saved = messagesFor(friendId).toMutableList().apply { add(assistantMessage) }
-        publish(friendId, saved)
-        store.saveMessages(friendId, saved)
-        ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, assistantMessage.messageId)
-        scheduleSessionEnd(friendId, sessionId, SESSION_INACTIVITY_MILLIS)
-        if (activeFriendId != friendId) {
-            store.incrementUnread(friendId)
-            unreadState.update { it + (friendId to store.unreadCount(friendId)) }
-            store.loadFriends().firstOrNull { it.id == friendId }?.let { friend ->
-                ReplyNotifier.notifyReply(appContext, friend, response)
+    private fun appendAssistant(friendId: String, response: String, messageId: String? = null, modelId: String = store.aiModel(), category: String = "conversation") {
+        synchronized(dataImportGuard) {
+            val sessionId = store.currentSessionId(friendId) ?: java.util.UUID.randomUUID().toString()
+            store.saveCurrentSessionId(friendId, sessionId)
+            val assistantMessage = ChatMessage("assistant", response, category = category, sessionId = sessionId, messageId = messageId ?: java.util.UUID.randomUUID().toString(), modelId = modelId)
+            val saved = messagesFor(friendId).toMutableList().apply { add(assistantMessage) }
+            publish(friendId, saved)
+            store.saveMessages(friendId, saved)
+            val isError = category == ERROR_MESSAGE_CATEGORY
+            if (!isError) ConversationWorkScheduler.scheduleMessageLog(appContext, friendId, assistantMessage.messageId)
+            scheduleSessionEnd(friendId, sessionId, SESSION_INACTIVITY_MILLIS)
+            if (!isError && activeFriendId != friendId) {
+                store.incrementUnread(friendId)
+                unreadState.update { it + (friendId to store.unreadCount(friendId)) }
+                store.loadFriends().firstOrNull { it.id == friendId }?.let { friend ->
+                    ReplyNotifier.notifyReply(appContext, friend, response)
+                }
             }
         }
     }
@@ -213,15 +282,10 @@ object ConversationManager {
             total >= 2 -> "😊"
             total == 1 -> "🙂"
             total <= -1 -> "😔"
-            else -> friend.mood
+            else -> return
         }
-        if (mood != friend.mood) {
-            val friends = store.loadFriends()
-            val index = friends.indexOfFirst { it.id == friend.id }
-            if (index >= 0) {
-                friends[index] = friends[index].copy(mood = mood)
-                store.saveFriends(friends)
-            }
+        store.updateFriend(friend.id) { current ->
+            if (current.mood == mood) current else current.copy(mood = mood)
         }
     }
 
@@ -229,6 +293,27 @@ object ConversationManager {
         AppLanguage.BANGLA -> "দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। একটু পরে আবার চেষ্টা করো।"
         AppLanguage.HINDI -> "माफ़ कीजिए, अभी जवाब नहीं दे पा रहा हूँ। कृपया थोड़ी देर बाद फिर कोशिश करें।"
         AppLanguage.ENGLISH -> "Sorry, I couldn't reply just now. Please try again in a moment."
+    }
+
+    private fun failureReply(error: Throwable, language: AppLanguage): String {
+        var current: Throwable? = error
+        while (current != null) {
+            if (current.message == "App credential required") return credentialReply(language)
+            current = current.cause
+        }
+        return connectionIssueReply(language)
+    }
+
+    private fun credentialReply(language: AppLanguage): String = when (language) {
+        AppLanguage.BANGLA -> "অ্যাপটি আপডেট করুন, অথবা ফোনের তারিখ ও সময় অটোমেটিক রাখুন। নিজের OpenRouter কী দিলে চ্যাট চলবে।"
+        AppLanguage.HINDI -> "ऐप अपडेट करें, या फ़ोन की तारीख और समय अपने आप सेट रखें। अपनी OpenRouter कुंजी डालने पर चैट चलती रहेगी।"
+        AppLanguage.ENGLISH -> "Update the app, or set the phone's date and time to automatic. Chat still works if you enter your own OpenRouter key."
+    }
+
+    private fun unreadableReply(language: AppLanguage): String = when (language) {
+        AppLanguage.BANGLA -> "এই উত্তরটা পড়া যায়নি। মেসেজ চেপে ধরে Reply differently বেছে আবার চেষ্টা করো।"
+        AppLanguage.HINDI -> "यह जवाब पढ़ा नहीं जा सका। संदेश को दबाकर Reply differently चुनें और फिर कोशिश करें।"
+        AppLanguage.ENGLISH -> "I couldn't read that reply. Touch and hold this message and choose Reply differently to try again."
     }
 
     private fun connectionIssueReply(language: AppLanguage): String = when (language) {
@@ -240,58 +325,80 @@ object ConversationManager {
     private fun typingDelayMillis(): Long = 700L + java.util.concurrent.ThreadLocalRandom.current().nextLong(1_300L)
 
     fun regenerateReply(friend: Friend, language: AppLanguage) {
-        val sessionId = store.currentSessionId(friend.id) ?: return
-        if (jobs.contains(friend.id) || friend.replyAvailableAt(ZonedDateTime.now()) != null) return
-        val messages = messagesFor(friend.id).toMutableList()
-        // Remove trailing assistant messages until we reach a user message to regenerate against.
-        while (messages.isNotEmpty() && messages.last().role == "assistant" && messages.last().sessionId == sessionId) {
-            messages.removeAt(messages.lastIndex)
+        val requestGeneration = dataImportGeneration
+        lateinit var sessionId: String
+        synchronized(dataImportGuard) {
+            if (requestGeneration != dataImportGeneration) return
+            sessionId = store.currentSessionId(friend.id) ?: return
+            if (jobs.contains(friend.id) || friend.replyAvailableAt(ZonedDateTime.now()) != null) return
+            val messages = messagesFor(friend.id).toMutableList()
+            while (messages.isNotEmpty() && messages.last().role == "assistant" && messages.last().sessionId == sessionId) {
+                messages.removeAt(messages.lastIndex)
+            }
+            if (messages.lastOrNull { it.sessionId == sessionId }?.role != "user") return
+            publish(friend.id, messages)
+            store.saveMessages(friend.id, messages)
+            jobs.add(friend.id)
+            sendingState.update { it + friend.id }
         }
-        if (messages.lastOrNull { it.sessionId == sessionId }?.role != "user") return
-        publish(friend.id, messages)
-        store.saveMessages(friend.id, messages)
-        jobs.add(friend.id)
-        sendingState.update { it + friend.id }
         scope.launch {
             try {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
-                store.addUserMemories(friend.id, answer.memories)
-                updateMood(friend, answer.friendshipImpact, answer.loveImpact)
-                val response = listOf(
-                    answer.text,
-                    answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
-                ).filter { it.isNotBlank() }.joinToString("\n\n")
-                appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, store.aiModel())
-            } catch (_: Throwable) {
-                appendAssistant(friend.id, connectionIssueReply(language), modelId = store.aiModel())
+                if (!withCurrentImportGeneration(requestGeneration) {
+                    if (answer.parseFailed) {
+                        appendAssistant(friend.id, unreadableReply(language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                        return@withCurrentImportGeneration
+                    }
+                    store.addUserMemories(friend.id, answer.memories)
+                    val response = listOf(
+                        answer.text,
+                        answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+                    ).filter { it.isNotBlank() }.joinToString("\n\n")
+                    appendAssistant(friend.id, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, store.aiModel())
+                }) {
+                    return@launch
+                }
+            } catch (error: Throwable) {
+                withCurrentImportGeneration(requestGeneration) {
+                    appendAssistant(friend.id, failureReply(error, language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                }
             } finally {
-                jobs.remove(friend.id)
-                sendingState.update { it - friend.id }
+                withCurrentImportGeneration(requestGeneration) {
+                    finishJobAndResumeQueue(friend.id, requestGeneration)
+                }
             }
         }
     }
 
-    private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null): AiReply {
+    private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null, ephemeralInstruction: String = ""): AiReply {
         val client = OpenRouterClient()
         val selectedModel = store.aiModel()
         val apiKey = store.openRouterApiKey()
-        val history = messagesFor(friend.id).filter { it.sessionId == sessionId }.let { existing ->
+        val history = synchronized(sendGuard(friend.id)) {
+            val existing = messagesForPrompt(outboundQueue.visibleHistory(friend.id, messagesFor(friend.id).filter { it.sessionId == sessionId }))
             if (seedMessage != null && existing.isEmpty()) listOf(seedMessage) else existing
         }
+        val memories = store.loadUserMemories(friend.id)
+        val sessionSummaries = store.loadSessionSummaries(friend.id)
+        val structuredUserProfile = store.loadStructuredUserProfile(friend.id, store.userName())
         try {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
-                store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                memories, friend.friendshipScore, friend.loveScore,
+                sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
+                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
+                structuredUserProfile = structuredUserProfile
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
             delay(1_500)
             return client.reply(
                 apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
-                store.loadUserMemories(friend.id), friend.friendshipScore, friend.loveScore,
-                store.loadSessionSummaries(friend.id), userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp
+                memories, friend.friendshipScore, friend.loveScore,
+                sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
+                sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
+                structuredUserProfile = structuredUserProfile
             )
         }
     }
@@ -301,6 +408,7 @@ object ConversationManager {
     }
 
     suspend fun runScheduledReply(friendId: String, sessionId: String, language: AppLanguage, forceFollowUp: Boolean, expectedUserTimestamp: Long?): Boolean {
+        val requestGeneration = dataImportGeneration
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: run {
             store.setScheduledReply(friendId, false)
             return true
@@ -321,32 +429,44 @@ object ConversationManager {
         sendingState.update { it + friendId }
         try {
             val answer = requestReply(friend, sessionId, language, forceFollowUp)
-            store.addUserMemories(friendId, answer.memories)
-            updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
-            val response = listOf(
-                answer.text,
-                answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
-            ).filter { it.isNotBlank() }.joinToString("\n\n")
-            appendAssistant(friendId, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
-            store.setScheduledReply(friendId, false)
-            if (!forceFollowUp) {
-                val hasQuestion = answer.followUpQuestion.isNotBlank() || answer.text.contains("?")
-                when {
-                    answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
-                    !hasQuestion -> scheduleInactivityQuestion(friend, language, sessionId)
+            withCurrentImportGeneration(requestGeneration) {
+                if (answer.parseFailed) {
+                    if (!forceFollowUp) {
+                        appendAssistant(friendId, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
+                    }
+                    store.setScheduledReply(friendId, false)
+                    return@withCurrentImportGeneration
+                }
+                store.addUserMemories(friendId, answer.memories)
+                updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
+                val response = listOf(
+                    answer.text,
+                    answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+                ).filter { it.isNotBlank() }.joinToString("\n\n")
+                appendAssistant(friendId, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
+                store.setScheduledReply(friendId, false)
+                if (!forceFollowUp) {
+                    when {
+                        answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, language, sessionId, answer.followUpDelayMinutes * 60_000L)
+                        shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, language, sessionId)
+                    }
                 }
             }
             return true
         } finally {
-            jobs.remove(friendId)
-            sendingState.update { it - friendId }
-            if (store.hasScheduledReply(friendId)) waitingForScheduleState.update { it + friendId }
+            withCurrentImportGeneration(requestGeneration) {
+                finishJobAndResumeQueue(friendId, requestGeneration)
+                if (store.hasScheduledReply(friendId)) waitingForScheduleState.update { it + friendId }
+            }
         }
     }
 
     suspend fun runSessionSummary(friendId: String, sessionId: String): Boolean {
+        val requestGeneration = dataImportGeneration
         if (store.currentSessionId(friendId) != sessionId) {
-            store.saveCurrentSessionId(friendId, null)
+            withCurrentImportGeneration(requestGeneration) {
+                if (store.currentSessionId(friendId) != sessionId) store.saveCurrentSessionId(friendId, null)
+            }
             return true
         }
         if (store.hasScheduledReply(friendId) || jobs.contains(friendId)) return false
@@ -359,33 +479,50 @@ object ConversationManager {
         val remaining = SESSION_INACTIVITY_MILLIS - (System.currentTimeMillis() - latestMessage.timestampMillis)
         if (remaining > 0L) return false
         val friendName = store.loadFriends().firstOrNull { it.id == friendId }?.name ?: return true
-        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, sessionMessages, store.language())
-        val latestAfterSummary = messagesFor(friendId).lastOrNull { it.sessionId == sessionId }
-        if (store.currentSessionId(friendId) != sessionId || latestAfterSummary?.timestampMillis != latestMessage.timestampMillis) return false
-        store.saveSessionSummary(friendId, SessionSummary(sessionId, sessionMessages.minOf { it.timestampMillis }, System.currentTimeMillis(), summary))
-        if (store.currentSessionId(friendId) == sessionId) store.saveCurrentSessionId(friendId, null)
-        return true
+        val summaryInput = messagesForPrompt(sessionMessages)
+        if (summaryInput.isEmpty()) {
+            withCurrentImportGeneration(requestGeneration) {
+                if (store.currentSessionId(friendId) == sessionId) store.saveCurrentSessionId(friendId, null)
+            }
+            return true
+        }
+        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, summaryInput, store.language())
+        var shouldRetry = false
+        val imported = !withCurrentImportGeneration(requestGeneration) {
+            val latestAfterSummary = messagesFor(friendId).lastOrNull { it.sessionId == sessionId }
+            if (store.currentSessionId(friendId) != sessionId || latestAfterSummary?.timestampMillis != latestMessage.timestampMillis) {
+                shouldRetry = true
+                return@withCurrentImportGeneration
+            }
+            store.saveSessionSummary(friendId, SessionSummary(sessionId, sessionMessages.minOf { it.timestampMillis }, System.currentTimeMillis(), summary))
+            if (store.currentSessionId(friendId) == sessionId) store.saveCurrentSessionId(friendId, null)
+        }
+        return imported || !shouldRetry
     }
 
+    private fun gatedLoveImpact(friend: Friend, loveImpact: Int): Int =
+        if (romanceAllowed(store.userAge(), friend.age)) loveImpact else 0
+
     private fun updateFriendship(friend: Friend, friendshipImpact: Int, loveImpact: Int) {
-        val friends = store.loadFriends()
-        val index = friends.indexOfFirst { it.id == friend.id }
-        if (index < 0) return
-        val currentFriend = friends[index]
-        val friendship = (currentFriend.friendshipScore + friendshipImpact).coerceIn(0, 100)
-        val love = if (friendship > 70) (currentFriend.loveScore + loveImpact).coerceIn(0, 100) else 0
-        friends[index] = currentFriend.copy(friendshipScore = friendship, loveScore = love)
-        store.saveFriends(friends)
+        val updated = store.updateFriend(friend.id) { current ->
+            current.withRelationshipDelta(friendshipImpact, loveImpact, store.userAge())
+        } ?: return
+        relationshipState.update { it + (updated.id to RelationshipUpdate(updated.id, updated.friendshipScore, updated.loveScore)) }
     }
 
     private fun publish(friendId: String, messages: List<ChatMessage>) {
         messageState.update { it + (friendId to messages) }
     }
 
-    private const val DEFAULT_FOLLOW_UP_MILLIS = 30_000L //will be 1 minutes later
-    private const val SESSION_INACTIVITY_MILLIS = 5 * 60 * 1000L // will be 60 minutes later
+    internal const val DEFAULT_FOLLOW_UP_MILLIS = 60_000L // 1 minute
+    internal const val SESSION_INACTIVITY_MILLIS = 60 * 60 * 1000L // 60 minutes
+
+    /** Default check-in only when the reply did not already ask something. */
+    internal fun shouldScheduleDefaultFollowUp(replyText: String, followUpQuestion: String): Boolean =
+        followUpQuestion.isBlank() && !replyText.contains("?")
 
     suspend fun runMorningGreeting(friendId: String, sessionId: String, language: AppLanguage): Boolean {
+        val requestGeneration = dataImportGeneration
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
         // Reschedule tomorrow's greeting first so the chain never dies.
         ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, language)
@@ -393,19 +530,103 @@ object ConversationManager {
         if (!jobs.add(friendId)) return false
         sendingState.update { it + friendId }
         try {
-            val greetingSeed = ChatMessage("user", "Say a warm good-morning greeting to me as if you just woke up and thought of me.", sessionId = sessionId, modelId = store.aiModel())
+            val plan = MorningGreeting.plan(sessionId, messagesFor(friendId))
             val answer = runCatching {
-                requestReply(friend, sessionId, language, forceFollowUp = false, seedMessage = greetingSeed)
+                requestReply(friend, plan.sessionId, language, forceFollowUp = false, ephemeralInstruction = plan.instruction)
             }.getOrNull() ?: return true
             val response = listOf(
                 answer.text,
                 answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
             ).filter { it.isNotBlank() }.joinToString("\n\n")
-            if (response.isNotBlank()) appendAssistant(friendId, response, answer.serverMessageId, store.aiModel())
+            if (response.isNotBlank()) {
+                withCurrentImportGeneration(requestGeneration) {
+                    store.saveCurrentSessionId(friendId, plan.sessionId)
+                    appendAssistant(friendId, response, answer.serverMessageId, store.aiModel())
+                }
+            }
             return true
         } finally {
-            jobs.remove(friendId)
-            sendingState.update { it - friendId }
+            withCurrentImportGeneration(requestGeneration) {
+                finishJobAndResumeQueue(friendId, requestGeneration)
+            }
+        }
+    }
+
+    private fun sendGuard(friendId: String): Any = sendGuards.computeIfAbsent(friendId) { Any() }
+
+    private fun queueOutbound(friend: Friend, text: String, modelId: String, language: AppLanguage, imagePath: String) {
+        ConversationWorkScheduler.cancelCheckIn(appContext, friend.id)
+        val sessionId = store.currentSessionId(friend.id) ?: java.util.UUID.randomUUID().toString().also {
+            store.saveCurrentSessionId(friend.id, it)
+        }
+        val saved = appendUserMessage(friend.id, text, sessionId, modelId, imagePath)
+        scheduleSessionEnd(friend.id, sessionId, SESSION_INACTIVITY_MILLIS)
+        outboundQueue.enqueue(friend.id, saved.messageId, sessionId, language)
+    }
+
+    private fun finishJobAndResumeQueue(friendId: String, requestGeneration: Long) {
+        val ready = synchronized(dataImportGuard) {
+            if (requestGeneration != dataImportGeneration) return
+            synchronized(sendGuard(friendId)) {
+                jobs.remove(friendId)
+                val queued = outboundQueue.takeReady(friendId)
+                if (queued.isEmpty()) {
+                    sendingState.update { it - friendId }
+                    emptyList()
+                } else {
+                    jobs.add(friendId)
+                    sendingState.update { it + friendId }
+                    queued
+                }
+            }
+        }
+        if (ready.isEmpty()) return
+        val friend = synchronized(dataImportGuard) {
+            if (requestGeneration != dataImportGeneration) return
+            store.loadFriends().firstOrNull { it.id == friendId }
+        } ?: run {
+            synchronized(dataImportGuard) {
+                outboundQueue.clear(friendId)
+                jobs.remove(friendId)
+                sendingState.update { it - friendId }
+            }
+            return
+        }
+        val pending = ready.last()
+        scope.launch {
+            try {
+                ConversationWorkScheduler.cancelCheckIn(appContext, friend.id)
+                delay(typingDelayMillis())
+                val answer = requestReply(friend, pending.sessionId, pending.language)
+                if (!withCurrentImportGeneration(requestGeneration) {
+                    if (answer.parseFailed) {
+                        appendAssistant(friend.id, unreadableReply(pending.language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                        return@withCurrentImportGeneration
+                    }
+                    store.addUserMemories(friend.id, answer.memories)
+                    updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
+                    updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
+                    val response = listOf(
+                        answer.text,
+                        answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
+                    ).filter { it.isNotBlank() }.joinToString("\n\n")
+                    appendAssistant(friend.id, response.ifBlank { unavailableReply(pending.language) }, answer.serverMessageId, store.aiModel())
+                    when {
+                        answer.followUpDelayMinutes != null -> scheduleInactivityQuestion(friend, pending.language, pending.sessionId, answer.followUpDelayMinutes * 60_000L)
+                        shouldScheduleDefaultFollowUp(answer.text, answer.followUpQuestion) -> scheduleInactivityQuestion(friend, pending.language, pending.sessionId)
+                    }
+                }) {
+                    return@launch
+                }
+            } catch (error: Throwable) {
+                withCurrentImportGeneration(requestGeneration) {
+                    appendAssistant(friend.id, failureReply(error, pending.language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                }
+            } finally {
+                withCurrentImportGeneration(requestGeneration) {
+                    finishJobAndResumeQueue(friendId, requestGeneration)
+                }
+            }
         }
     }
 }

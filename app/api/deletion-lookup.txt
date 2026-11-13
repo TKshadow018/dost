@@ -1,0 +1,43 @@
+Looking up a Dost conversation archive by installation id
+
+The app creates an installation UUID the first time it runs and stores it in
+the private preferences file dost_local_data, key installation_id. This version
+does not show that id on screen. A person asking for deletion can quote it
+only if they can read that preference, or after a later app build displays it.
+
+Archives written after this change store installation_id on every JSONL line
+(lowercase UUID). The writer also appends each session directory, once, to:
+
+  <archive-root>/_by_install/<lowercase-uuid>.txt
+
+Each line is a session directory relative to the archive root. cleanup_logs.php
+removes a line when that session directory is gone and deletes an index file
+that becomes empty, so the index does not outlive the 3,650-day retention.
+The app's “Delete server chat archive” control sends this UUID to
+`delete_archive.php` using HTTPS. The endpoint removes the indexed session
+directories and their chat-image files, then removes the index. The endpoint is
+idempotent. It also retains a small hashed-installation deletion marker so
+queued messages created before deletion are not re-archived after the request;
+new messages can still be archived. `cleanup_logs.php` remains a separate
+retention job and removes sessions only after more than 3,650 days.
+
+Archives written before the installation id and index existed cannot be
+identified by the API. If an index is missing, an operator can search the
+private archive for records that do have the UUID:
+
+  grep -R -l --include='*.jsonl' '"installation_id":"<uuid>"' <archive-root>
+
+Lines written before this change have no installation_id. Those sessions can
+only be grouped by folder name: sanitized display name, server-observed IP,
+friend name, and session id.
+
+Do not search or delete under the web root. The archive root is the private
+directory. The default, when this API lives in public_html/api, is:
+
+  <parent of public_html>/dost-private-data/conversation-archive
+
+If DOST_CONVERSATION_STORAGE_DIR is set, that path is the archive root. The
+API rejects a storage path inside the web root, so the variable must point
+outside it. .htaccess on a public_html/log directory is only a leftover deny
+rule for files that have not been moved yet. It is not the protection for the
+private archive.

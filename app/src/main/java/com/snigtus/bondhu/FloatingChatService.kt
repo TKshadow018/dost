@@ -65,7 +65,7 @@ class FloatingChatService : Service() {
             val friendId = intent?.getStringExtra(EXTRA_FRIEND_ID)
             friend = store.loadFriends().firstOrNull { it.id == friendId }
                 ?: store.loadFriends().firstOrNull() ?: run {
-                    Toast.makeText(this, "Add a friend in Dost first", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, LocalizedText.ADD_FRIEND_FIRST.resolve(store.language()), Toast.LENGTH_SHORT).show()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -94,7 +94,7 @@ class FloatingChatService : Service() {
     private fun showBubble() {
         val size = dp(60)
         val avatar = ImageView(this).apply {
-            contentDescription = "Chat with ${friend.name}"
+            contentDescription = LocalizedText.CHAT_WITH_FRIEND.resolve(store.language(), friend.name)
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true
             background = GradientDrawable().apply {
@@ -164,7 +164,7 @@ class FloatingChatService : Service() {
     private fun showCloseTarget() {
         if (closeTarget != null) return
         closeTarget = TextView(this).apply {
-            text = "Drag here to close"
+            text = LocalizedText.DRAG_TO_CLOSE.resolve(store.language())
             textSize = 13f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
@@ -222,7 +222,7 @@ class FloatingChatService : Service() {
         root.addView(header)
 
         val status = TextView(this).apply {
-            text = "${friendshipLevel(friend.friendshipScore)} · ${friend.friendshipScore}/100"
+            text = "${friendshipLevel(friend.friendshipScore, store.language())} · ${friend.friendshipScore}/100"
             textSize = 12f
             setTextColor(Color.DKGRAY)
         }
@@ -238,12 +238,12 @@ class FloatingChatService : Service() {
 
         val composer = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         input = EditText(this).apply {
-            hint = "Message"
+            hint = LocalizedText.MESSAGE.resolve(store.language())
             maxLines = 3
             setTextColor(Color.DKGRAY)
         }
         val send = Button(this).apply {
-            text = "Send"
+            text = LocalizedText.SEND.resolve(store.language())
             setOnClickListener { sendMessage() }
         }
         composer.addView(input, LinearLayout.LayoutParams(0, dp(56), 1f))
@@ -297,8 +297,19 @@ class FloatingChatService : Service() {
     private fun sendMessage() {
         val text = input?.text?.toString()?.trim().orEmpty()
         if (text.isBlank()) return
+        val current = store.loadFriends().firstOrNull { it.id == friend.id } ?: friend
+        if (current.profilePending) {
+            val language = store.language()
+            Toast.makeText(this, when (language) {
+                AppLanguage.BANGLA -> "এখনও প্রোফাইল তৈরি হচ্ছে"
+                AppLanguage.HINDI -> "प्रोफ़ाइल अभी बन रही है"
+                AppLanguage.ENGLISH -> "Still creating their profile"
+            }, Toast.LENGTH_SHORT).show()
+            return
+        }
+        friend = current
         input?.setText("")
-        ConversationManager.send(friend, text, store.language())
+        ConversationManager.send(current, text, store.language())
     }
 
     private fun collapsePanel() {
@@ -365,15 +376,15 @@ class FloatingChatService : Service() {
         val intent = Intent(this, MainActivity::class.java)
         val pending = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID).setContentTitle("Dost floating chat").setContentText("Chat with ${friend.name}").setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pending).setOngoing(true).build()
+            Notification.Builder(this, CHANNEL_ID).setContentTitle(LocalizedText.FLOATING_CHAT_TITLE.resolve(store.language())).setContentText(LocalizedText.CHAT_WITH_FRIEND.resolve(store.language(), friend.name)).setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pending).setOngoing(true).build()
         } else {
-            Notification.Builder(this).setContentTitle("Dost floating chat").setContentText("Chat with ${friend.name}").setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pending).setOngoing(true).build()
+            Notification.Builder(this).setContentTitle(LocalizedText.FLOATING_CHAT_TITLE.resolve(store.language())).setContentText(LocalizedText.CHAT_WITH_FRIEND.resolve(store.language(), friend.name)).setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pending).setOngoing(true).build()
         }
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "Dost floating chat", NotificationManager.IMPORTANCE_LOW))
+            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, LocalizedText.FLOATING_CHAT_TITLE.resolve(store.language()), NotificationManager.IMPORTANCE_LOW))
         }
     }
 

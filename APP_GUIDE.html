@@ -203,12 +203,20 @@
       <section id="getting-started">
         <h2>02 · Getting started</h2>
         <ol>
-          <li>The app opens to a splash screen and checks whether a local profile exists.</li>
-          <li>First-time onboarding asks for the user's name, email, age, and gender.</li>
+          <li>The splash screen opens into email sign-in, account creation, password reset, or Google sign-in.</li>
+          <li>After authentication, first-time onboarding asks for the user's name, age, and gender.</li>
           <li>The next step can create the first friend using a name, age, gender, and optional photo, or skip adding a friend for now.</li>
           <li>After onboarding, the user lands on the friends list. The current implementation permits up to five friends.</li>
         </ol>
-        <p>This is profile onboarding, not a remote sign-in flow: the inspected Android code saves profile information in local app preferences and does not authenticate an account with a server.</p>
+        <p>Email/password and Google identity are handled by Firebase Authentication. Returning Firebase users with a saved local profile go straight to Home. An eligible local profile created by an older app version also skips sign-in on upgrade, so existing friends and chats remain available.</p>
+        <h3>Enable Firebase sign-in</h3>
+        <ol>
+          <li>Register the Android app ID <code>com.snigtus.dost</code> in a Firebase project and enable Email/Password and Google under Authentication sign-in providers.</li>
+          <li>Download that app's <code>google-services.json</code> to <code>app/google-services.json</code>. The Gradle build reads the Firebase app values and Google web OAuth client ID directly from this file; it is ignored by Git.</li>
+          <li>For Google sign-in, configure the project's web OAuth client and add the app's signing certificate SHA-1 fingerprints in Firebase. Google sign-in is disabled if the web client ID is missing.</li>
+        </ol>
+        <p>The app builds without <code>google-services.json</code>; email and Google sign-in then remain disabled with an in-app setup message. Passwords are sent to Firebase Authentication and are not saved in local preferences. Profile details, friends, and conversations continue to be stored locally; signing out does not delete them.</p>
+        <p class="notice"><strong>Backend follow-up:</strong> The existing PHP API does not verify Firebase ID tokens. The backend developer should add token verification and account-level authorization before server-side data is treated as belonging to an authenticated user.</p>
         <p>When a friend is created, Dost first saves the basic friend record. It then asks the AI service to generate a fictional character profile, including personality, interests, family details, conversation style, and other profile fields. If that request fails, the basic friend remains available with its default profile values.</p>
       </section>
 
@@ -238,11 +246,11 @@
           <li>The app parses the AI response, adds any explicit user facts to memory, updates relationship scores, and appends the assistant message.</li>
           <li>Message archival is also queued with Android WorkManager; network-dependent work waits for connectivity and can retry after transient failures.</li>
         </ol>
-        <p>The AI prompt includes the selected language, user and friend clocks, fictional friend profile, relationship scores, recent memory facts, and up to three recent session summaries. It tells the model to stay in character as a fictional friend, avoid claiming to be a real person, and return a JSON object containing the reply and optional structured updates.</p>
+        <p>The AI prompt includes the selected language, user and friend clocks, fictional friend profile, relationship scores, recent memory facts, and up to seven recent session summaries. It tells the model to stay in character as a fictional friend, avoid claiming to be a real person, and return a JSON object containing the reply and optional structured updates.</p>
         <h3>Images</h3>
         <p>Images are resized to a maximum dimension of 1,280 pixels and compressed as JPEG to a maximum of 300 KB. The compressed copy is stored in the app's private files directory. The API forwards image data as a multimodal data URL; a vision-capable selected model is needed for useful image analysis.</p>
         <h3>Follow-ups and errors</h3>
-        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 30 seconds. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
+        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 1 minute. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
       </section>
 
       <section id="schedule">
@@ -274,7 +282,7 @@
           </div>
         </div>
         <h3>Conversation sessions</h3>
-        <p>A session remains active while messages continue. Five minutes after the latest activity, the session-summary worker can summarize it, store the summary locally, and clear the current session ID. The next message then begins a new session. The chat menu exposes recent summaries, while up to three recent summaries are provided to the AI for continuity.</p>
+        <p>A session remains active while messages continue. Sixty minutes after the latest activity, the session-summary worker can summarize it, store the summary locally, and clear the current session ID. The next message then begins a new session. The chat menu exposes recent summaries, while up to seven recent summaries are provided to the AI for continuity.</p>
         <p>The app keeps message history locally for display. Session summaries and learned facts are also stored locally, separately per friend. The server archive is an additional copy; it is not the source used to render the chat UI.</p>
       </section>
 
@@ -295,6 +303,7 @@
           <thead><tr><th>Setting</th><th>What it changes</th><th>Where it is used</th></tr></thead>
           <tbody>
             <tr><td>App language</td><td>English, Bangla, or Hindi</td><td>UI labels and language requested for AI responses</td></tr>
+            <tr><td>Signed-in account</td><td>Firebase email or Google account; sign out is available here</td><td>Signing out preserves local profile, friends, and chats</td></tr>
             <tr><td>Your time zone</td><td>IANA time-zone identifier</td><td>User clock in AI prompts</td></tr>
             <tr><td>Preferred model</td><td>Choose from the catalog or enter a model ID</td><td>Chat, generated profiles, and summaries</td></tr>
             <tr><td>OpenRouter API key</td><td>Optional personal key; blank uses the server key</td><td>Sent to the API over HTTPS as a request header</td></tr>
@@ -302,7 +311,7 @@
           </tbody>
         </table>
         <p>The model catalog contains the free IDs listed by the PHP API as well as other OpenRouter IDs. Without a personal key, the API accepts only its server-side allowlist. With a personal key, the PHP API accepts syntactically valid provider/model IDs, and paid models may bill the user's OpenRouter account. The key is encrypted on-device with Android Keystore-backed AES-GCM and is not added to server conversation logs.</p>
-        <p>The settings screen also links to learned knowledge and supports deleting friends. Deleting a friend removes that friend from the local friend list; server archives have no automatic deletion or retention behavior in the inspected API.</p>
+        <p>The settings screen links to learned knowledge, supports deleting friends, and provides JSON export/import for a local device transfer. The export includes the profile, friends, memories, summaries, transcripts, and available chat-image attachments; it excludes the OpenRouter API key and installation id. The JSON file is not encrypted. Because the installation id is not transferred, delete the old phone's server archive there before moving to a new device. Settings also has a “Delete server archive” action that removes indexed chat sessions and images for the current installation.</p>
       </section>
 
       <section id="data">
@@ -311,16 +320,16 @@
         <ul>
           <li>User profile fields, friends, schedules, time zones, scores, and selected model are stored in app preferences.</li>
           <li>Conversation messages, session summaries, learned memories, unread counts, and message-log status are stored locally by friend.</li>
-          <li>Compressed chat images are stored under the app-private <code>files/chat_images</code> directory.</li>
+          <li>Compressed chat images are stored under the app-private <code>files/chat_images</code> directory. Downloaded system-friend photos are stored under <code>files/system-friend-photos</code>. A temporary copy may sit in the cache while a photo downloads; Android does not include cache in auto-backup.</li>
           <li>The optional OpenRouter API key is encrypted; other profile and conversation values are not encrypted by the app's own storage layer.</li>
         </ul>
         <h3>Sent to the service</h3>
         <p>Chat requests include message history and prompt context required to generate a reply. Profile generation sends the new friend's name, age, and gender. The PHP service saves chat events as JSON Lines, including text, timestamps, model IDs, and optional image filenames; chat images are stored alongside those logs. The API obtains the client IP from the web server and uses sanitized user and friend labels in archive paths.</p>
         <div class="plain-panel gold">
           <h3>Retention and access</h3>
-          <p>The API README states that server logs have no automatic deletion or retention period and are not exposed through an HTTP read endpoint. Operators must protect the storage directory, define retention, and secure backups. The documented default is a <code>log</code> directory beside the API; a private directory outside the web root can be configured with <code>DOST_CONVERSATION_STORAGE_DIR</code>.</p>
+          <p>The server keeps active conversation archives for no more than 3,650 days and exposes no HTTP read endpoint. The in-app delete action removes sessions found by the current installation id and retains a small hashed deletion marker to block delayed pre-deletion messages from being archived again. Records written before install-id indexing cannot be matched that way and remain subject to scheduled cleanup. Operators must protect the storage directory and account for hosting-provider backups. The default archive directory is outside the web root; <code>DOST_CONVERSATION_STORAGE_DIR</code> can select another private path.</p>
         </div>
-        <p>The Android manifest enables backup and references backup-rule files that currently contain only sample/commented rules. Review Android backup behavior and server retention settings before distributing the app with real personal data.</p>
+        <p>The Android manifest keeps auto-backup enabled, and both <code>backup_rules.xml</code> and <code>data_extraction_rules.xml</code> exclude <code>dost_local_data.xml</code>, <code>messages/</code>, <code>chat_images/</code>, and <code>system-friend-photos/</code> from cloud backup and device-to-device transfer. Chat transcripts and photos stay on the device unless included in a user-created JSON export. See the API README for server deployment and deletion details.</p>
       </section>
 
       <section id="backend">
