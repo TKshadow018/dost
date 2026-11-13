@@ -35,7 +35,7 @@ import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.*
 
 @Composable
-internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
+internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, onAddFriend: (Friend) -> Unit, onAddSystemFriend: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, userTimeZoneId: String, onUserTimeZoneChange: (String) -> Unit, openRouterApiKey: String, aiModel: String, onAiSettingsSave: (String, String) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
     var showAddFriend by remember { mutableStateOf(false) }
     var showAddOptions by remember { mutableStateOf(false) }
     var showSystemFriendPicker by remember { mutableStateOf(false) }
@@ -184,7 +184,7 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
         onSelect = ::addCatalogFriend,
         onDismiss = { showSystemFriendPicker = false }
     )
-    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() }, onExportLocalData = onExportLocalData, onImportLocalData = onImportLocalData, settingsNotice = settingsNotice, onDeleteServerArchive = onDeleteServerArchive)
+    if (showSettings) SettingsDialog(language, friends, userTimeZoneId, onDismiss = { showSettings = false }, onDeleteFriend = { onDeleteFriend(it) }, onLanguageChange = { onLanguageChange(it) }, onUserTimeZoneChange = onUserTimeZoneChange, onAiSettings = { showSettings = false; showAiSettings = true }, onKnowledge = { showSettings = false; onKnowledge() }, onSignOut = onSignOut, onExportLocalData = onExportLocalData, onImportLocalData = onImportLocalData, settingsNotice = settingsNotice, onDeleteServerArchive = onDeleteServerArchive)
     if (showAiSettings) AiSettingsDialog(language, openRouterApiKey, aiModel, onDismiss = { showAiSettings = false }, onSave = { apiKey, model -> onAiSettingsSave(apiKey, model); showAiSettings = false })
 }
 
@@ -530,7 +530,7 @@ internal fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange:
 }
 
 @Composable
-private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
+private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTimeZoneId: String, onDismiss: () -> Unit, onDeleteFriend: (Friend) -> Unit, onLanguageChange: (AppLanguage) -> Unit, onUserTimeZoneChange: (String) -> Unit, onAiSettings: () -> Unit, onKnowledge: () -> Unit, onSignOut: () -> Unit, onExportLocalData: () -> Unit, onImportLocalData: () -> Unit, settingsNotice: String, onDeleteServerArchive: () -> Unit) {
     val hindi = language == AppLanguage.HINDI
     var confirmArchiveDelete by remember { mutableStateOf(false) }
     AlertDialog(
@@ -566,6 +566,9 @@ private fun SettingsDialog(language: AppLanguage, friends: List<Friend>, userTim
                 HorizontalDivider()
                 Button(onClick = onKnowledge, modifier = Modifier.fillMaxWidth()) {
                     Text(when { language == AppLanguage.BANGLA -> "আমার সম্পর্কে জানা তথ্য"; hindi -> "मेरे बारे में जानकारी"; else -> "Knowledge about me" })
+                }
+                OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
+                    Text(when { language == AppLanguage.BANGLA -> "সাইন আউট"; hindi -> "साइन आउट"; else -> "Sign out" })
                 }
                 HorizontalDivider()
                 Text(when { language == AppLanguage.BANGLA -> "বন্ধু মুছুন"; hindi -> "दोस्त हटाएं"; else -> "Delete a friend" }, style = MaterialTheme.typography.titleMedium)
