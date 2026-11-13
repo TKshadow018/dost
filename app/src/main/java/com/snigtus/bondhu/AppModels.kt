@@ -137,8 +137,86 @@ data class ChatMessage(
 
 data class UserMemory(val category: String, val fact: String, val replaces: String = "")
 
+data class StructuredUserProfile(
+    val name: String = "",
+    val people: List<String> = emptyList(),
+    val preferences: List<String> = emptyList()
+)
+
 const val MAX_STORED_USER_MEMORIES = 1000
-const val MAX_INJECTED_USER_MEMORIES = 200
+const val MAX_PROFILE_FACTS = 20
+const val MAX_RETRIEVED_USER_MEMORIES = 6
+const val MAX_RETRIEVED_SESSION_SUMMARIES = 3
+
+fun structuredProfileFromMemories(name: String, memories: List<UserMemory>): StructuredUserProfile {
+    val peopleCategories = setOf("family", "relatives", "relationships", "people")
+    val preferenceCategories = setOf("preferences", "interests", "routines")
+    fun facts(categories: Set<String>) = memories
+        .filter { it.category.trim().lowercase().replace(' ', '_') in categories }
+        .map { it.fact.trim() }
+        .filter { it.isNotBlank() }
+        .distinctBy { it.lowercase() }
+        .takeLast(MAX_PROFILE_FACTS)
+
+    return StructuredUserProfile(name.trim(), facts(peopleCategories), facts(preferenceCategories))
+}
+
+fun retrieveRelevantUserMemories(
+    query: String,
+    memories: List<UserMemory>,
+    profile: StructuredUserProfile,
+    limit: Int = MAX_RETRIEVED_USER_MEMORIES
+): List<UserMemory> {
+    val candidates = (memories +
+        profile.people.map { UserMemory("people", it) } +
+        profile.preferences.map { UserMemory("preferences", it) })
+        .filter { it.fact.isNotBlank() }
+        .distinctBy { it.fact.trim().lowercase() }
+    val terms = memorySearchTerms(query)
+    if (terms.isEmpty() || limit <= 0) return emptyList()
+
+    return candidates.withIndex()
+        .mapNotNull { (index, memory) ->
+            val score = memorySearchTerms("${memory.category} ${memory.fact}").count { it in terms }
+            if (score == 0) null else Triple(index, score, memory)
+        }
+        .sortedWith(compareByDescending<Triple<Int, Int, UserMemory>> { it.second }.thenByDescending { it.first })
+        .take(limit)
+        .map { it.third }
+}
+
+fun retrieveRelevantSessionSummaries(
+    query: String,
+    summaries: List<SessionSummary>,
+    limit: Int = MAX_RETRIEVED_SESSION_SUMMARIES
+): List<SessionSummary> {
+    val terms = memorySearchTerms(query)
+    if (terms.isEmpty() || limit <= 0) return emptyList()
+
+    return summaries.withIndex()
+        .mapNotNull { (index, summary) ->
+            val score = memorySearchTerms(summary.summary).count { it in terms }
+            if (score == 0) null else Triple(index, score, summary)
+        }
+        .sortedWith(compareByDescending<Triple<Int, Int, SessionSummary>> { it.second }.thenByDescending { it.first })
+        .take(limit)
+        .map { it.third }
+}
+
+private val MEMORY_SEARCH_STOP_WORDS = setOf(
+    "about", "after", "again", "and", "are", "because", "before", "been", "being", "but",
+    "can", "could", "did", "does", "doing", "for", "from", "have", "her", "here", "him",
+    "his", "how", "into", "its", "just", "like", "more", "most", "not", "our", "out",
+    "over", "she", "should", "that", "the", "their", "them", "then", "there", "these",
+    "they", "this", "those", "through", "too", "under", "very", "was", "were", "what",
+    "when", "where", "which", "who", "why", "will", "with", "would", "you", "your"
+)
+
+private fun memorySearchTerms(text: String): Set<String> = Regex("[\\p{L}\\p{N}]{2,}")
+    .findAll(text.lowercase())
+    .map { it.value }
+    .filterNot { it in MEMORY_SEARCH_STOP_WORDS }
+    .toSet()
 
 fun displayMemoryCategory(category: String): String {
     val cleaned = category.trim().replace('_', ' ').replace(Regex("\\s+"), " ").lowercase()
@@ -197,9 +275,6 @@ fun mergeUserMemories(
     }
     return memories.takeLast(limit)
 }
-
-internal fun userMemoriesForPrompt(memories: List<UserMemory>): List<UserMemory> =
-    memories.takeLast(MAX_INJECTED_USER_MEMORIES)
 
 fun replaceUserMemory(existing: List<UserMemory>, original: UserMemory, updated: UserMemory): List<UserMemory> {
     val index = existing.indexOfFirst { sameUserMemory(it, original) }
