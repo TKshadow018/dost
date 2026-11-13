@@ -38,7 +38,13 @@ import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.*
 
 @Composable
-internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, initialDraft: String, initialImagePath: String, onDraftChange: (String) -> Unit, onImageDraftChange: (String) -> Unit, onFriendProfile: () -> Unit, onFloatingChat: () -> Unit, profileGenerating: Boolean, profileError: ProfileFailure?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit) {
+internal fun ChatScreen(
+    friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage,
+    initialDraft: String, initialImagePath: String,
+    onDraftChange: (String) -> Unit, onImageDraftChange: (String) -> Unit,
+    onFriendProfile: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onFloatingChat: () -> Unit,
+    profileGenerating: Boolean, profileError: ProfileFailure?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit
+) {
     val context = LocalContext.current
     val messageMap = ConversationManager.messages.collectAsState().value
     val messages = messageMap[friend.id] ?: store.loadMessages(friend.id)
@@ -90,6 +96,7 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
         store.loadSharedMoments(friend.id).filter { it.kind == "shared_ritual" }
     }
     val userMemories = remember(friend.id, memoryRevision) { store.loadUserMemories(friend.id) }
+    var showFriendInfo by remember { mutableStateOf(false) }
     val displayedMessages = remember(messages, searchQuery) {
         if (searchQuery.isBlank()) messages else messages.filter { it.content.contains(searchQuery, ignoreCase = true) }
     }
@@ -159,6 +166,10 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
                         DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) {
                             DropdownMenuItem(text = { Text(LocalizedText.SEARCH.resolve(language)) }, onClick = { showChatMenu = false; showSearch = !showSearch; if (!showSearch) searchQuery = "" })
                             DropdownMenuItem(text = { Text(LocalizedText.EXPORT_CHAT.resolve(language)) }, onClick = { showChatMenu = false; exportChat(context, friend, messages) })
+                            DropdownMenuItem(
+                                text = { Text(chatLabel(language, "Friend details", "বন্ধুর তথ্য", "दोस्त की जानकारी")) },
+                                onClick = { showChatMenu = false; showFriendInfo = true }
+                            )
                             DropdownMenuItem(
                                 text = {
                                     Text(when (language) {
@@ -325,6 +336,7 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
                     MessageBubble(
                         message = message,
                         language = language,
+                        friendName = friend.name,
                         onRemember = if (message.role == "user" && message.content.isNotBlank()) {
                             { pendingMemory = message }
                         } else null,
@@ -514,6 +526,13 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
             }
         }
     }
+    if (showFriendInfo) FriendInfoDialog(
+        friend = friend,
+        userAge = store.userAge(),
+        language = language,
+        onTimeZoneChange = onFriendTimeZoneChange,
+        onDismiss = { showFriendInfo = false }
+    )
     if (showUserInfo) ConversationProfileDialog(
         friend = friend,
         memories = userMemories,
@@ -673,6 +692,76 @@ internal fun ChatScreen(friend: Friend, store: DostStore, onBack: () -> Unit, la
             }
         )
     }
+}
+
+@Composable
+private fun FriendInfoDialog(
+    friend: Friend,
+    userAge: String,
+    language: AppLanguage,
+    onTimeZoneChange: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val routines = friend.effectiveRoutineBlocks()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(chatLabel(language, "${friend.name}'s profile", "${friend.name}-এর প্রোফাইল", "${friend.name} की प्रोफ़ाइल")) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TimeZonePicker(
+                    chatLabel(language, "Friend timezone", "বন্ধুর সময় অঞ্চল", "दोस्त का समय क्षेत्र"),
+                    friend.timeZoneId,
+                    onTimeZoneChange
+                )
+                listOf(
+                    chatLabel(language, "Age", "বয়স", "उम्र") to friend.age,
+                    chatLabel(language, "Gender", "লিঙ্গ", "लिंग") to friend.gender,
+                    chatLabel(language, "Personality", "ব্যক্তিত্ব", "व्यक्तित्व") to friend.personality,
+                    chatLabel(language, "How you met", "কীভাবে পরিচয়", "कैसे मिले") to friend.relationship,
+                    chatLabel(language, "First message", "প্রথম বার্তা", "पहला संदेश") to friend.greeting,
+                    chatLabel(language, "Interests", "আগ্রহ", "रुचियाँ") to friend.interests,
+                    chatLabel(language, "Memories", "স্মৃতি", "यादें") to friend.memories,
+                    chatLabel(language, "Conversation style", "কথোপকথনের ধরন", "बातचीत की शैली") to friend.conversationStyle,
+                    chatLabel(language, "Family", "পরিবার", "परिवार") to friend.family,
+                    chatLabel(language, "Family members", "পরিবারের সদস্য", "परिवार के सदस्य") to friend.familyMembers,
+                    chatLabel(language, "Family activities", "পারিবারিক কার্যক্রম", "पारिवारिक गतिविधियाँ") to friend.familyActivities,
+                    chatLabel(language, "Financial condition", "আর্থিক অবস্থা", "आर्थिक स्थिति") to friend.financialCondition,
+                    chatLabel(language, "Address", "ঠিকানা", "पता") to friend.address,
+                    chatLabel(language, "Height", "উচ্চতা", "कद") to friend.height,
+                    chatLabel(language, "Weight", "ওজন", "वज़न") to friend.weight,
+                    chatLabel(language, "Facial features", "মুখের বৈশিষ্ট্য", "चेहरे की विशेषताएँ") to friend.facialFeatures,
+                    chatLabel(language, "Body features", "শারীরিক বৈশিষ্ট্য", "शारीरिक विशेषताएँ") to friend.bodyFeatures,
+                    chatLabel(language, "Friendship", "বন্ধুত্ব", "दोस्ती") to
+                        "${friendshipLevel(friend.friendshipScore, language)} (${friend.friendshipScore}/100)",
+                    chatLabel(language, "Love", "ভালোবাসা", "प्यार") to when {
+                        !romanceAllowed(userAge, friend.age) -> chatLabel(language, "Off", "বন্ধ", "बंद")
+                        friend.friendshipScore <= 70 -> chatLabel(language, "Locked", "লক করা", "लॉक")
+                        else -> "${loveLevel(friend.loveScore)} (${friend.loveScore}/100)"
+                    }
+                ).forEach { (label, value) ->
+                    if (value.isNotBlank()) Text("$label: $value", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(chatLabel(language, "Busy routine", "ব্যস্ততার রুটিন", "व्यस्त दिनचर्या"), style = MaterialTheme.typography.titleSmall)
+                routines.forEach { routine ->
+                    val days = routine.daysOfWeek.sorted().joinToString(", ") {
+                        java.time.DayOfWeek.of(it).getDisplayName(java.time.format.TextStyle.SHORT, chatLocale(language))
+                    }
+                    val start = LocalTime.of(routine.startMinute / 60, routine.startMinute % 60)
+                        .format(DateTimeFormatter.ofPattern("h:mm a", chatLocale(language)))
+                    Text(
+                        "${routine.reason.ifBlank { chatLabel(language, "Routine", "রুটিন", "दिनचर्या") }}: $days, $start (${routine.durationMinutes} min)",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(LocalizedText.CLOSE.resolve(language)) }
+        }
+    )
 }
 
 @Composable
@@ -948,6 +1037,7 @@ private fun SessionSummariesDialog(summaries: List<SessionSummary>, language: Ap
 private fun MessageBubble(
     message: ChatMessage,
     language: AppLanguage,
+    friendName: String? = null,
     onRemember: (() -> Unit)? = null,
     onSaveMoment: (() -> Unit)? = null,
     onRegenerate: (() -> Unit)? = null,
@@ -975,6 +1065,13 @@ private fun MessageBubble(
                     .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    if (isUser || !friendName.isNullOrBlank()) {
+                        Text(
+                            if (isUser) chatLabel(language, "You", "আপনি", "आप") else friendName.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     val reasonLabel = if (isUser) null else when (message.category) {
                         "morning_greeting" -> chatLabel(language, "Friend started the conversation", "বন্ধু কথোপকথন শুরু করেছে", "दोस्त ने बातचीत शुरू की")
                         "follow_up" -> chatLabel(language, "Friend checked in", "বন্ধু খোঁজ নিয়েছে", "दोस्त ने हालचाल पूछा")

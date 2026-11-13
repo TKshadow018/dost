@@ -10,11 +10,13 @@ val Purple40 = Color(0xFF6650a4)
 val PurpleGrey40 = Color(0xFF625b71)
 val Pink40 = Color(0xFF7D5260)
 
-// Dost's messaging palette: clear blue actions, calm neutral surfaces, and green secondary states.
+// Dost messaging palette with a calm teal accent for authentication.
 val DostBlue = Color(0xFF2563EB)
 val DostBlueLight = Color(0xFF93C5FD)
 val DostGreen = Color(0xFF047857)
 val DostGreenLight = Color(0xFF6EE7B7)
+val DostTeal = Color(0xFF145E55)
+val DostTealLight = Color(0xFF7FD8C9)
 val DostInk = Color(0xFF0B1220)
 val DostSurface = Color(0xFF111827)
 val DostSurfaceVariant = Color(0xFF1E293B)

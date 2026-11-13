@@ -1,10 +1,27 @@
 package com.snigtus.dost
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RelationshipScoreTest {
+
+    @Test
+    fun liveRepliesAccumulateOnTheStoredScore() {
+        val openingFriendship = 20
+        var storedFriendship = openingFriendship
+        var storedLove = 0
+        listOf(2, 2, 1, -1, 2).forEach { impact ->
+            val next = applyRelationshipDelta(storedFriendship, storedLove, impact, 0)
+            storedFriendship = next.friendship
+            storedLove = next.love
+        }
+
+        assertEquals(20, openingFriendship)
+        assertEquals(26, storedFriendship)
+        assertNotEquals(openingFriendship + 2, storedFriendship)
+    }
 
     @Test
     fun oneScoreOutcomePerConversationSessionPreventsRepeatedTurnFarming() {

@@ -473,6 +473,14 @@ fun DostApp(
             if (selectedFriend?.id == friendId) selectedFriend = stored
         }
     }
+    LaunchedEffect(screen) {
+        if (screen == AppScreen.HOME && proactiveEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ReplyNotifier.ensureChannel(context)
+            if (!ReplyNotifier.canNotify(context)) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
     fun requestFloatingChat(friendId: String? = null, closeApp: Boolean = false) {
         bubbleFriendId = friendId ?: selectedFriend?.id ?: friends.firstOrNull()?.id
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
@@ -962,7 +970,8 @@ fun DostApp(
                 profileError = profileErrors[friend.id],
                 onRetryProfile = { startProfileGeneration(friend.id) },
                 onUseBasicProfile = { continueWithBasicProfile(friend.id) },
-                onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) }
+                onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) },
+                onFriendTimeZoneChange = { updateFriendTimeZone(friend, it) }
             )
         }
         AppScreen.KNOWLEDGE -> if (hasLocalAccountAccess()) KnowledgeScreen(
