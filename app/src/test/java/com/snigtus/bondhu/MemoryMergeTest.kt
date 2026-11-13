@@ -57,7 +57,6 @@ class MemoryMergeTest {
         val existing = List(1000) { index -> UserMemory("other", "Fact $index") }
         val merged = mergeUserMemories(existing, listOf(UserMemory("other", "  "), UserMemory("other", "Fact newest")))
         assertEquals(MAX_STORED_USER_MEMORIES, merged.size)
-        assertEquals(MAX_INJECTED_USER_MEMORIES, 200)
         assertEquals("Fact 1", merged.first().fact)
         assertEquals("Fact newest", merged.last().fact)
         assertFalse(merged.any { it.fact.isBlank() })

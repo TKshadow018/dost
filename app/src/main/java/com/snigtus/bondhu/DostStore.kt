@@ -2,6 +2,7 @@ package com.snigtus.dost
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -512,16 +513,47 @@ class DostStore(context: Context) {
         runCatching { writeMessagesFile(messageFile(friendId), messagesToJson(messages)) }
     }
 
-    fun deleteFriendData(friendId: String) {
-        messageFile(friendId).delete()
+    fun deleteFriendData(friend: Friend) {
+        loadMessages(friend.id).forEach { message ->
+            message.imagePath.takeIf { it.isNotBlank() }?.let(::deleteChatImage)
+        }
+        messageFile(friend.id).delete()
+        deleteFriendPhotos(friend)
         preferences.edit()
-            .remove("messages_$friendId")
-            .remove("user_memories_$friendId")
-            .remove("session_summaries_$friendId")
-            .remove("unread_$friendId")
-            .remove("current_session_$friendId")
-            .remove("scheduled_reply_$friendId")
+            .remove("messages_${friend.id}")
+            .remove("user_memories_${friend.id}")
+            .remove("structured_user_profile_${friend.id}")
+            .remove("session_summaries_${friend.id}")
+            .remove("unread_${friend.id}")
+            .remove("current_session_${friend.id}")
+            .remove("scheduled_reply_${friend.id}")
             .apply()
+    }
+
+    private fun deleteChatImage(path: String) {
+        runCatching {
+            val directory = File(context.filesDir, "chat_images").canonicalFile
+            val image = File(path).canonicalFile
+            if (image.parentFile == directory && image.isFile) image.delete()
+        }
+    }
+
+    private fun deleteFriendPhotos(friend: Friend) {
+        val directory = File(context.filesDir, "system-friend-photos")
+        val canonicalDirectory = runCatching { directory.canonicalFile }.getOrNull() ?: return
+        val photoUri = Uri.parse(friend.photoUri)
+        if (photoUri.scheme == "file") {
+            photoUri.path?.let { path ->
+                runCatching {
+                    val photo = File(path).canonicalFile
+                    if (photo.parentFile == canonicalDirectory) photo.delete()
+                }
+            }
+        }
+        if (friend.catalogId.isNotBlank()) {
+            val safeId = friend.catalogId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+            File(directory, "$safeId.image").delete()
+        }
     }
 
     fun currentSessionId(friendId: String): String? = preferences.getString("current_session_$friendId", null)?.takeIf { it.isNotBlank() }
@@ -560,6 +592,33 @@ class DostStore(context: Context) {
         preferences.edit().putString("session_summaries_$friendId", json.toString()).apply()
     }
 
+    fun loadStructuredUserProfile(friendId: String, name: String = userName()): StructuredUserProfile {
+        val key = "structured_user_profile_$friendId"
+        val storedJson = preferences.getString(key, null)
+        val stored = storedJson?.let { raw ->
+            runCatching {
+                val json = JSONObject(raw)
+                fun strings(slot: String) = json.optJSONArray(slot)?.let { values ->
+                    List(values.length()) { index -> values.optString(index) }.filter { it.isNotBlank() }
+                }.orEmpty()
+                StructuredUserProfile(json.optString("name"), strings("people"), strings("preferences"))
+            }.getOrNull()
+        }
+        val profile = stored ?: structuredProfileFromMemories(name, loadUserMemories(friendId))
+        val updated = profile.copy(name = name.trim().ifBlank { profile.name })
+        if (stored == null || updated != stored) saveStructuredUserProfile(friendId, updated)
+        return updated
+    }
+
+    private fun saveStructuredUserProfile(friendId: String, profile: StructuredUserProfile) {
+        val json = JSONObject().apply {
+            put("name", profile.name)
+            put("people", JSONArray(profile.people.takeLast(MAX_PROFILE_FACTS)))
+            put("preferences", JSONArray(profile.preferences.takeLast(MAX_PROFILE_FACTS)))
+        }
+        preferences.edit().putString("structured_user_profile_$friendId", json.toString()).apply()
+    }
+
     fun unreadCount(friendId: String): Int = preferences.getInt("unread_$friendId", 0)
 
     fun unreadCounts(friendIds: List<String>): Map<String, Int> = friendIds.associateWith { unreadCount(it) }
@@ -586,6 +645,7 @@ class DostStore(context: Context) {
             json.put(JSONObject().apply { put("category", memory.category); put("fact", memory.fact) })
         }
         preferences.edit().putString("user_memories_$friendId", json.toString()).apply()
+        saveStructuredUserProfile(friendId, structuredProfileFromMemories(userName(), memories))
     }
 
     fun updateUserMemory(friendId: String, original: UserMemory, updated: UserMemory) {
