@@ -249,13 +249,84 @@ if (!empty($blocked['ok']) || empty($blocked['left_behind'])) {
     dost_test_fail('Migration reported success while a file was still inside the web root.');
 }
 
+$deleteInstall = '99999999-9999-4999-8999-999999999999';
+$keepInstall = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+$deleteFriend = 'bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb';
+$deleteSession = 'cccccccc-1111-4111-8111-cccccccccccc';
+$keepSession = 'dddddddd-1111-4111-8111-dddddddddddd';
+if (!append_conversation_event(
+    $deleteInstall, 'Delete me', '203.0.113.12', 'Friend', $deleteFriend, $deleteSession,
+    array(
+        'message_id' => 'eeeeeeee-1111-4111-8111-eeeeeeeeeeee',
+        'role' => 'user',
+        'content' => 'private message',
+        'timestamp_ms' => 1700000000000
+    )
+) || !append_conversation_event(
+    $keepInstall, 'Keep me', '203.0.113.13', 'Friend', $deleteFriend, $keepSession,
+    array(
+        'message_id' => 'ffffffff-1111-4111-8111-ffffffffffff',
+        'role' => 'user',
+        'content' => 'keep this message',
+        'timestamp_ms' => 1700000000000
+    )
+)) {
+    dost_test_fail('Could not create archive deletion fixtures.');
+}
+$deleteDirectory = $private . '/Delete_me_203.0.113.12/Friend/' . $deleteSession;
+$keepDirectory = $private . '/Keep_me_203.0.113.13/Friend/' . $keepSession;
+file_put_contents($deleteDirectory . '/attached.jpg', 'private image');
+$outsideArchiveFile = $root . '/outside-archive-file';
+file_put_contents($outsideArchiveFile, 'keep this file');
+if (!symlink($outsideArchiveFile, $deleteDirectory . '/outside-link')) {
+    dost_test_fail('Could not create an archive symlink fixture.');
+}
+$deletedCount = dost_delete_installation_archive($deleteInstall);
+if ($deletedCount !== 1 || is_dir($deleteDirectory) || !is_file($keepDirectory . '/2023-11-14_22-13-20.jsonl')
+    || is_file($indexDirectory . '/' . $deleteInstall . '.txt')
+    || !is_file($outsideArchiveFile)
+    || dost_delete_installation_archive($deleteInstall) !== 0
+    || dost_delete_installation_archive('../invalid') !== false
+) {
+    dost_test_fail('Install archive deletion did not remove only its indexed sessions and images.');
+}
+$deletionCutoff = dost_install_archive_deleted_before($private, $deleteInstall);
+$oldQueuedEvent = array(
+    'message_id' => '12121212-1111-4111-8111-121212121212',
+    'role' => 'user',
+    'content' => 'old queued message',
+    'timestamp_ms' => 1700000000000
+);
+if ($deletionCutoff <= 0
+    || !append_conversation_event($deleteInstall, 'Delete me', '203.0.113.12', 'Friend', $deleteFriend, $deleteSession, $oldQueuedEvent)
+    || is_dir($deleteDirectory)
+) {
+    dost_test_fail('A queued pre-deletion message was archived again.');
+}
+$newEvent = array(
+    'message_id' => '13131313-1111-4111-8111-131313131313',
+    'role' => 'user',
+    'content' => 'new message',
+    'timestamp_ms' => $deletionCutoff + 1000
+);
+if (!append_conversation_event($deleteInstall, 'Delete me', '203.0.113.12', 'Friend', $deleteFriend, $deleteSession, $newEvent)) {
+    dost_test_fail('A new post-deletion message could not be archived.');
+}
+$files = glob($deleteDirectory . '/*.jsonl');
+$recreatedArchive = is_array($files) && count($files) === 1 ? file_get_contents($files[0]) : false;
+if (!is_string($recreatedArchive) || strpos($recreatedArchive, 'new message') === false
+    || strpos($recreatedArchive, 'old queued message') !== false
+) {
+    dost_test_fail('Deletion cutoff did not allow new messages while blocking old queued history.');
+}
+
 $note = file_get_contents(__DIR__ . '/deletion-lookup.txt');
 if (!is_string($note)
     || strpos($note, 'installation_id') === false
     || strpos($note, '_by_install') === false
-    || strpos($note, '3,650') === false
+    || strpos($note, 'delete_archive.php') === false
 ) {
-    dost_test_fail('deletion-lookup.txt does not explain install-id lookup.');
+    dost_test_fail('deletion-lookup.txt does not explain the install-id deletion API.');
 }
 
-fwrite(STDOUT, "PASS: archives default outside the web root, JSONL stores the installation id, and 3,650-day cleanup covers the private directory.\n");
+fwrite(STDOUT, "PASS: archives default outside the web root, JSONL stores the installation id, and the delete API removes only indexed installation sessions.\n");
