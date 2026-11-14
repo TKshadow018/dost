@@ -14,7 +14,7 @@ function valid_friend_id($value)
     return is_string($value) && preg_match('/\A[A-Za-z0-9][A-Za-z0-9_-]{0,79}\z/', $value) === 1;
 }
 
-function load_system_friend($friendId, $catalogDirectory)
+function load_system_friend($friendId, $catalogDirectory, $chatLanguage = 'en')
 {
     if (!valid_friend_id($friendId)) {
         return array('status' => 400, 'error' => 'Invalid friend ID');
@@ -58,7 +58,7 @@ function load_system_friend($friendId, $catalogDirectory)
         'gender' => trim((string) $source['gender'])
     );
     $stringFields = array(
-        'category', 'description', 'relationship', 'greeting', 'personality', 'interests', 'memories', 'conversationStyle', 'family', 'familyMembers',
+        'category', 'country', 'description', 'relationship', 'personality', 'interests', 'memories', 'conversationStyle', 'family', 'familyMembers',
         'familyActivities', 'financialCondition', 'address', 'height', 'weight', 'facialFeatures',
         'bodyFeatures', 'busyReason', 'timeZoneId'
     );
@@ -71,6 +71,7 @@ function load_system_friend($friendId, $catalogDirectory)
         }
         $profile[$field] = $source[$field];
     }
+    $profile['greeting'] = localized_system_friend_greeting($source['greeting'], $chatLanguage);
     foreach (array('busyStartHour' => array(0, 23), 'busyDurationHours' => array(4, 8)) as $field => $range) {
         if (isset($source[$field])) {
             if (!is_numeric($source[$field]) || (int) $source[$field] < $range[0] || (int) $source[$field] > $range[1]) {
@@ -87,25 +88,24 @@ function load_system_friend($friendId, $catalogDirectory)
     }
     $photoFile = isset($source['photo']) ? trim($source['photo']) : '';
     if ($photoFile !== '') {
-        $photoFile = ltrim($photoFile, '/');
-        if (strncmp($photoFile, 'photos/', 7) === 0) {
-            $photoFile = substr($photoFile, 7);
-        }
-        if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.(?:jpg|jpeg|png|webp)\z/i', $photoFile) !== 1) {
+        $photoLocation = system_friend_photo_location($catalogDirectory, $photoFile);
+        if (!is_array($photoLocation)) {
             return array('status' => 500, 'error' => 'Friend profile contains an invalid photo filename');
         }
-        $photoDirectory = $catalogDirectory . DIRECTORY_SEPARATOR . 'photos';
-        $photoPath = $photoDirectory . DIRECTORY_SEPARATOR . $photoFile;
-        $resolvedDirectory = realpath($photoDirectory);
-        $resolvedPhoto = realpath($photoPath);
-        if (!is_string($resolvedDirectory) || !is_string($resolvedPhoto)
-            || dirname($resolvedPhoto) !== $resolvedDirectory || !is_file($resolvedPhoto)
-        ) {
-            return array('status' => 500, 'error' => 'Friend profile photo was not found');
+        $resolvedDirectory = realpath($photoLocation['directory']);
+        $resolvedPhoto = realpath($photoLocation['path']);
+        if (is_string($resolvedPhoto)) {
+            if (!is_string($resolvedDirectory)
+                || dirname($resolvedPhoto) !== $resolvedDirectory
+                || !is_file($resolvedPhoto)
+                || !is_readable($resolvedPhoto)
+            ) {
+                return array('status' => 500, 'error' => 'Friend profile photo was not found');
+            }
+            $profile['_photo_path'] = $resolvedPhoto;
+            $profile['photo_url'] = 'friends.php?photo=' . rawurlencode($friendId)
+                . '&v=' . (string) filemtime($resolvedPhoto);
         }
-        $profile['_photo_path'] = $resolvedPhoto;
-        $profile['photo_url'] = 'friends.php?photo=' . rawurlencode($friendId)
-            . '&v=' . (string) filemtime($resolvedPhoto);
     }
     return array('status' => 200, 'profile' => $profile);
 }
@@ -136,7 +136,8 @@ if (!is_dir($catalogDirectory) || !is_readable($catalogDirectory)) {
 }
 
 if (isset($_GET['photo'])) {
-    $loaded = load_system_friend($_GET['photo'], $catalogDirectory);
+    $chatLanguage = isset($_GET['chat_language']) ? $_GET['chat_language'] : 'en';
+    $loaded = load_system_friend($_GET['photo'], $catalogDirectory, $chatLanguage);
     if ($loaded['status'] !== 200) {
         respond_json($loaded['status'], array('error' => $loaded['error']));
     }
@@ -162,7 +163,8 @@ if (isset($_GET['photo'])) {
 }
 
 if (isset($_GET['id'])) {
-    $loaded = load_system_friend($_GET['id'], $catalogDirectory);
+    $chatLanguage = isset($_GET['chat_language']) ? $_GET['chat_language'] : 'en';
+    $loaded = load_system_friend($_GET['id'], $catalogDirectory, $chatLanguage);
     if ($loaded['status'] !== 200) {
         respond_json($loaded['status'], array('error' => $loaded['error']));
     }
@@ -177,7 +179,8 @@ sort($files, SORT_STRING);
 $profiles = array();
 foreach ($files as $file) {
     $friendId = basename($file, '.json');
-    $loaded = load_system_friend($friendId, $catalogDirectory);
+    $chatLanguage = isset($_GET['chat_language']) ? $_GET['chat_language'] : 'en';
+    $loaded = load_system_friend($friendId, $catalogDirectory, $chatLanguage);
     if ($loaded['status'] !== 200) {
         error_log('Dost system friend catalog contains an invalid profile: ' . basename($file));
         respond_json(500, array('error' => 'Invalid system friend profile: ' . basename($file)));

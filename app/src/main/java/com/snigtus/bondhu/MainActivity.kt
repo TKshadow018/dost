@@ -573,7 +573,7 @@ fun DostApp(
         systemFriendCatalogError = null
         scope.launch {
             try {
-                systemFriendCatalog = systemFriendClient.getCatalog()
+                systemFriendCatalog = systemFriendClient.getCatalog(chatLanguage)
             } catch (error: java.io.IOException) {
                 systemFriendCatalogError = LocalizedText.LOAD_FRIENDS_FAILED.resolve(language)
             } catch (error: org.json.JSONException) {
@@ -591,7 +591,7 @@ fun DostApp(
         systemFriendCatalogError = null
         scope.launch {
             try {
-                val profile = systemFriendClient.getProfile(listing.id)
+                val profile = systemFriendClient.getProfile(listing.id, chatLanguage)
                 val friendWithCachedPhoto = systemFriendClient.savePhotoForOfflineUse(context, profile)
                 addSystemFriend(friendWithCachedPhoto)
                 screen = AppScreen.HOME

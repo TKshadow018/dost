@@ -1,5 +1,26 @@
 <?php
 
+function system_friend_photo_location($catalogDirectory, $photo)
+{
+    if (!is_string($photo) || trim($photo) === '') {
+        return null;
+    }
+    if (strncmp($photo, 'photos/', 7) === 0) {
+        $photoDirectory = $catalogDirectory . DIRECTORY_SEPARATOR . 'photos';
+        $photoFile = substr($photo, 7);
+    } else {
+        $photoDirectory = $catalogDirectory;
+        $photoFile = $photo;
+    }
+    if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.(?:jpg|jpeg|png|webp)\z/i', $photoFile) !== 1) {
+        return null;
+    }
+    return array(
+        'directory' => $photoDirectory,
+        'path' => $photoDirectory . DIRECTORY_SEPARATOR . $photoFile
+    );
+}
+
 function validate_system_friend_profile($profile)
 {
     $errors = array();
@@ -14,11 +35,36 @@ function validate_system_friend_profile($profile)
     }
 
     foreach (array(
-        'name', 'age', 'gender', 'category', 'description', 'relationship',
-        'greeting', 'personality', 'interests', 'conversationStyle', 'timeZoneId'
+        'name', 'age', 'gender', 'category', 'country', 'description', 'relationship',
+        'personality', 'interests', 'conversationStyle', 'timeZoneId'
     ) as $field) {
         if (!isset($profile[$field]) || !is_string($profile[$field]) || trim($profile[$field]) === '') {
             $errors[] = $field . ' must be a non-empty string.';
+        }
+    }
+
+    if (isset($profile['gender']) && !in_array($profile['gender'], array('Male', 'Female'), true)) {
+        $errors[] = 'gender must be Male or Female.';
+    }
+
+    $englishSpeakingCountries = array('Australia', 'Canada', 'Ireland', 'New Zealand', 'United Kingdom', 'United States');
+    if (isset($profile['country'])
+        && !in_array($profile['country'], array('Bangladesh', 'India', 'Japan', 'Nepal'), true)
+        && !in_array($profile['country'], $englishSpeakingCountries, true)
+    ) {
+        $errors[] = 'country must be Bangladesh, India, Japan, Nepal, or a supported English-speaking country.';
+    }
+
+    if (!isset($profile['greeting']) || !is_array($profile['greeting'])) {
+        $errors[] = 'greeting must contain localized en, bn, and hi strings.';
+    } else {
+        foreach (array('en', 'bn', 'hi') as $language) {
+            if (!isset($profile['greeting'][$language])
+                || !is_string($profile['greeting'][$language])
+                || trim($profile['greeting'][$language]) === ''
+            ) {
+                $errors[] = 'greeting must contain a non-empty ' . $language . ' string.';
+            }
         }
     }
 
@@ -44,9 +90,25 @@ function validate_system_friend_profile($profile)
     }
     if (isset($profile['photo']) && !is_string($profile['photo'])) {
         $errors[] = 'photo must be a string when configured.';
+    } elseif (isset($profile['photo']) && trim($profile['photo']) !== ''
+        && system_friend_photo_location(__DIR__ . DIRECTORY_SEPARATOR . 'system_friends', $profile['photo']) === null
+    ) {
+        $errors[] = 'photo must be a valid image filename in the catalog or photos directory.';
     }
 
     return $errors;
+}
+
+function localized_system_friend_greeting($greetings, $language = 'en')
+{
+    if (!is_array($greetings)) {
+        return '';
+    }
+    if (!is_string($language) || !in_array($language, array('en', 'bn', 'hi'), true)) {
+        $language = 'en';
+    }
+    $greeting = isset($greetings[$language]) ? $greetings[$language] : $greetings['en'];
+    return is_string($greeting) ? trim($greeting) : '';
 }
 
 function validate_system_friend_catalog($catalogDirectory)
@@ -85,8 +147,27 @@ function validate_system_friend_catalog($catalogDirectory)
                 $voiceProfiles[$voiceSignature] = $id;
             }
         }
-        if (!isset($profile['photo']) || trim((string) $profile['photo']) === '') {
+        $photo = isset($profile['photo']) && is_string($profile['photo']) ? trim($profile['photo']) : '';
+        if ($photo === '') {
             $warnings[] = $id . ': no profile photo is configured.';
+        } else {
+            if (preg_match('/\A' . preg_quote($id, '/') . '\.(?:jpg|jpeg|png|webp)\z/i', $photo) !== 1) {
+                $errors[] = $id . ': photo must use the profile ID and a supported image extension.';
+            }
+            $location = system_friend_photo_location($catalogDirectory, $photo);
+            if (is_array($location)) {
+                $resolvedDirectory = realpath($location['directory']);
+                $resolvedPhoto = realpath($location['path']);
+                if (!is_string($resolvedPhoto)) {
+                    $warnings[] = $id . ': configured photo is missing: ' . $photo . '.';
+                } elseif (!is_string($resolvedDirectory)
+                    || dirname($resolvedPhoto) !== $resolvedDirectory
+                    || !is_file($resolvedPhoto)
+                    || !is_readable($resolvedPhoto)
+                ) {
+                    $errors[] = $id . ': photo resolves outside its allowed directory or is unreadable.';
+                }
+            }
         }
     }
 
