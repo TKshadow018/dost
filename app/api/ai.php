@@ -242,6 +242,11 @@ $romanceAllowed = dost_romance_allowed_by_age(
     isset($request['user_age']) ? $request['user_age'] : null,
     isset($request['friend_age']) ? $request['friend_age'] : null
 );
+$chatLanguage = isset($request['chat_language'])
+    && is_string($request['chat_language'])
+    && in_array($request['chat_language'], array('en', 'bn', 'hi'), true)
+    ? $request['chat_language']
+    : 'en';
 $safetyBlockedInput = $operation === 'chat_reply'
     && dost_conversation_requires_safety_block($messages, $romanceAllowed);
 
@@ -287,7 +292,10 @@ $temperature = isset($request['temperature']) && is_numeric($request['temperatur
     ? max(0, min(2, (float) $request['temperature']))
     : 0.7;
 $providerMessages = array();
-foreach ($messages as $message) {
+$messagesForProvider = $operation === 'chat_reply' && !$safetyBlockedInput
+    ? dost_filter_unsafe_conversation_history($messages, $romanceAllowed)
+    : $messages;
+foreach ($messagesForProvider as $message) {
     $providerMessage = array('role' => $message['role']);
     if (isset($message['image_data'])) {
         $mime = isset($message['image_mime']) ? $message['image_mime'] : '';
@@ -322,7 +330,7 @@ $upstreamBody = json_encode(array(
 if ($safetyBlockedInput) {
     $upstreamStatus = 200;
     $upstreamResponse = json_encode(array(
-        'choices' => array(array('message' => array('content' => dost_safety_fallback($romanceAllowed))))
+        'choices' => array(array('message' => array('content' => dost_safety_fallback($romanceAllowed, $chatLanguage))))
     ), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
     $requestDurationMs = 0;
 } else {
@@ -427,7 +435,7 @@ if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300)
         $safetyBlockedOutput = true;
     }
     if ($safetyBlockedOutput) {
-        $visibleContent = dost_safety_fallback($romanceAllowed);
+        $visibleContent = dost_safety_fallback($romanceAllowed, $chatLanguage);
         $decodedResponse['choices'][0]['message']['content'] = $visibleContent;
         $upstreamResponse = json_encode($decodedResponse, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         if (!is_string($upstreamResponse)) {

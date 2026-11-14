@@ -207,6 +207,11 @@ class OpenRouterClient {
             put("friend_name", friend.name)
             put("user_age", userAge)
             put("friend_age", friend.age)
+            put("chat_language", when (language) {
+                AppLanguage.BANGLA -> "bn"
+                AppLanguage.HINDI -> "hi"
+                AppLanguage.ENGLISH -> "en"
+            })
             put("model", model)
             put("messages", messages)
             put("temperature", 0.8)
