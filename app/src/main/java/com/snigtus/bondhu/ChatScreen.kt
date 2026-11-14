@@ -42,7 +42,7 @@ internal fun ChatScreen(
     friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage,
     initialDraft: String, initialImagePath: String,
     onDraftChange: (String) -> Unit, onImageDraftChange: (String) -> Unit,
-    onFriendProfile: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onFloatingChat: () -> Unit,
+    onFriendProfile: () -> Unit, onOpenGames: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onFloatingChat: () -> Unit,
     profileGenerating: Boolean, profileError: ProfileFailure?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit
 ) {
     val context = LocalContext.current
@@ -76,12 +76,16 @@ internal fun ChatScreen(
     var reminderDraft by remember(friend.id) { mutableStateOf<PlannedEvent?>(null) }
     var showSharedTopicEditor by remember { mutableStateOf(false) }
     var showSharedRitualEditor by remember { mutableStateOf(false) }
-    var showQuickGame by remember { mutableStateOf(false) }
     var showChatMenu by remember { mutableStateOf(false) }
     var showConversationStarters by remember(friend.id) { mutableStateOf(true) }
     var dismissedRecapSessionId by remember(friend.id) { mutableStateOf("") }
     var sharedTopicRevision by remember(friend.id) { mutableIntStateOf(0) }
     var pendingMemory by remember { mutableStateOf<ChatMessage?>(null) }
+    var pendingNotice by remember(friend.id) { mutableStateOf<ChatMessage?>(null) }
+    LaunchedEffect(friend.id, messages) {
+        pendingNotice = messages.lastOrNull(::isChatNotice)
+            ?.takeIf { it.messageId != store.dismissedChatNoticeId(friend.id) }
+    }
     var memoryRevision by remember(friend.id) { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -98,7 +102,9 @@ internal fun ChatScreen(
     val userMemories = remember(friend.id, memoryRevision) { store.loadUserMemories(friend.id) }
     var showFriendInfo by remember { mutableStateOf(false) }
     val displayedMessages = remember(messages, searchQuery) {
-        if (searchQuery.isBlank()) messages else messages.filter { it.content.contains(searchQuery, ignoreCase = true) }
+        messages.filterNot(::isChatNotice).let { conversation ->
+            if (searchQuery.isBlank()) conversation else conversation.filter { it.content.contains(searchQuery, ignoreCase = true) }
+        }
     }
     val profileBlocked = friend.profilePending
     val busyUntil = friend.replyAvailableAt(currentTime)
@@ -114,7 +120,7 @@ internal fun ChatScreen(
         onDispose { ConversationManager.closeChat(friend.id) }
     }
     LaunchedEffect(messages.size, sending, error) {
-        val itemCount = messages.size + (if (sending) 1 else 0) + (if (error != null) 1 else 0)
+        val itemCount = displayedMessages.size + (if (sending && !waitingForSchedule) 1 else 0)
         if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
     }
     Scaffold(
@@ -165,7 +171,7 @@ internal fun ChatScreen(
                         }
                         DropdownMenu(expanded = showChatMenu, onDismissRequest = { showChatMenu = false }) {
                             DropdownMenuItem(text = { Text(LocalizedText.SEARCH.resolve(language)) }, onClick = { showChatMenu = false; showSearch = !showSearch; if (!showSearch) searchQuery = "" })
-                            DropdownMenuItem(text = { Text(LocalizedText.EXPORT_CHAT.resolve(language)) }, onClick = { showChatMenu = false; exportChat(context, friend, messages) })
+                            DropdownMenuItem(text = { Text(LocalizedText.EXPORT_CHAT.resolve(language)) }, onClick = { showChatMenu = false; exportChat(context, friend, messages.filterNot(::isChatNotice)) })
                             DropdownMenuItem(
                                 text = { Text(chatLabel(language, "Friend details", "বন্ধুর তথ্য", "दोस्त की जानकारी")) },
                                 onClick = { showChatMenu = false; showFriendInfo = true }
@@ -204,7 +210,7 @@ internal fun ChatScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text(chatLabel(language, "Play a quick game", "ছোট খেলা খেলুন", "छोटा खेल खेलें")) },
-                                onClick = { showChatMenu = false; showQuickGame = true }
+                                onClick = { showChatMenu = false; onOpenGames() }
                             )
                             DropdownMenuItem(
                                 text = {
@@ -405,7 +411,6 @@ internal fun ChatScreen(
                         }
                     }
                 } else if (sending) item { ThinkingBubble(friendName = friend.name, language = language) }
-                error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp)) } }
             }
             if (profileBlocked) {
                 ProfileCreationNotice(language, profileGenerating, profileError, onRetryProfile, onUseBasicProfile)
@@ -599,7 +604,58 @@ internal fun ChatScreen(
             }
         )
     }
-    if (showQuickGame) QuickNumberGameDialog(friend.name, language, onDismiss = { showQuickGame = false })
+    error?.let { message ->
+        AlertDialog(
+            onDismissRequest = { error = null },
+            title = { Text(chatLabel(language, "Could not load photo", "ছবি লোড করা যায়নি", "फ़ोटो लोड नहीं हुई")) },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { error = null }) {
+                    Text(LocalizedText.CLOSE.resolve(language))
+                }
+            }
+        )
+    }
+    pendingNotice?.let { notice ->
+        val isErrorNotice = notice.category == ERROR_MESSAGE_CATEGORY
+        val dismissNotice = {
+            store.markChatNoticeDismissed(friend.id, notice.messageId)
+            pendingNotice = null
+        }
+        AlertDialog(
+            onDismissRequest = dismissNotice,
+            title = {
+                Text(
+                    if (isErrorNotice) chatLabel(language, "Chat error", "চ্যাটে সমস্যা", "चैट त्रुटि")
+                    else chatLabel(language, "System message", "সিস্টেম বার্তা", "सिस्टम संदेश")
+                )
+            },
+            text = { Text(notice.content) },
+            confirmButton = {
+                TextButton(onClick = {
+                    dismissNotice()
+                    if (isErrorNotice) {
+                        coroutineScope.launch {
+                            AnonymousTelemetry.record(store.anonymousTelemetryEnabled(), AnonymousTelemetryEvent.FAILED_SEND_RETRIED)
+                        }
+                        ConversationManager.regenerateReply(friend, language)
+                    }
+                }) {
+                    Text(
+                        if (isErrorNotice) chatLabel(language, "Try again", "আবার চেষ্টা করুন", "फिर कोशिश करें")
+                        else LocalizedText.CLOSE.resolve(language)
+                    )
+                }
+            },
+            dismissButton = if (isErrorNotice) {
+                {
+                    TextButton(onClick = dismissNotice) {
+                        Text(LocalizedText.CLOSE.resolve(language))
+                    }
+                }
+            } else null
+        )
+    }
     if (showReminderEditor) {
         ReminderEditorDialog(
             language = language,

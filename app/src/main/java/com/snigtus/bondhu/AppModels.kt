@@ -4,9 +4,16 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-enum class AppScreen { SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, SYSTEM_FRIEND_PICKER, CHAT, KNOWLEDGE }
+enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, SYSTEM_FRIEND_PICKER, CHAT, GAMES, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
 enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD, VERIFY_EMAIL }
+
+internal fun splashBrandLanguage(appLanguage: AppLanguage, chatLanguage: AppLanguage): AppLanguage =
+    when {
+        appLanguage != AppLanguage.ENGLISH -> appLanguage
+        chatLanguage != AppLanguage.ENGLISH -> chatLanguage
+        else -> AppLanguage.ENGLISH
+    }
 
 sealed interface AuthRequestState {
     data object Idle : AuthRequestState

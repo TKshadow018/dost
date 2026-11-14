@@ -31,6 +31,13 @@ class DostStore(context: Context) {
         JSONArray(preferences.getString("friends", "[]")).length() > 0
     }.getOrDefault(false)
 
+    fun needsLanguageSetup(): Boolean =
+        !preferences.getBoolean("language_setup_complete", hasUserProfile())
+
+    fun completeLanguageSetup() {
+        preferences.edit().putBoolean("language_setup_complete", true).apply()
+    }
+
     /** Saved profile whose age meets [MINIMUM_ACCOUNT_AGE]. Friends alone do not count. */
     fun hasEligibleAccount(): Boolean =
         preferences.getBoolean("user_profile_saved", false) && accountAgeResult(userAge()) == AccountAgeResult.VALID
@@ -98,6 +105,11 @@ class DostStore(context: Context) {
     }.getOrElse {
         preferences.edit().remove("openrouter_key_encrypted").apply()
         ""
+    }
+    fun dismissedChatNoticeId(friendId: String): String =
+        preferences.getString("dismissed_chat_notice_$friendId", "") ?: ""
+    fun markChatNoticeDismissed(friendId: String, messageId: String) {
+        preferences.edit().putString("dismissed_chat_notice_$friendId", messageId).apply()
     }
     fun saveOpenRouterApiKey(apiKey: String) {
         if (apiKey.isBlank()) {
@@ -196,6 +208,12 @@ class DostStore(context: Context) {
                     AppLanguage.HINDI -> "hi"
                     AppLanguage.ENGLISH -> "en"
                 })
+                put("chatLanguage", if (!hasCustomChatLanguage()) "" else when (chatLanguage()) {
+                    AppLanguage.BANGLA -> "bn"
+                    AppLanguage.HINDI -> "hi"
+                    AppLanguage.ENGLISH -> "en"
+                })
+                put("showFriendSearchAndCount", showFriendSearchAndCount())
                 put("timeZone", userTimeZoneId())
                 put("model", aiModel())
                 put("proactiveEnabled", proactiveEnabled())
@@ -224,6 +242,15 @@ class DostStore(context: Context) {
         val settings = backup.getJSONObject("settings")
         val language = backupString(settings, "language", 2)
         require(language in setOf("bn", "hi", "en")) { "The backup language is invalid." }
+        val chatLanguage = if (settings.has("chatLanguage") && !settings.isNull("chatLanguage")) {
+            backupString(settings, "chatLanguage", 2)
+        } else {
+            ""
+        }
+        require(chatLanguage.isEmpty() || chatLanguage in setOf("bn", "hi", "en")) {
+            "The backup chat language is invalid."
+        }
+        val showFriendSearchAndCount = settings.optBoolean("showFriendSearchAndCount", false)
         val timeZone = backupString(settings, "timeZone", 100)
         val parsedTimeZone = runCatching { ZoneId.of(timeZone).id }.getOrNull()
         require(parsedTimeZone != null) { "The backup timezone is invalid." }
@@ -381,7 +408,7 @@ class DostStore(context: Context) {
                 val sessionId = backupString(message, "sessionId", 36)
                 val category = backupString(message, "category", 100)
                 val modelId = backupString(message, "modelId", 160)
-                require(role in setOf("user", "assistant") && content.length <= 25_000
+                require(role in setOf("user", "assistant", "system") && content.length <= 25_000
                     && isBackupUuid(messageId) && (sessionId.isEmpty() || isBackupUuid(sessionId))
                 ) { "The backup contains an invalid message." }
                 val imageBytes = if (message.has("imageData")) {
@@ -458,6 +485,8 @@ class DostStore(context: Context) {
                 .putString("user_gender", gender)
                 .putString("user_time_zone", parsedTimeZone)
                 .putString("language", language)
+                .putString("chat_language", chatLanguage)
+                .putBoolean("show_friend_search_and_count", showFriendSearchAndCount)
                 .putString("ai_model", model)
                 .putBoolean("proactive_enabled", proactiveEnabled)
                 .putInt("proactive_cadence_minutes", proactiveCadenceMinutes)
@@ -1220,6 +1249,25 @@ class DostStore(context: Context) {
             AppLanguage.HINDI -> "hi"
             AppLanguage.ENGLISH -> "en"
         }).apply()
+    }
+    fun chatLanguage(): AppLanguage = when (preferences.getString("chat_language", null)) {
+        "bn" -> AppLanguage.BANGLA
+        "hi" -> AppLanguage.HINDI
+        "en" -> AppLanguage.ENGLISH
+        else -> language()
+    }
+    fun hasCustomChatLanguage(): Boolean = preferences.getString("chat_language", null) in setOf("bn", "hi", "en")
+    fun saveChatLanguage(language: AppLanguage) {
+        preferences.edit().putString("chat_language", when (language) {
+            AppLanguage.BANGLA -> "bn"
+            AppLanguage.HINDI -> "hi"
+            AppLanguage.ENGLISH -> "en"
+        }).apply()
+    }
+    fun showFriendSearchAndCount(): Boolean =
+        preferences.getBoolean("show_friend_search_and_count", false)
+    fun setShowFriendSearchAndCount(show: Boolean) {
+        preferences.edit().putBoolean("show_friend_search_and_count", show).apply()
     }
 
     private data class ImportedBackupFriend(

@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,9 +23,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -69,29 +70,39 @@ internal fun SystemFriendPickerScreen(
     addedCatalogIds: Set<String>,
     addingCatalogId: String?,
     systemLimitReached: Boolean,
+    customLimitReached: Boolean,
     onRefresh: () -> Unit,
     onSelect: (SystemFriendListing) -> Unit,
+    onCreateCustomFriend: (Friend) -> Unit,
     onManageFriends: () -> Unit,
     onBack: () -> Unit
 ) {
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     val availableCatalog = availableSystemFriendDeck(catalog, addedCatalogIds)
+    var showCreateFriend by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = {
-                    Text(when { bangla -> "সিস্টেম বন্ধু"; hindi -> "सिस्टम दोस्त"; else -> "Meet a friend" })
+                title = { Text(when { bangla -> "বন্ধুরা"; hindi -> "दोस्त"; else -> "Friends" }) },
+                actions = {
+                    TextButton(onClick = { showCreateFriend = true }, enabled = !customLimitReached) {
+                        Text(when {
+                            bangla -> "নিজের বন্ধু তৈরি করুন"
+                            hindi -> "अपना दोस्त बनाएँ"
+                            else -> "Create your own friend"
+                        }, maxLines = 1)
+                    }
                 },
                 navigationIcon = { DostBackButton(language, onBack) }
             )
         }
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 when {
@@ -116,9 +127,9 @@ internal fun SystemFriendPickerScreen(
                     ) {
                         Text(
                             when {
-                                bangla -> "আপনার সব সিস্টেম বন্ধু যোগ করা হয়েছে। নতুন কাউকে জায়গা দিতে বন্ধু পরিচালনা করুন।"
-                                hindi -> "आपके सभी सिस्टम दोस्त जुड़ चुके हैं। किसी नए दोस्त के लिए जगह बनाने हेतु दोस्तों को प्रबंधित करें।"
-                                else -> "You’ve met all your system friends. Manage friends to make room for someone new."
+                                bangla -> "সব উপলভ্য বন্ধু যোগ করা হয়েছে। নতুন কাউকে জায়গা দিতে বন্ধু পরিচালনা করুন।"
+                                hindi -> "सभी उपलब्ध दोस्त जुड़ चुके हैं। किसी नए दोस्त के लिए जगह बनाने हेतु दोस्तों को प्रबंधित करें।"
+                                else -> "You’ve met all available catalog friends. Manage friends to make room for someone new."
                             },
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
@@ -132,33 +143,46 @@ internal fun SystemFriendPickerScreen(
             }
 
             when {
-                isLoading && catalog.isEmpty() -> LoadingSystemFriends(language)
-                catalog.isEmpty() && error == null -> MoreFriendsState(language, onRetry = onRefresh)
-                availableCatalog.isEmpty() && error == null && addingCatalogId == null -> MoreFriendsState(language, onManageFriends = onManageFriends)
+                isLoading && catalog.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    LoadingSystemFriends(language)
+                }
+                catalog.isEmpty() && error == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    MoreFriendsState(language, onRetry = onRefresh)
+                }
+                availableCatalog.isEmpty() && error == null && addingCatalogId == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    MoreFriendsState(language, onManageFriends = onManageFriends)
+                }
                 availableCatalog.isNotEmpty() -> SystemFriendCardDeck(
                     catalog = availableCatalog,
                     language = language,
                     addingCatalogId = addingCatalogId,
                     systemLimitReached = systemLimitReached,
-                    onSelect = onSelect
+                    onSelect = onSelect,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
                 )
-                addingCatalogId != null -> Row(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Text(when { bangla -> "বন্ধুকে যোগ করা হচ্ছে…"; hindi -> "दोस्त जोड़ा जा रहा है…"; else -> "Adding your friend…" })
+                addingCatalogId != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(when { bangla -> "বন্ধুকে যোগ করা হচ্ছে…"; hindi -> "दोस्त जोड़ा जा रहा है…"; else -> "Adding your friend…" })
+                    }
                 }
             }
 
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
             if (error != null && catalog.isEmpty()) {
                 TextButton(onClick = onRefresh, enabled = !isLoading, modifier = Modifier.align(Alignment.End)) {
                     Text(when { bangla -> "আবার চেষ্টা করুন"; hindi -> "फिर कोशिश करें"; else -> "Try again" })
                 }
             }
+            if (showCreateFriend) AddFriendDialog(
+                language = language,
+                onDismiss = { showCreateFriend = false },
+                onAdd = { friend ->
+                    showCreateFriend = false
+                    onCreateCustomFriend(friend)
+                }
+            )
         }
     }
 }
@@ -253,7 +277,8 @@ private fun SystemFriendCardDeck(
     language: AppLanguage,
     addingCatalogId: String?,
     systemLimitReached: Boolean,
-    onSelect: (SystemFriendListing) -> Unit
+    onSelect: (SystemFriendListing) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var passedIds by remember { mutableStateOf(emptySet<String>()) }
     var showFullProfile by remember { mutableStateOf(false) }
@@ -271,80 +296,79 @@ private fun SystemFriendCardDeck(
     }
 
     if (addingCatalogId == current.id) {
-        Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(12.dp))
-            Text(when { bangla -> "বন্ধুকে যোগ করা হচ্ছে…"; hindi -> "दोस्त जोड़ा जा रहा है…"; else -> "Adding your friend…" })
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(when { bangla -> "বন্ধুকে যোগ করা হচ্ছে…"; hindi -> "दोस्त जोड़ा जा रहा है…"; else -> "Adding your friend…" })
+            }
         }
         return
     }
 
     val screenWidthPx = with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
-    val cardHeight = (LocalConfiguration.current.screenHeightDp * 0.4f).coerceIn(220f, 350f).dp
-    Box(
-        modifier = Modifier.fillMaxWidth().height(cardHeight + 70.dp),
-        contentAlignment = Alignment.TopCenter
-    ) {
-        next?.let {
-            CharacterCard(
-                listing = it,
-                language = language,
-                showFullProfile = false,
-                onToggleProfile = {},
-                modifier = Modifier.fillMaxWidth().height(cardHeight).padding(top = 12.dp).graphicsLayer {
-                    scaleX = 0.96f
-                    scaleY = 0.96f
+    Column(modifier = modifier) {
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val cardHeight = maxHeight.coerceAtLeast(220.dp)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                next?.let {
+                    CharacterCard(
+                        listing = it,
+                        language = language,
+                        showFullProfile = false,
+                        onToggleProfile = {},
+                        modifier = Modifier.fillMaxSize().padding(top = 12.dp).graphicsLayer {
+                            scaleX = 0.96f
+                            scaleY = 0.96f
+                        }
+                    )
                 }
-            )
+
+                SwipeableCharacterCard(
+                    listing = current,
+                    language = language,
+                    showFullProfile = showFullProfile,
+                    onToggleProfile = { showFullProfile = !showFullProfile },
+                    systemLimitReached = systemLimitReached,
+                    isAdding = addingCatalogId != null,
+                    screenWidthPx = screenWidthPx,
+                    cardHeight = cardHeight,
+                    onPass = { passedIds = passedIds + current.id },
+                    onSelect = { onSelect(current) }
+                )
+            }
         }
 
-        SwipeableCharacterCard(
-            listing = current,
-            language = language,
-            showFullProfile = showFullProfile,
-            onToggleProfile = { showFullProfile = !showFullProfile },
-            systemLimitReached = systemLimitReached,
-            isAdding = addingCatalogId != null,
-            screenWidthPx = screenWidthPx,
-            cardHeight = cardHeight,
-            onPass = { passedIds = passedIds + current.id },
-            onSelect = { onSelect(current) }
-        )
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        OutlinedButton(
-            onClick = { passedIds = passedIds + current.id },
-            enabled = addingCatalogId == null,
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(when { bangla -> "বাদ দিন"; hindi -> "पास करें"; else -> "Pass" })
-        }
-        OutlinedButton(
-            onClick = { showFullProfile = !showFullProfile },
-            enabled = addingCatalogId == null,
-            modifier = Modifier.heightIn(min = 48.dp)
-        ) {
-            Text(when { bangla -> "তথ্য"; hindi -> "जानकारी"; else -> "Info" })
-        }
-        Button(
-            onClick = { onSelect(current) },
-            enabled = !systemLimitReached && addingCatalogId == null,
-            modifier = Modifier.weight(1.25f).heightIn(min = 48.dp)
-        ) {
-            Text(when {
-                bangla -> "যোগ করুন"
-                hindi -> "जोड़ें"
-                else -> "Add friend"
-            })
+            OutlinedButton(
+                onClick = { passedIds = passedIds + current.id },
+                enabled = addingCatalogId == null,
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+            ) {
+                Text(when { bangla -> "বাদ দিন"; hindi -> "पास करें"; else -> "Pass" })
+            }
+            OutlinedButton(
+                onClick = { showFullProfile = !showFullProfile },
+                enabled = addingCatalogId == null,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Text(when { bangla -> "তথ্য"; hindi -> "जानकारी"; else -> "Info" })
+            }
+            Button(
+                onClick = { onSelect(current) },
+                enabled = !systemLimitReached && addingCatalogId == null,
+                modifier = Modifier.weight(1.25f).heightIn(min = 48.dp)
+            ) {
+                Text(when {
+                    bangla -> "যোগ করুন"
+                    hindi -> "जोड़ें"
+                    else -> "Add friend"
+                })
+            }
         }
     }
 }

@@ -9,7 +9,9 @@ import androidx.lifecycle.AndroidViewModel
 class DostAppViewModel(application: Application) : AndroidViewModel(application) {
     val store = DostStore(application)
     val language = mutableStateOf(store.language())
-    val screen = mutableStateOf(AppScreen.SPLASH)
+    val chatLanguage = mutableStateOf(store.chatLanguage())
+    private val initialScreen = if (store.needsLanguageSetup()) AppScreen.LANGUAGE_SETUP else AppScreen.SPLASH
+    val screen = mutableStateOf(initialScreen)
     val registerStep = mutableStateOf(1)
     val name = mutableStateOf(store.userName())
     val email = mutableStateOf(store.userEmail())
@@ -35,8 +37,8 @@ class DostAppViewModel(application: Application) : AndroidViewModel(application)
 
     fun restoreNavigationState(screenName: String?, friendId: String?) {
         screen.value = screenName
-            ?.let { runCatching { AppScreen.valueOf(it) }.getOrDefault(AppScreen.SPLASH) }
-            ?: AppScreen.SPLASH
+            ?.let { runCatching { AppScreen.valueOf(it) }.getOrDefault(initialScreen) }
+            ?: initialScreen
         selectedFriend.value = friendId?.let { id -> friends.firstOrNull { it.id == id } }
     }
 }

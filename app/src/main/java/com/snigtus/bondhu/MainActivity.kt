@@ -114,7 +114,9 @@ fun DostApp(
     }
     val store = appViewModel.store
     var language by appViewModel.language
+    var chatLanguage by appViewModel.chatLanguage
     var screen by appViewModel.screen
+    var showFriendSearchAndCount by remember { mutableStateOf(store.showFriendSearchAndCount()) }
     var registerStep by appViewModel.registerStep
     var name by appViewModel.name
     var email by appViewModel.email
@@ -148,6 +150,7 @@ fun DostApp(
     var knowledgeReturnScreen by rememberSaveable { mutableStateOf(AppScreen.SETTINGS) }
     var knowledgeFriendFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var chatReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var gameReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     val homeListState = rememberLazyListState()
     val knowledgeListState = rememberLazyListState()
     var systemFriendCatalog by remember { mutableStateOf(emptyList<SystemFriendListing>()) }
@@ -160,6 +163,8 @@ fun DostApp(
             ConversationManager.importLocalData(JSONObject(backupText))
         }
         language = store.language()
+        chatLanguage = store.chatLanguage()
+        showFriendSearchAndCount = store.showFriendSearchAndCount()
         name = store.userName()
         email = store.userEmail()
         age = store.userAge()
@@ -181,6 +186,7 @@ fun DostApp(
             AppScreen.FRIEND_PROFILE,
             AppScreen.SYSTEM_FRIEND_PICKER,
             AppScreen.KNOWLEDGE,
+            AppScreen.GAMES,
             AppScreen.SETTINGS,
             AppScreen.REGISTER
         ) || screen == AppScreen.AUTH && authMode != AuthMode.SIGN_IN
@@ -189,6 +195,7 @@ fun DostApp(
             AppScreen.CHAT -> screen = chatReturnScreen
             AppScreen.FRIEND_PROFILE -> screen = friendProfileReturnScreen
             AppScreen.SYSTEM_FRIEND_PICKER -> screen = AppScreen.HOME
+            AppScreen.GAMES -> screen = gameReturnScreen
             AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
             AppScreen.SETTINGS -> screen = settingsReturnScreen
             AppScreen.REGISTER -> if (registerStep == 2) registerStep = 1 else screen = AppScreen.AUTH
@@ -410,12 +417,12 @@ fun DostApp(
     }
 
     LaunchedEffect(openFriendRequest?.nonce) {
-        if (screen == AppScreen.SPLASH) return@LaunchedEffect
+        if (screen in setOf(AppScreen.SPLASH, AppScreen.LANGUAGE_SETUP)) return@LaunchedEffect
         openRequestedFriend(openFriendRequest?.friendId)
     }
     LaunchedEffect(screen, authRepository.currentAccount?.uid, authRepository.currentAccount?.emailVerified) {
         val currentAccount = authRepository.currentAccount
-        if (currentAccount?.needsEmailVerification == true && screen != AppScreen.SPLASH) {
+        if (currentAccount?.needsEmailVerification == true && screen !in setOf(AppScreen.SPLASH, AppScreen.LANGUAGE_SETUP)) {
             if (authMode != AuthMode.VERIFY_EMAIL) {
                 email = currentAccount.email
                 authMode = AuthMode.VERIFY_EMAIL
@@ -433,7 +440,7 @@ fun DostApp(
             }
             return@LaunchedEffect
         }
-        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
+        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
         if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
             authRepository.signOut()
@@ -639,7 +646,7 @@ fun DostApp(
         targetState = screen,
         label = "pageTransition",
         transitionSpec = {
-            val order = listOf(AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.FRIEND_PROFILE, AppScreen.SETTINGS, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.KNOWLEDGE)
+            val order = listOf(AppScreen.LANGUAGE_SETUP, AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.FRIEND_PROFILE, AppScreen.SETTINGS, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE)
             val forward = order.indexOf(targetState) >= order.indexOf(initialState)
             val slideIn = slideInHorizontally(animationSpec = tween(300)) { if (forward) it else -it }
             val slideOut = slideOutHorizontally(animationSpec = tween(300)) { if (forward) -it else it }
@@ -647,7 +654,19 @@ fun DostApp(
         }
     ) { currentScreen ->
     when (currentScreen) {
-        AppScreen.SPLASH -> DostSplashScreen(language) {
+        AppScreen.LANGUAGE_SETUP -> LanguageSetupScreen(
+            appLanguage = language,
+            chatLanguage = chatLanguage,
+            onAppLanguageChange = { language = it },
+            onChatLanguageChange = { chatLanguage = it },
+            onContinue = {
+                store.saveLanguage(language)
+                store.saveChatLanguage(chatLanguage)
+                store.completeLanguageSetup()
+                screen = AppScreen.SPLASH
+            }
+        )
+        AppScreen.SPLASH -> DostSplashScreen(language, chatLanguage) {
             var currentAccount = authRepository.currentAccount
             if (currentAccount?.needsEmailVerification == true) {
                 email = currentAccount.email
@@ -753,13 +772,17 @@ fun DostApp(
         )
         AppScreen.HOME -> if (hasLocalAccountAccess()) HomeScreen(
             language = language,
+            showFriendSearchAndCount = showFriendSearchAndCount,
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
             friends = friends,
             listState = homeListState,
-            onAddFriend = { addFriendWithProfile(it) },
             onBrowseSystemFriends = {
                 screen = AppScreen.SYSTEM_FRIEND_PICKER
                 loadSystemFriendCatalog()
+            },
+            onOpenGames = {
+                gameReturnScreen = AppScreen.HOME
+                screen = AppScreen.GAMES
             },
             onOpenSettings = {
                 settingsReturnScreen = AppScreen.HOME
@@ -785,6 +808,8 @@ fun DostApp(
         )
         AppScreen.SETTINGS -> if (hasLocalAccountAccess()) SettingsScreen(
             language = language,
+            chatLanguage = chatLanguage,
+            showFriendSearchAndCount = showFriendSearchAndCount,
             friends = friends,
             userTimeZoneId = userTimeZoneId,
             signedInEmail = authRepository.currentAccount?.email,
@@ -809,7 +834,16 @@ fun DostApp(
             onLanguageChange = {
                 language = it
                 store.saveLanguage(it)
+                if (!store.hasCustomChatLanguage()) chatLanguage = it
                 ConversationManager.refreshProactiveWork()
+            },
+            onChatLanguageChange = {
+                chatLanguage = it
+                store.saveChatLanguage(it)
+            },
+            onShowFriendSearchAndCountChange = {
+                showFriendSearchAndCount = it
+                store.setShowFriendSearchAndCount(it)
             },
             onUserTimeZoneChange = {
                 userTimeZoneId = it
@@ -897,8 +931,13 @@ fun DostApp(
             addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet(),
             addingCatalogId = addingSystemFriendId,
             systemLimitReached = friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
+            customLimitReached = friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS,
             onRefresh = ::loadSystemFriendCatalog,
             onSelect = ::addCatalogFriend,
+            onCreateCustomFriend = {
+                addFriendWithProfile(it)
+                screen = AppScreen.HOME
+            },
             onManageFriends = {
                 settingsReturnScreen = AppScreen.SYSTEM_FRIEND_PICKER
                 screen = AppScreen.SETTINGS
@@ -966,6 +1005,10 @@ fun DostApp(
                     else appViewModel.chatImageDrafts[friend.id] = path
                 },
                 onFriendProfile = { openFriendProfile(friend, AppScreen.CHAT) },
+                onOpenGames = {
+                    gameReturnScreen = AppScreen.CHAT
+                    screen = AppScreen.GAMES
+                },
                 profileGenerating = friend.id in generatingProfileIds,
                 profileError = profileErrors[friend.id],
                 onRetryProfile = { startProfileGeneration(friend.id) },
@@ -974,6 +1017,10 @@ fun DostApp(
                 onFriendTimeZoneChange = { updateFriendTimeZone(friend, it) }
             )
         }
+        AppScreen.GAMES -> if (hasLocalAccountAccess()) MiniGamesScreen(
+            language = language,
+            onBack = { screen = gameReturnScreen }
+        )
         AppScreen.KNOWLEDGE -> if (hasLocalAccountAccess()) KnowledgeScreen(
             language = language,
             friends = friends,

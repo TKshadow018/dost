@@ -203,7 +203,7 @@
       <section id="getting-started">
         <h2>02 · Getting started</h2>
         <ol>
-          <li>The splash screen opens into email sign-in, account creation, password reset, or Google sign-in.</li>
+          <li>On a fresh install, choose the app language and AI chat language separately, then continue to the splash screen and sign-in options.</li>
           <li>After authentication, first-time onboarding asks for the user's name, age, and gender.</li>
           <li>The next step can create the first friend using a name, age, gender, and optional photo, or skip adding a friend for now.</li>
           <li>After onboarding, the user lands on the friends list. The current implementation permits up to five friends.</li>
@@ -222,6 +222,8 @@
 
       <section id="friends">
         <h2>03 · Friends and profiles</h2>
+        <p>New chat and add-friend actions open the full-height swipeable Friends catalog. The create-your-own-friend action stays in the picker so users can choose either a catalog friend or a custom friend from one place.</p>
+        <p>Unread chats show a count badge and bold friend/activity text. Unread and availability filters are not shown; friend counts and search are off by default and can be enabled in Settings.</p>
         <h3>Creating a friend</h3>
         <p>The add-friend form collects the friend's name, age, gender, photo, time zone, and daily busy schedule. The schedule controls include a Work or School choice, a start time, and a duration. The selected reason and schedule are stored on the friend record and the reason is included in the AI character context.</p>
         <table>
@@ -250,7 +252,9 @@
         <h3>Images</h3>
         <p>Images are resized to a maximum dimension of 1,280 pixels and compressed as JPEG to a maximum of 300 KB. The compressed copy is stored in the app's private files directory. The API forwards image data as a multimodal data URL; a vision-capable selected model is needed for useful image analysis.</p>
         <h3>Follow-ups and errors</h3>
-        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 1 minute. If an AI request fails, the app now uses a distinct retry message instead of presenting the failure as a busy-hours reply.</p>
+        <p>The model is instructed to ask at most one question in a reply. If the user explicitly requests a future check-in duration, the structured response can specify a delay of one to 1,440 minutes. Otherwise, if a reply contains no question, the app schedules a default check-in after 1 minute. AI errors and system notices appear in a modal outside the conversation transcript, with retry offered for chat errors.</p>
+        <h3>Mini-games</h3>
+        <p>The dedicated Games page has nine built-in mini-games and an Epic Fury Wrestling entry that opens <code>https://epicfurywrestling.web.app/</code> in an in-app WebView.</p>
       </section>
 
       <section id="schedule">
@@ -302,11 +306,13 @@
         <table>
           <thead><tr><th>Setting</th><th>What it changes</th><th>Where it is used</th></tr></thead>
           <tbody>
-            <tr><td>App language</td><td>English, Bangla, or Hindi</td><td>UI labels and language requested for AI responses</td></tr>
+            <tr><td>App language</td><td>English, Bangla, or Hindi</td><td>UI labels and menus</td></tr>
+            <tr><td>Chat language</td><td>English, Bangla, or Hindi</td><td>Language requested for AI chat replies, independent of app language</td></tr>
+            <tr><td>Friend count and search</td><td>Hidden by default; enable in Settings</td><td>Shows the total/catalog counts and chat search on Home</td></tr>
             <tr><td>Signed-in account</td><td>Firebase email or Google account; sign out is available here</td><td>Signing out preserves local profile, friends, and chats</td></tr>
             <tr><td>Your time zone</td><td>IANA time-zone identifier</td><td>User clock in AI prompts</td></tr>
             <tr><td>Preferred model</td><td>Choose from the catalog or enter a model ID</td><td>Chat, generated profiles, and summaries</td></tr>
-            <tr><td>OpenRouter API key</td><td>Optional personal key; blank uses the server key</td><td>Sent to the API over HTTPS as a request header</td></tr>
+            <tr><td>OpenRouter API key</td><td>Optional personal key; blank uses Dost's configured server key</td><td>Sent only when saved in Settings, over HTTPS as a request header</td></tr>
             <tr><td>Friend time zone</td><td>Set in friend profile</td><td>Busy schedule calculation and friend clock in prompts</td></tr>
           </tbody>
         </table>

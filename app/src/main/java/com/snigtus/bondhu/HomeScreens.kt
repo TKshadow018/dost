@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.*
@@ -37,13 +39,10 @@ import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.*
 
 @Composable
-internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<Friend>, listState: LazyListState, onAddFriend: (Friend) -> Unit, onBrowseSystemFriends: () -> Unit, onOpenSettings: () -> Unit, onOpenFriendProfile: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onToggleFavorite: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
-    var showAddFriend by remember { mutableStateOf(false) }
-    var showAddOptions by remember { mutableStateOf(false) }
+internal fun HomeScreen(language: AppLanguage, showFriendSearchAndCount: Boolean, userName: String, friends: List<Friend>, listState: LazyListState, onBrowseSystemFriends: () -> Unit, onOpenGames: () -> Unit, onOpenSettings: () -> Unit, onOpenFriendProfile: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onToggleFavorite: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
     val unreadCounts = ConversationManager.unread.collectAsState().value
     val messageMap = ConversationManager.messages.collectAsState().value
-    var friendFilter by remember { mutableStateOf("all") }
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by remember(showFriendSearchAndCount) { mutableStateOf("") }
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     val customFriendCount = friends.count { it.catalogId.isBlank() }
@@ -52,16 +51,9 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
     val canAddAnyFriend = canAddCustomFriend || systemFriendCount < MAX_SYSTEM_FRIENDS
     val visibleFriends = friends
         .filter { friend ->
-            val matchesFilter = when (friendFilter) {
-                "unread" -> (unreadCounts[friend.id] ?: 0) > 0
-                "available" -> !friend.profilePending
-                    && friend.replyAvailableAt(ZonedDateTime.now(validZoneId(friend.timeZoneId))) == null
-                else -> true
-            }
             val query = searchQuery.trim()
-            val matchesSearch = query.isBlank() || friend.name.contains(query, ignoreCase = true)
-                || messageMap[friend.id].orEmpty().any { it.content.contains(query, ignoreCase = true) }
-            matchesFilter && matchesSearch
+            query.isBlank() || friend.name.contains(query, ignoreCase = true)
+                || messageMap[friend.id].orEmpty().filterNot(::isChatNotice).any { it.content.contains(query, ignoreCase = true) }
         }
         .sortedByDescending { it.favorite }
 
@@ -72,15 +64,21 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
             TopAppBar(
                 title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
                 actions = {
+                    IconButton(onClick = onOpenGames) {
+                        Icon(
+                            imageVector = Icons.Filled.SportsEsports,
+                            contentDescription = when { bangla -> "খেলা"; hindi -> "खेल"; else -> "Games" }
+                        )
+                    }
                     TextButton(onClick = onOpenSettings) { Text(when { bangla -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) }
-                    TextButton(onClick = { showAddOptions = true }, enabled = canAddAnyFriend) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }
+                    TextButton(onClick = onBrowseSystemFriends, enabled = canAddAnyFriend) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }
                 }
             )
         },
         floatingActionButton = {
             if (canAddAnyFriend) {
                 FloatingActionButton(
-                    onClick = { showAddOptions = true },
+                    onClick = onBrowseSystemFriends,
                     modifier = Modifier.semantics {
                         contentDescription = when { bangla -> "বন্ধু যোগ করুন"; hindi -> "दोस्त जोड़ें"; else -> "Add a friend" }
                     },
@@ -100,46 +98,33 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(when { bangla -> "বন্ধুরা"; hindi -> "दोस्त"; else -> "Friends" }, style = MaterialTheme.typography.titleMedium)
-                        Text("${friends.size}/$MAX_TOTAL_FRIENDS", style = MaterialTheme.typography.labelLarge)
-                    }
-                    Text(
-                        when {
-                            bangla -> "নিজস্ব $customFriendCount/$MAX_CUSTOM_FRIENDS · সিস্টেম $systemFriendCount/$MAX_SYSTEM_FRIENDS"
-                            hindi -> "कस्टम $customFriendCount/$MAX_CUSTOM_FRIENDS · सिस्टम $systemFriendCount/$MAX_SYSTEM_FRIENDS"
-                            else -> "Custom $customFriendCount/$MAX_CUSTOM_FRIENDS · System $systemFriendCount/$MAX_SYSTEM_FRIENDS"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        singleLine = true,
-                        label = {
-                            Text(when {
-                                bangla -> "বন্ধু বা কথোপকথন খুঁজুন"
-                                hindi -> "दोस्त या बातचीत खोजें"
-                                else -> "Search friends or conversations"
-                            })
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(
-                            "all" to Triple("All", "সব", "सभी"),
-                            "unread" to Triple("Unread", "অপঠিত", "अपठित"),
-                            "available" to Triple("Available", "উপলভ্য", "उपलब्ध")
-                        ).forEach { (key, labels) ->
-                            FilterChip(
-                                selected = friendFilter == key,
-                                onClick = { friendFilter = key },
-                                label = { Text(when (language) {
-                                    AppLanguage.BANGLA -> labels.second
-                                    AppLanguage.HINDI -> labels.third
-                                    AppLanguage.ENGLISH -> labels.first
-                                }) }
-                            )
+                        if (showFriendSearchAndCount) {
+                            Text("${friends.size}/$MAX_TOTAL_FRIENDS", style = MaterialTheme.typography.labelLarge)
                         }
+                    }
+                    if (showFriendSearchAndCount) {
+                        Text(
+                            when {
+                                bangla -> "নিজস্ব $customFriendCount/$MAX_CUSTOM_FRIENDS · ক্যাটালগ $systemFriendCount/$MAX_SYSTEM_FRIENDS"
+                                hindi -> "कस्टम $customFriendCount/$MAX_CUSTOM_FRIENDS · कैटलॉग $systemFriendCount/$MAX_SYSTEM_FRIENDS"
+                                else -> "Your own $customFriendCount/$MAX_CUSTOM_FRIENDS · Catalog $systemFriendCount/$MAX_SYSTEM_FRIENDS"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            singleLine = true,
+                            label = {
+                                Text(when {
+                                    bangla -> "বন্ধু বা কথোপকথন খুঁজুন"
+                                    hindi -> "दोस्त या बातचीत खोजें"
+                                    else -> "Search friends or conversations"
+                                })
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                     if (friends.any { it.profilePending }) {
                         val creating = friends.any { it.profilePending && it.id !in profileFailedIds }
@@ -159,7 +144,7 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
                 }
             }
             item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
-            if (friends.isEmpty()) item { EmptyFriendsState(onAdd = { showAddOptions = true }, language = language) }
+            if (friends.isEmpty()) item { EmptyFriendsState(onAdd = onBrowseSystemFriends, language = language) }
             items(visibleFriends, key = { it.id }) { friend ->
                 FriendRow(
                     friend,
@@ -173,12 +158,12 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
                     profileFailed = friend.id in profileFailedIds
                 )
             }
-            if (visibleFriends.isEmpty() && friends.isNotEmpty()) item {
+            if (visibleFriends.isEmpty() && friends.isNotEmpty() && searchQuery.isNotBlank()) item {
                 Text(
                     when (language) {
-                        AppLanguage.BANGLA -> "এই ফিল্টারে কোনো বন্ধু পাওয়া যায়নি।"
-                        AppLanguage.HINDI -> "इस फ़िल्टर में कोई दोस्त नहीं मिला।"
-                        AppLanguage.ENGLISH -> "No friends match this filter."
+                        AppLanguage.BANGLA -> "এই খোঁজে কোনো বন্ধু পাওয়া যায়নি।"
+                        AppLanguage.HINDI -> "इस खोज में कोई दोस्त नहीं मिला।"
+                        AppLanguage.ENGLISH -> "No friends match your search."
                     },
                     modifier = Modifier.fillMaxWidth().padding(24.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -186,70 +171,6 @@ internal fun HomeScreen(language: AppLanguage, userName: String, friends: List<F
             }
         }
     }
-    if (showAddFriend) AddFriendDialog(language, onDismiss = { showAddFriend = false }, onAdd = { onAddFriend(it); showAddFriend = false })
-    if (showAddOptions) AddFriendOptionsDialog(
-        language = language,
-        customCount = customFriendCount,
-        systemCount = systemFriendCount,
-        onCreateCustom = { showAddOptions = false; showAddFriend = true },
-        onBrowseSystem = { showAddOptions = false; onBrowseSystemFriends() },
-        onDismiss = { showAddOptions = false }
-    )
-}
-
-@Composable
-private fun AddFriendOptionsDialog(
-    language: AppLanguage,
-    customCount: Int,
-    systemCount: Int,
-    onCreateCustom: () -> Unit,
-    onBrowseSystem: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(when (language) {
-                AppLanguage.BANGLA -> "বন্ধু যোগ করুন"
-                AppLanguage.HINDI -> "दोस्त जोड़ें"
-                AppLanguage.ENGLISH -> "Add a friend"
-            })
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(when (language) {
-                    AppLanguage.BANGLA -> "নিজস্ব $customCount/$MAX_CUSTOM_FRIENDS · সিস্টেম $systemCount/$MAX_SYSTEM_FRIENDS"
-                    AppLanguage.HINDI -> "कस्टम $customCount/$MAX_CUSTOM_FRIENDS · सिस्टम $systemCount/$MAX_SYSTEM_FRIENDS"
-                    AppLanguage.ENGLISH -> "Custom $customCount/$MAX_CUSTOM_FRIENDS · System $systemCount/$MAX_SYSTEM_FRIENDS"
-                })
-                Button(onClick = onCreateCustom, enabled = customCount < MAX_CUSTOM_FRIENDS, modifier = Modifier.fillMaxWidth()) {
-                    Text(when (language) {
-                        AppLanguage.BANGLA -> "নিজের বন্ধু তৈরি করুন"
-                        AppLanguage.HINDI -> "अपना दोस्त बनाएं"
-                        AppLanguage.ENGLISH -> "Create a custom friend"
-                    })
-                }
-                Text(when (language) {
-                    AppLanguage.BANGLA -> "নিজের ব্যক্তিত্ব, আগ্রহ ও রুটিন নির্ধারণ করুন।"
-                    AppLanguage.HINDI -> "उनका व्यक्तित्व, रुचियाँ और दिनचर्या तय करें।"
-                    AppLanguage.ENGLISH -> "Choose their personality, interests, and routine."
-                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedButton(onClick = onBrowseSystem, modifier = Modifier.fillMaxWidth()) {
-                    Text(when (language) {
-                        AppLanguage.BANGLA -> "সিস্টেম বন্ধু বেছে নিন"
-                        AppLanguage.HINDI -> "सिस्टम दोस्त चुनें"
-                        AppLanguage.ENGLISH -> "Choose a system friend"
-                    })
-                }
-                Text(when (language) {
-                    AppLanguage.BANGLA -> "নিজস্ব ব্যক্তিত্ব, আগ্রহ ও পরিচয়ের গল্পসহ কাল্পনিক চরিত্র দেখুন।"
-                    AppLanguage.HINDI -> "अलग व्यक्तित्व, रुचियों और मिलने की कहानी वाले काल्पनिक पात्र देखें।"
-                    AppLanguage.ENGLISH -> "Browse fictional characters with distinct personalities, interests, and relationship premises."
-                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(LocalizedText.CLOSE.resolve(language)) } }
-    )
 }
 
 @Composable
@@ -285,7 +206,7 @@ private fun EmptyFriendsState(onAdd: () -> Unit, language: AppLanguage) {
 private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onOpenFriendProfile: () -> Unit, onDelete: () -> Unit, onToggleFavorite: () -> Unit, language: AppLanguage, profileGenerating: Boolean, profileFailed: Boolean) {
     var menuExpanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    val lastMessage = ConversationManager.messages.collectAsState().value[friend.id]?.lastOrNull()
+    val lastMessage = ConversationManager.messages.collectAsState().value[friend.id]?.lastOrNull { !isChatNotice(it) }
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     val subtitle = when {
@@ -320,11 +241,17 @@ private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onOpe
                 Text(
                     (if (friend.favorite) "★ " else "") + friend.name +
                         if (friend.mood.isNotBlank()) " ${friend.mood}" else "",
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = if (unread > 0) androidx.compose.ui.text.font.FontWeight.Bold
+                        else MaterialTheme.typography.titleMedium.fontWeight
+                    )
                 )
                 Text(
                     subtitle,
-                    style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = if (unread > 0) androidx.compose.ui.text.font.FontWeight.Bold
+                        else MaterialTheme.typography.bodyMedium.fontWeight
+                    ), maxLines = 1,
                     color = if (friend.profilePending && profileFailed && !profileGenerating) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -383,7 +310,7 @@ private fun FriendRow(friend: Friend, unread: Int, onOpenChat: () -> Unit, onOpe
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd: (Friend) -> Unit) {
+internal fun AddFriendDialog(language: AppLanguage, onDismiss: () -> Unit, onAdd: (Friend) -> Unit) {
     var name by remember { mutableStateOf("") }
     var age by remember { mutableStateOf("") }
     var gender by remember { mutableStateOf("") }
@@ -494,6 +421,8 @@ internal fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange:
 @Composable
 internal fun SettingsScreen(
     language: AppLanguage,
+    chatLanguage: AppLanguage,
+    showFriendSearchAndCount: Boolean,
     friends: List<Friend>,
     userTimeZoneId: String,
     signedInEmail: String?,
@@ -509,6 +438,8 @@ internal fun SettingsScreen(
     onBack: () -> Unit,
     onDeleteFriend: (Friend) -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
+    onChatLanguageChange: (AppLanguage) -> Unit,
+    onShowFriendSearchAndCountChange: (Boolean) -> Unit,
     onUserTimeZoneChange: (String) -> Unit,
     onAnonymousTelemetryChange: (Boolean) -> Unit,
     onProactiveEnabledChange: (Boolean) -> Unit,
@@ -579,6 +510,36 @@ internal fun SettingsScreen(
                         Button(onClick = { onLanguageChange(AppLanguage.ENGLISH) }, enabled = language != AppLanguage.ENGLISH) { Text("English") }
                         Button(onClick = { onLanguageChange(AppLanguage.BANGLA) }, enabled = language != AppLanguage.BANGLA) { Text("বাংলা") }
                         Button(onClick = { onLanguageChange(AppLanguage.HINDI) }, enabled = language != AppLanguage.HINDI) { Text("हिन्दी") }
+                    }
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "চ্যাটের ভাষা"
+                        AppLanguage.HINDI -> "चैट की भाषा"
+                        AppLanguage.ENGLISH -> "Chat language"
+                    }, style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { onChatLanguageChange(AppLanguage.ENGLISH) }, enabled = chatLanguage != AppLanguage.ENGLISH) { Text("English") }
+                        Button(onClick = { onChatLanguageChange(AppLanguage.BANGLA) }, enabled = chatLanguage != AppLanguage.BANGLA) { Text("বাংলা") }
+                        Button(onClick = { onChatLanguageChange(AppLanguage.HINDI) }, enabled = chatLanguage != AppLanguage.HINDI) { Text("हिन्दी") }
+                    }
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "এই পছন্দটি AI-এর উত্তরের ভাষা বদলায়, অ্যাপের মেনুর ভাষা নয়।"
+                        AppLanguage.HINDI -> "यह विकल्प AI के जवाबों की भाषा बदलता है, ऐप के मेनू की नहीं।"
+                        AppLanguage.ENGLISH -> "This changes the language AI replies in, not the app menus."
+                    }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            when (language) {
+                                AppLanguage.BANGLA -> "বন্ধুর সংখ্যা ও খোঁজ দেখান"
+                                AppLanguage.HINDI -> "दोस्तों की संख्या और खोज दिखाएँ"
+                                AppLanguage.ENGLISH -> "Show friend count and search"
+                            },
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Switch(
+                            checked = showFriendSearchAndCount,
+                            onCheckedChange = onShowFriendSearchAndCountChange
+                        )
                     }
                     TimeZonePicker(LocalizedText.YOUR_TIMEZONE.resolve(language), userTimeZoneId, onTimeZoneChange = onUserTimeZoneChange)
                 }
@@ -892,6 +853,7 @@ private fun AiSettingsDialog(language: AppLanguage, apiKey: String, initialModel
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Text(LocalizedText.API_KEY_GUIDANCE.resolve(language), style = MaterialTheme.typography.bodySmall)
                 ExposedDropdownMenuBox(expanded = modelMenuExpanded, onExpandedChange = {
                     modelMenuExpanded = it
                     if (it) modelSearch = ""

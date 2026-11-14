@@ -454,7 +454,7 @@ object ConversationManager {
         val structuredUserProfile = store.loadStructuredUserProfile(friend.id, store.userName())
         try {
             return client.reply(
-                apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
+                apiKey, selectedModel, store.installationId(), store.userName(), friend, history, store.chatLanguage(),
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
@@ -464,7 +464,7 @@ object ConversationManager {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
             delay(1_500)
             return client.reply(
-                apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
+                apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, store.chatLanguage(),
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
