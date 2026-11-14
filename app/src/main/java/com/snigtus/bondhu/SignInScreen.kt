@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -244,6 +245,8 @@ fun SignInScreen(
                         enabled = option != language,
                         modifier = Modifier.defaultMinSize(minHeight = 48.dp)
                     ) {
+                        LanguageFlagIcon(option, Modifier.size(width = 20.dp, height = 13.dp))
+                        Spacer(Modifier.width(4.dp))
                         Text(
                             when (option) {
                                 AppLanguage.ENGLISH -> "English"

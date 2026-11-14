@@ -117,7 +117,6 @@ fun DostApp(
     var chatLanguage by appViewModel.chatLanguage
     var screen by appViewModel.screen
     var showFriendSearchAndCount by remember { mutableStateOf(store.showFriendSearchAndCount()) }
-    var registerStep by appViewModel.registerStep
     var name by appViewModel.name
     var email by appViewModel.email
     var age by appViewModel.age
@@ -198,7 +197,7 @@ fun DostApp(
             AppScreen.GAMES -> screen = gameReturnScreen
             AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
             AppScreen.SETTINGS -> screen = settingsReturnScreen
-            AppScreen.REGISTER -> if (registerStep == 2) registerStep = 1 else screen = AppScreen.AUTH
+            AppScreen.REGISTER -> screen = AppScreen.AUTH
             AppScreen.AUTH -> authMode = AuthMode.SIGN_IN
             else -> Unit
         }
@@ -746,7 +745,6 @@ fun DostApp(
         )
         AppScreen.REGISTER -> RegisterScreen(
             language = language,
-            step = registerStep,
             name = name,
             email = email,
             age = age,
@@ -755,19 +753,12 @@ fun DostApp(
             onEmailChange = { email = it },
             onAgeChange = { age = it },
             onGenderChange = { gender = it },
-            onNext = {
-                if (name.isNotBlank() && email.isNotBlank() && accountAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) {
-                    registerStep = 2
-                }
-            },
-            onFinish = finish@{ friend ->
-                if (accountAgeResult(age) != AccountAgeResult.VALID) return@finish
-                if (friend != null && friendAgeResult(friend.age) != AccountAgeResult.VALID) return@finish
+            onFinish = finish@{
+                if (name.isBlank() || email.isBlank() || accountAgeResult(age) != AccountAgeResult.VALID || gender.isBlank()) return@finish
                 store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
-                friend?.let { addFriendWithProfile(it.copy(age = it.age.trim())) }
                 screen = AppScreen.HOME
             },
-            onBack = { if (registerStep == 2) registerStep = 1 else screen = AppScreen.AUTH },
+            onBack = { screen = AppScreen.AUTH },
             emailEditable = false
         )
         AppScreen.HOME -> if (hasLocalAccountAccess()) HomeScreen(

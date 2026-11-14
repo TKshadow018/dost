@@ -205,8 +205,8 @@
         <ol>
           <li>On a fresh install, choose the app language and AI chat language separately, then continue to the splash screen and sign-in options.</li>
           <li>After authentication, first-time onboarding asks for the user's name, age, and gender.</li>
-          <li>The next step can create the first friend using a name, age, gender, and optional photo, or skip adding a friend for now.</li>
-          <li>After onboarding, the user lands on the friends list. The current implementation permits up to five friends.</li>
+          <li>After saving the profile, the user lands on Home without being asked to create a friend. Friends can be added later from the Friends picker.</li>
+          <li>The current implementation permits up to five friends.</li>
         </ol>
         <p>Email/password and Google identity are handled by Firebase Authentication. Returning Firebase users with a saved local profile go straight to Home. An eligible local profile created by an older app version also skips sign-in on upgrade, so existing friends and chats remain available.</p>
         <h3>Enable Firebase sign-in</h3>

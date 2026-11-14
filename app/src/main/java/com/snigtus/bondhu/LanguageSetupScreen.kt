@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -108,7 +109,15 @@ private fun LanguageChoices(
             FilterChip(
                 selected = selected == option,
                 onClick = { onSelect(option) },
-                label = { Text(label) }
+                label = {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LanguageFlagIcon(option, Modifier.size(width = 20.dp, height = 13.dp))
+                        Text(label)
+                    }
+                }
             )
         }
     }

@@ -506,20 +506,68 @@ internal fun SettingsScreen(
                         AppLanguage.HINDI -> "ऐप की भाषा"
                         AppLanguage.ENGLISH -> "App language"
                     }, style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onLanguageChange(AppLanguage.ENGLISH) }, enabled = language != AppLanguage.ENGLISH) { Text("English") }
-                        Button(onClick = { onLanguageChange(AppLanguage.BANGLA) }, enabled = language != AppLanguage.BANGLA) { Text("বাংলা") }
-                        Button(onClick = { onLanguageChange(AppLanguage.HINDI) }, enabled = language != AppLanguage.HINDI) { Text("हिन्दी") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Button(
+                            onClick = { onLanguageChange(AppLanguage.ENGLISH) },
+                            enabled = language != AppLanguage.ENGLISH,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            LanguageFlagIcon(AppLanguage.ENGLISH, Modifier.size(width = 20.dp, height = 13.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("English")
+                        }
+                        Button(
+                            onClick = { onLanguageChange(AppLanguage.BANGLA) },
+                            enabled = language != AppLanguage.BANGLA,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            LanguageFlagIcon(AppLanguage.BANGLA, Modifier.size(width = 20.dp, height = 13.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("বাংলা")
+                        }
+                        Button(
+                            onClick = { onLanguageChange(AppLanguage.HINDI) },
+                            enabled = language != AppLanguage.HINDI,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            LanguageFlagIcon(AppLanguage.HINDI, Modifier.size(width = 20.dp, height = 13.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("हिन्दी")
+                        }
                     }
                     Text(when (language) {
                         AppLanguage.BANGLA -> "চ্যাটের ভাষা"
                         AppLanguage.HINDI -> "चैट की भाषा"
                         AppLanguage.ENGLISH -> "Chat language"
                     }, style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onChatLanguageChange(AppLanguage.ENGLISH) }, enabled = chatLanguage != AppLanguage.ENGLISH) { Text("English") }
-                        Button(onClick = { onChatLanguageChange(AppLanguage.BANGLA) }, enabled = chatLanguage != AppLanguage.BANGLA) { Text("বাংলা") }
-                        Button(onClick = { onChatLanguageChange(AppLanguage.HINDI) }, enabled = chatLanguage != AppLanguage.HINDI) { Text("हिन्दी") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Button(
+                            onClick = { onChatLanguageChange(AppLanguage.ENGLISH) },
+                            enabled = chatLanguage != AppLanguage.ENGLISH,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            LanguageFlagIcon(AppLanguage.ENGLISH, Modifier.size(width = 20.dp, height = 13.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("English")
+                        }
+                        Button(
+                            onClick = { onChatLanguageChange(AppLanguage.BANGLA) },
+                            enabled = chatLanguage != AppLanguage.BANGLA,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            LanguageFlagIcon(AppLanguage.BANGLA, Modifier.size(width = 20.dp, height = 13.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("বাংলা")
+                        }
+                        Button(
+                            onClick = { onChatLanguageChange(AppLanguage.HINDI) },
+                            enabled = chatLanguage != AppLanguage.HINDI,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            LanguageFlagIcon(AppLanguage.HINDI, Modifier.size(width = 20.dp, height = 13.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("हिन्दी")
+                        }
                     }
                     Text(when (language) {
                         AppLanguage.BANGLA -> "এই পছন্দটি AI-এর উত্তরের ভাষা বদলায়, অ্যাপের মেনুর ভাষা নয়।"

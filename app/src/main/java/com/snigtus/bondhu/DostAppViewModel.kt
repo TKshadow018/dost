@@ -12,7 +12,6 @@ class DostAppViewModel(application: Application) : AndroidViewModel(application)
     val chatLanguage = mutableStateOf(store.chatLanguage())
     private val initialScreen = if (store.needsLanguageSetup()) AppScreen.LANGUAGE_SETUP else AppScreen.SPLASH
     val screen = mutableStateOf(initialScreen)
-    val registerStep = mutableStateOf(1)
     val name = mutableStateOf(store.userName())
     val email = mutableStateOf(store.userEmail())
     val age = mutableStateOf(store.userAge())

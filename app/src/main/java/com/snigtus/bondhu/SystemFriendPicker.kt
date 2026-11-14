@@ -27,6 +27,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -52,6 +56,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -349,6 +355,8 @@ private fun SystemFriendCardDeck(
                 enabled = addingCatalogId == null,
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)
             ) {
+                Icon(Icons.Filled.Close, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
                 Text(when { bangla -> "বাদ দিন"; hindi -> "पास करें"; else -> "Pass" })
             }
             OutlinedButton(
@@ -356,6 +364,8 @@ private fun SystemFriendCardDeck(
                 enabled = addingCatalogId == null,
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
+                Icon(Icons.Filled.Info, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
                 Text(when { bangla -> "তথ্য"; hindi -> "जानकारी"; else -> "Info" })
             }
             Button(
@@ -363,6 +373,8 @@ private fun SystemFriendCardDeck(
                 enabled = !systemLimitReached && addingCatalogId == null,
                 modifier = Modifier.weight(1.25f).heightIn(min = 48.dp)
             ) {
+                Icon(Icons.Filled.PersonAdd, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
                 Text(when {
                     bangla -> "যোগ করুন"
                     hindi -> "जोड़ें"
@@ -533,7 +545,17 @@ private fun CharacterCardFront(listing: SystemFriendListing, language: AppLangua
                 color = Color.White
             )
             if (interests.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                InterestPills(interests)
+            }
+        }
+    }
+}
+
+@Composable
+private fun InterestPills(interests: List<String>) {
+    val density = LocalDensity.current
+    Layout(
+        content = {
                     interests.forEach { interest ->
                         Text(
                             interest,
@@ -543,7 +565,39 @@ private fun CharacterCardFront(listing: SystemFriendListing, language: AppLangua
                             color = Color.White
                         )
                     }
-                }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { measurables, constraints ->
+        val gap = with(density) { 6.dp.roundToPx() }
+        val placeables = measurables.map {
+            it.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        }
+        val positions = ArrayList<Pair<Placeable, IntOffset>>(placeables.size)
+        var x = 0
+        var y = 0
+        var rowHeight = 0
+        var widestRow = 0
+
+        placeables.forEach { placeable ->
+            if (x > 0 && x + gap + placeable.width > constraints.maxWidth) {
+                widestRow = maxOf(widestRow, x)
+                y += rowHeight + gap
+                x = 0
+                rowHeight = 0
+            }
+            val itemX = if (x == 0) 0 else x + gap
+            positions += placeable to IntOffset(itemX, y)
+            x = itemX + placeable.width
+            rowHeight = maxOf(rowHeight, placeable.height)
+        }
+        widestRow = maxOf(widestRow, x)
+
+        val width = widestRow.coerceIn(constraints.minWidth, constraints.maxWidth)
+        val height = (if (placeables.isEmpty()) 0 else y + rowHeight)
+            .coerceIn(constraints.minHeight, constraints.maxHeight)
+        layout(width, height) {
+            positions.forEach { (placeable, position) ->
+                placeable.placeRelative(position.x, position.y)
             }
         }
     }

@@ -1,9 +1,5 @@
 package com.snigtus.dost
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.ui.platform.LocalContext
-import android.content.Intent
 import android.util.Patterns
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -420,76 +416,56 @@ private fun authLabel(language: AppLanguage, bangla: String, hindi: String, engl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RegisterScreen(language: AppLanguage, step: Int, name: String, email: String, age: String, gender: String, onNameChange: (String) -> Unit, onEmailChange: (String) -> Unit, onAgeChange: (String) -> Unit, onGenderChange: (String) -> Unit, onNext: () -> Unit, onFinish: (Friend?) -> Unit, onBack: () -> Unit, emailEditable: Boolean = true) {
-    var friendName by remember { mutableStateOf("") }
-    var friendAge by remember { mutableStateOf("") }
-    var friendGender by remember { mutableStateOf("") }
-    var friendPersonality by remember { mutableStateOf("") }
-    var friendGreeting by remember { mutableStateOf("") }
-    var friendPhotoUri by remember { mutableStateOf("") }
-    val context = LocalContext.current
-    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let {
-            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            friendPhotoUri = it.toString()
-        }
-    }
+fun RegisterScreen(language: AppLanguage, name: String, email: String, age: String, gender: String, onNameChange: (String) -> Unit, onEmailChange: (String) -> Unit, onAgeChange: (String) -> Unit, onGenderChange: (String) -> Unit, onFinish: () -> Unit, onBack: () -> Unit, emailEditable: Boolean = true) {
     val hindi = language == AppLanguage.HINDI
-    Scaffold(topBar = { TopAppBar(title = { Text(when { language == AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি - ধাপ $step/২"; hindi -> "खाता बनाएं - चरण $step/2"; else -> "Create account - Step $step of 2" }) }, navigationIcon = { DostBackButton(language, onBack) }) }) { padding ->
-        Column(modifier = Modifier.padding(padding).padding(24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            if (step == 1) {
-                Text(when { language == AppLanguage.BANGLA -> "আপনার প্রোফাইল তৈরি করুন"; hindi -> "अपनी प्रोफ़ाइल बनाएं"; else -> "Create your profile" }, style = MaterialTheme.typography.headlineSmall)
-                Text(when { language == AppLanguage.BANGLA -> "নিজের সম্পর্কে কিছু তথ্য দিন।"; hindi -> "अपने बारे में कुछ जानकारी दें।"; else -> "Tell us a little about yourself." })
-                OutlinedTextField(name, onNameChange, label = { Text(when { language == AppLanguage.BANGLA -> "নাম"; hindi -> "नाम"; else -> "Name" }) }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(email, onEmailChange, readOnly = !emailEditable, label = { Text(when { language == AppLanguage.BANGLA -> "ইমেইল"; hindi -> "ईमेल"; else -> "Email" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
-                OutlinedTextField(age, onAgeChange, label = { Text(when { language == AppLanguage.BANGLA -> "বয়স"; hindi -> "उम्र"; else -> "Age" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                accountAgeError(age, language)?.let { message ->
-                    Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                } ?: Text(accountAgeHint(language), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                GenderField(gender, onGenderChange, language)
-                Button(onClick = onNext, enabled = name.isNotBlank() && email.isNotBlank() && accountAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(when { language == AppLanguage.BANGLA -> "চালিয়ে যান"; hindi -> "जारी रखें"; else -> "Continue" }) }
-            } else {
-                Text(when { language == AppLanguage.BANGLA -> "আপনার প্রথম বন্ধু তৈরি করুন"; hindi -> "अपना पहला दोस्त बनाएं"; else -> "Create your first friend" }, style = MaterialTheme.typography.headlineSmall)
-                Text(when { language == AppLanguage.BANGLA -> "হোম স্ক্রিন থেকে যেকোনো সময় আরও বন্ধু যোগ করতে পারবেন।"; hindi -> "आप होम स्क्रीन से कभी भी और दोस्त जोड़ सकते हैं।"; else -> "You can add more friends anytime from the home screen." })
-                Text(
-                    when {
-                        language == AppLanguage.BANGLA -> "এটি একটি কাল্পনিক AI চরিত্র, বাস্তব মানুষ নয়। কথোপকথন থেকে সে প্রাসঙ্গিক তথ্য মনে রাখতে পারে; আপনি স্মৃতি পর্যালোচনা বা মুছতে পারবেন। নিজে থেকে বার্তা দেওয়া সেটিংসে চালু না করা পর্যন্ত বন্ধ থাকবে।"
-                        hindi -> "यह एक काल्पनिक AI पात्र है, असली व्यक्ति नहीं। बातचीत से यह उपयोगी बातें याद रख सकता है; आप यादें देख या हटा सकते हैं। अपने-आप संदेश भेजना सेटिंग्स में चालू करने तक बंद रहेगा।"
-                        else -> "This creates a fictional AI character, not a real person. They can remember useful details from conversation; you can review or delete memories. Friend-initiated messages stay off until you enable them in Settings."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedTextField(friendName, { friendName = it }, label = { Text(when { language == AppLanguage.BANGLA -> "বন্ধুর নাম"; hindi -> "दोस्त का नाम"; else -> "Friend name" }) }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(friendAge, { friendAge = it }, label = { Text(when { language == AppLanguage.BANGLA -> "বন্ধুর বয়স"; hindi -> "दोस्त की उम्र"; else -> "Friend age" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                friendAgeError(friendAge, language)?.let { message ->
-                    Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    Scaffold(topBar = {
+        TopAppBar(
+            title = {
+                Text(when {
+                    language == AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি"
+                    hindi -> "खाता बनाएं"
+                    else -> "Create account"
+                })
+            },
+            navigationIcon = { DostBackButton(language, onBack) }
+        )
+    }) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                when {
+                    language == AppLanguage.BANGLA -> "আপনার প্রোফাইল তৈরি করুন"
+                    hindi -> "अपनी प्रोफ़ाइल बनाएं"
+                    else -> "Create your profile"
+                },
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Text(
+                when {
+                    language == AppLanguage.BANGLA -> "নিজের সম্পর্কে কিছু তথ্য দিন।"
+                    hindi -> "अपने बारे में कुछ जानकारी दें।"
+                    else -> "Tell us a little about yourself."
                 }
-                if (isUnderRomanceAge(age) && accountAgeResult(age) == AccountAgeResult.VALID) {
-                    Text(userUnder18RomanceNote(language), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    friendUnder18RomanceNote(friendAge, language)?.let { message ->
-                        Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                GenderField(friendGender, { friendGender = it }, language)
-                OutlinedTextField(
-                    friendPersonality,
-                    { friendPersonality = it },
-                    label = { Text(when (language) { AppLanguage.BANGLA -> "ব্যক্তিত্ব"; AppLanguage.HINDI -> "व्यक्तित्व"; AppLanguage.ENGLISH -> "Personality" }) },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2
-                )
-                OutlinedTextField(
-                    friendGreeting,
-                    { friendGreeting = it },
-                    label = { Text(when (language) { AppLanguage.BANGLA -> "প্রথম বার্তা"; AppLanguage.HINDI -> "पहला संदेश"; AppLanguage.ENGLISH -> "First message" }) },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2
-                )
-                OutlinedButton(onClick = { photoPicker.launch(arrayOf("image/*")) }, modifier = Modifier.fillMaxWidth()) { Text(if (friendPhotoUri.isBlank()) if (hindi) "दोस्त की फोटो जोड़ें" else "Add friend photo" else if (hindi) "फोटो चुनी गई" else "Photo selected") }
-                Button(onClick = { onFinish(Friend(id = java.util.UUID.randomUUID().toString(), name = friendName, age = friendAge.trim(), gender = friendGender, personality = friendPersonality.trim(), photoUri = friendPhotoUri, greeting = friendGreeting.trim())) }, enabled = friendName.isNotBlank() && friendAgeResult(friendAge) == AccountAgeResult.VALID && friendGender.isNotBlank() && friendPersonality.isNotBlank() && friendGreeting.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(when { language == AppLanguage.BANGLA -> "শেষ করুন"; hindi -> "समाप्त करें"; else -> "Finish" }) }
-                TextButton(onClick = { onFinish(null) }, modifier = Modifier.fillMaxWidth()) { Text(when { language == AppLanguage.BANGLA -> "এখন বাদ দিন"; hindi -> "अभी छोड़ें"; else -> "Skip for now" }) }
+            )
+            OutlinedTextField(name, onNameChange, label = { Text(when { language == AppLanguage.BANGLA -> "নাম"; hindi -> "नाम"; else -> "Name" }) }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(email, onEmailChange, readOnly = !emailEditable, label = { Text(when { language == AppLanguage.BANGLA -> "ইমেইল"; hindi -> "ईमेल"; else -> "Email" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
+            OutlinedTextField(age, onAgeChange, label = { Text(when { language == AppLanguage.BANGLA -> "বয়স"; hindi -> "उम्र"; else -> "Age" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            accountAgeError(age, language)?.let { message ->
+                Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            } ?: Text(accountAgeHint(language), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            GenderField(gender, onGenderChange, language)
+            Button(
+                onClick = onFinish,
+                enabled = name.isNotBlank() && email.isNotBlank() && accountAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(when {
+                    language == AppLanguage.BANGLA -> "শেষ করুন"
+                    hindi -> "पूरा करें"
+                    else -> "Finish"
+                })
             }
         }
     }
