@@ -38,8 +38,13 @@ internal enum class LocalizedText(
         "চ্যাটের বার্তা এবং AI-এর উত্তর একটি ব্যক্তিগত সার্ভার আর্কাইভে সংরক্ষণ করা হয়।",
         "चैट संदेश और AI के जवाब निजी सर्वर संग्रह में सहेजे जाते हैं।"
     ),
-    OPENROUTER_API_KEY("Your OpenRouter API key", "আপনার OpenRouter API কী", "आपकी OpenRouter API कुंजी"),
-    SERVER_KEY_PLACEHOLDER("Leave blank to use the server key", "সার্ভারের কী ব্যবহার করতে খালি রাখুন", "सर्वर की कुंजी इस्तेमाल करने के लिए खाली छोड़ें"),
+    OPENROUTER_API_KEY("Optional personal OpenRouter API key", "ঐচ্ছিক ব্যক্তিগত OpenRouter API কী", "वैकल्पिक निजी OpenRouter API कुंजी"),
+    SERVER_KEY_PLACEHOLDER("Leave blank to use Dost's configured server key", "Dost-এর সার্ভার কী ব্যবহার করতে খালি রাখুন", "Dost की सर्वर कुंजी इस्तेमाल करने के लिए खाली छोड़ें"),
+    API_KEY_GUIDANCE(
+        "Optional. Dost's configured server key is used unless you save a personal key here.",
+        "ঐচ্ছিক। এখানে ব্যক্তিগত কী সংরক্ষণ না করলে Dost-এর সার্ভার কী ব্যবহার হবে।",
+        "वैकल्पिक। यहाँ निजी कुंजी सेव न करने पर Dost की सर्वर कुंजी इस्तेमाल होगी।"
+    ),
     HIDE("Hide", "লুকান", "छिपाएँ"),
     SHOW("Show", "দেখান", "दिखाएँ"),
     PREFERRED_MODEL("Preferred OpenRouter model", "পছন্দের OpenRouter মডেল", "पसंदीदा OpenRouter मॉडल"),
@@ -68,10 +73,10 @@ internal enum class LocalizedText(
     MESSAGE("Message", "বার্তা", "संदेश"),
     SEND("Send", "পাঠান", "भेजें"),
     FLOATING_CHAT_TITLE("Dost floating chat", "Dost ভাসমান চ্যাট", "Dost फ़्लोटिंग चैट"),
-    LOAD_FRIENDS_FAILED("Could not load system friends.", "সিস্টেম বন্ধুদের তালিকা আনা যায়নি।", "सिस्टम दोस्तों की सूची लोड नहीं हो सकी।"),
-    INVALID_FRIEND_CATALOG("The system friend catalog returned invalid data.", "সিস্টেম বন্ধুদের তালিকায় ভুল তথ্য এসেছে।", "सिस्टम दोस्तों की सूची में अमान्य जानकारी मिली।"),
-    ADD_SYSTEM_FRIEND_FAILED("Could not add this system friend.", "এই সিস্টেম বন্ধুকে যোগ করা যায়নি।", "इस सिस्टम दोस्त को नहीं जोड़ा जा सका।"),
-    INVALID_SYSTEM_FRIEND("This system friend profile is invalid.", "এই সিস্টেম বন্ধুর প্রোফাইলটি সঠিক নয়।", "इस सिस्टम दोस्त की प्रोफ़ाइल अमान्य है।");
+    LOAD_FRIENDS_FAILED("Could not load friends.", "বন্ধুদের তালিকা আনা যায়নি।", "दोस्तों की सूची लोड नहीं हो सकी।"),
+    INVALID_FRIEND_CATALOG("The friends catalog returned invalid data.", "বন্ধুদের তালিকায় ভুল তথ্য এসেছে।", "दोस्तों की सूची में अमान्य जानकारी मिली।"),
+    ADD_SYSTEM_FRIEND_FAILED("Could not add this friend.", "এই বন্ধুকে যোগ করা যায়নি।", "इस दोस्त को नहीं जोड़ा जा सका।"),
+    INVALID_SYSTEM_FRIEND("This friend profile is invalid.", "এই বন্ধুর প্রোফাইলটি সঠিক নয়।", "इस दोस्त की प्रोफ़ाइल अमान्य है।");
 
     fun resolve(language: AppLanguage, vararg arguments: Any): String {
         val text = when (language) {

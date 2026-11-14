@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
 @Composable
-fun DostSplashScreen(language: AppLanguage, onFinished: () -> Unit) {
+fun DostSplashScreen(language: AppLanguage, chatLanguage: AppLanguage, onFinished: () -> Unit) {
     var showLetters by remember { mutableStateOf(false) }
     var fadeToBlack by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -50,7 +50,7 @@ fun DostSplashScreen(language: AppLanguage, onFinished: () -> Unit) {
         label = "splashBackground"
     )
 
-    val letters = when (language) {
+    val letters = when (splashBrandLanguage(language, chatLanguage)) {
         AppLanguage.BANGLA -> listOf(
             "দো" to Color(0xFF2563EB),
             "স্ত" to Color(0xFFEC4899)

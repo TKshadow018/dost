@@ -15,6 +15,19 @@ import java.io.File
 import java.time.ZonedDateTime
 import java.util.concurrent.ConcurrentHashMap
 
+internal fun isScheduledFollowUpCurrent(expectedUserTimestamp: Long, latestUserMessage: ChatMessage?): Boolean =
+    latestUserMessage?.role == "user" && latestUserMessage.timestampMillis == expectedUserTimestamp
+
+internal fun canRestoreScheduledFollowUp(
+    proactiveMessage: ProactiveMessage,
+    currentSessionId: String?,
+    latestUserMessage: ChatMessage?
+): Boolean =
+    proactiveMessage.trigger == ProactiveTrigger.FOLLOW_UP &&
+        proactiveMessage.state in setOf(ProactiveDeliveryState.SCHEDULED, ProactiveDeliveryState.CANCELLED) &&
+        currentSessionId == proactiveMessage.sessionId &&
+        isScheduledFollowUpCurrent(proactiveMessage.expectedUserMessageTimestamp, latestUserMessage)
+
 object ConversationManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val messageState = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
@@ -68,6 +81,7 @@ object ConversationManager {
                 }
                 publish(friend.id, messagesFor(friend.id))
             }
+            refreshProactiveWork()
         }
     }
 
@@ -92,6 +106,7 @@ object ConversationManager {
                 val importedFriends = store.loadFriends()
                 messageState.value = importedFriends.associate { it.id to store.loadMessages(it.id) }
                 unreadState.value = store.unreadCounts(importedFriends.map { it.id })
+                refreshProactiveWork()
             }
         }
     }
@@ -106,7 +121,7 @@ object ConversationManager {
             }
         }
 
-    fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "") {
+    fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "", sendImmediately: Boolean = false) {
         if (text.isBlank() && imagePath.isBlank()) return
         if (friend.profilePending) return
         val requestGeneration = dataImportGeneration
@@ -140,7 +155,7 @@ object ConversationManager {
                 store.saveCurrentSessionId(friend.id, id)
                 appendUserMessage(friend.id, messageContent, id, selectedModel, imagePath)
                 scheduleSessionEnd(friend.id, id, SESSION_INACTIVITY_MILLIS)
-                if (friend.replyAvailableAt(ZonedDateTime.now()) != null) {
+                if (shouldDelayBusyReply(friend, ZonedDateTime.now(), sendImmediately)) {
                     store.setScheduledReply(friend.id, true)
                     sendingState.update { it + friend.id }
                     waitingForScheduleState.update { it + friend.id }
@@ -155,7 +170,11 @@ object ConversationManager {
         scope.launch {
             try {
                 delay(typingDelayMillis())
-                val answer = requestReply(friend, sessionId, language)
+                val busyRoutine = friend.busyRoutineAt(ZonedDateTime.now())
+                val busyInstruction = if (busyRoutine != null && (friend.busyReplyBehavior == BusyReplyBehavior.IMMEDIATE || sendImmediately)) {
+                    "You are currently at ${busyRoutine.reason.ifBlank { friend.busyReason }}. Reply now and, only if natural, briefly mention why you are busy."
+                } else ""
+                val answer = requestReply(friend, sessionId, language, ephemeralInstruction = busyInstruction)
                 if (!withCurrentImportGeneration(requestGeneration) {
                     if (answer.parseFailed) {
                         appendAssistant(friend.id, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
@@ -163,7 +182,7 @@ object ConversationManager {
                     }
                     store.addUserMemories(friend.id, answer.memories)
                     updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
-                    updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
+                    updateFriendship(friend.id, sessionId, answer.friendshipImpact, answer.loveImpact)
                     val response = listOf(
                         answer.text,
                         answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
@@ -232,12 +251,63 @@ object ConversationManager {
     }
 
     fun refreshBusyReply(friend: Friend) {
-        if (!store.hasScheduledReply(friend.id)) return
-        val sessionId = store.currentSessionId(friend.id) ?: return
-        ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language())
+        if (store.hasScheduledReply(friend.id)) {
+            val sessionId = store.currentSessionId(friend.id)
+            if (sessionId != null) ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language())
+        }
+        refreshScheduledFollowUp(friend)
     }
 
-    private fun scheduleInactivityQuestion(friend: Friend, language: AppLanguage, sessionId: String, delayMillis: Long = DEFAULT_FOLLOW_UP_MILLIS) {
+    fun pauseFriendProactive(friendId: String, untilMillis: Long) {
+        store.pauseProactive(friendId, untilMillis)
+        ConversationWorkScheduler.cancelProactiveForFriend(appContext, friendId)
+    }
+
+    fun resumeFriendProactive(friendId: String) {
+        store.resumeProactive(friendId)
+        store.loadFriends().firstOrNull { it.id == friendId }?.let {
+            ConversationWorkScheduler.scheduleMorningGreeting(appContext, it, store.language())
+            refreshScheduledFollowUp(it)
+        }
+    }
+
+    fun refreshProactiveWork() {
+        if (!::store.isInitialized || !::appContext.isInitialized) return
+        store.loadFriends().forEach { friend ->
+            if (store.proactiveEnabled() && !store.isProactivePaused(friend.id)) {
+                ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, store.language())
+                refreshScheduledFollowUp(friend)
+            } else {
+                ConversationWorkScheduler.cancelProactiveForFriend(appContext, friend.id)
+            }
+            store.loadPlannedEvents(friend.id)
+                .filter { it.state == PlannedEventState.UPCOMING && it.followUpRequested }
+                .forEach { ConversationWorkScheduler.scheduleUserReminder(appContext, friend, it, store.language()) }
+        }
+    }
+
+    private fun refreshScheduledFollowUp(friend: Friend) {
+        if (!store.proactiveEnabled() || store.isProactivePaused(friend.id)) return
+        val followUp = store.loadProactiveMessages(friend.id)
+            .filter {
+                it.trigger == ProactiveTrigger.FOLLOW_UP &&
+                    it.state in setOf(ProactiveDeliveryState.SCHEDULED, ProactiveDeliveryState.CANCELLED)
+            }
+            .maxByOrNull { it.updatedAtMillis } ?: return
+        val latestUserMessage = messagesFor(friend.id)
+            .lastOrNull { it.sessionId == followUp.sessionId && it.role == "user" }
+        if (!canRestoreScheduledFollowUp(followUp, store.currentSessionId(friend.id), latestUserMessage)) return
+        ConversationWorkScheduler.scheduleCheckIn(
+            appContext,
+            friend,
+            followUp.sessionId,
+            store.language(),
+            (followUp.dueAtMillis - System.currentTimeMillis()).coerceAtLeast(0L),
+            followUp.expectedUserMessageTimestamp
+        )
+    }
+
+    private fun scheduleInactivityQuestion(friend: Friend, language: AppLanguage, sessionId: String, delayMillis: Long = store.automaticFollowUpMinutes() * 60_000L) {
         val latestUserMessage = messagesFor(friend.id).lastOrNull { it.sessionId == sessionId && it.role == "user" } ?: return
         ConversationWorkScheduler.scheduleCheckIn(appContext, friend, sessionId, language, delayMillis, latestUserMessage.timestampMillis)
     }
@@ -270,7 +340,7 @@ object ConversationManager {
                 store.incrementUnread(friendId)
                 unreadState.update { it + (friendId to store.unreadCount(friendId)) }
                 store.loadFriends().firstOrNull { it.id == friendId }?.let { friend ->
-                    ReplyNotifier.notifyReply(appContext, friend, response)
+                    ReplyNotifier.notifyReply(appContext, friend, response, store.language())
                 }
             }
         }
@@ -384,7 +454,7 @@ object ConversationManager {
         val structuredUserProfile = store.loadStructuredUserProfile(friend.id, store.userName())
         try {
             return client.reply(
-                apiKey, selectedModel, store.installationId(), store.userName(), friend, history, language,
+                apiKey, selectedModel, store.installationId(), store.userName(), friend, history, store.chatLanguage(),
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
@@ -394,7 +464,7 @@ object ConversationManager {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
             delay(1_500)
             return client.reply(
-                apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, language,
+                apiKey, OpenRouterClient.FALLBACK_FREE_MODEL, store.installationId(), store.userName(), friend, history, store.chatLanguage(),
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
@@ -407,8 +477,25 @@ object ConversationManager {
         ConversationWorkScheduler.scheduleSessionEnd(appContext, friendId, sessionId, delayMillis)
     }
 
-    suspend fun runScheduledReply(friendId: String, sessionId: String, language: AppLanguage, forceFollowUp: Boolean, expectedUserTimestamp: Long?): Boolean {
+    fun replyScheduledMessageNow(friendId: String) {
+        val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return
+        val sessionId = store.currentSessionId(friendId) ?: return
+        if (!store.hasScheduledReply(friendId)) return
+        ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language(), sendImmediately = true)
+    }
+
+    suspend fun runScheduledReply(
+        friendId: String,
+        sessionId: String,
+        language: AppLanguage,
+        forceFollowUp: Boolean,
+        expectedUserTimestamp: Long?,
+        sendImmediately: Boolean = false,
+        proactiveMessageId: String? = null
+    ): Boolean {
         val requestGeneration = dataImportGeneration
+        val proactiveMessage = proactiveMessageId?.takeIf { it.isNotBlank() }?.let(store::proactiveMessage)
+        if (proactiveMessage != null && messagesFor(friendId).any { it.messageId == proactiveMessage.idempotencyKey }) return true
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: run {
             store.setScheduledReply(friendId, false)
             return true
@@ -419,17 +506,37 @@ object ConversationManager {
             sendingState.update { it - friendId }
             return true
         }
-        if (friend.replyAvailableAt(ZonedDateTime.now()) != null) return false
+        if (forceFollowUp) {
+            if (!store.proactiveEnabled() || store.isProactivePaused(friendId)) return true
+            if (!store.canSendProactive(friendId)) return false
+        }
+        if (shouldDelayBusyReply(friend, ZonedDateTime.now(), sendImmediately)) return false
         val history = messagesFor(friendId).filter { it.sessionId == sessionId }
         val latestUserMessage = history.lastOrNull { it.role == "user" } ?: return true
-        if (expectedUserTimestamp != null && latestUserMessage.timestampMillis != expectedUserTimestamp) return true
+        if (expectedUserTimestamp != null && !isScheduledFollowUpCurrent(expectedUserTimestamp, latestUserMessage)) return true
         if (!jobs.add(friendId)) return false
         val selectedModel = store.aiModel()
         waitingForScheduleState.update { it - friendId }
         sendingState.update { it + friendId }
         try {
-            val answer = requestReply(friend, sessionId, language, forceFollowUp)
+            val busyRoutine = friend.busyRoutineAt(ZonedDateTime.now())
+            val busyInstruction = if (busyRoutine != null && (friend.busyReplyBehavior == BusyReplyBehavior.IMMEDIATE || sendImmediately)) {
+                "You are currently at ${busyRoutine.reason.ifBlank { friend.busyReason }}. Reply now and, only if natural, briefly mention why you are busy."
+            } else ""
+            val answer = requestReply(friend, sessionId, language, forceFollowUp, ephemeralInstruction = busyInstruction)
             withCurrentImportGeneration(requestGeneration) {
+                if (forceFollowUp && (!store.proactiveEnabled() || store.isProactivePaused(friendId))) {
+                    store.setScheduledReply(friendId, false)
+                    return@withCurrentImportGeneration
+                }
+                if (expectedUserTimestamp != null && !isScheduledFollowUpCurrent(
+                        expectedUserTimestamp,
+                        messagesFor(friendId).lastOrNull { it.sessionId == sessionId && it.role == "user" }
+                    )
+                ) {
+                    store.setScheduledReply(friendId, false)
+                    return@withCurrentImportGeneration
+                }
                 if (answer.parseFailed) {
                     if (!forceFollowUp) {
                         appendAssistant(friendId, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
@@ -438,12 +545,20 @@ object ConversationManager {
                     return@withCurrentImportGeneration
                 }
                 store.addUserMemories(friendId, answer.memories)
-                updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
+                if (!forceFollowUp) {
+                    updateFriendship(friendId, sessionId, answer.friendshipImpact, answer.loveImpact)
+                }
                 val response = listOf(
                     answer.text,
                     answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
                 ).filter { it.isNotBlank() }.joinToString("\n\n")
-                appendAssistant(friendId, response.ifBlank { unavailableReply(language) }, answer.serverMessageId, selectedModel)
+                appendAssistant(
+                    friendId,
+                    response.ifBlank { unavailableReply(language) },
+                    proactiveMessage?.idempotencyKey ?: answer.serverMessageId,
+                    selectedModel,
+                    category = if (forceFollowUp) "follow_up" else "busy_reply"
+                )
                 store.setScheduledReply(friendId, false)
                 if (!forceFollowUp) {
                     when {
@@ -503,10 +618,16 @@ object ConversationManager {
     private fun gatedLoveImpact(friend: Friend, loveImpact: Int): Int =
         if (romanceAllowed(store.userAge(), friend.age)) loveImpact else 0
 
-    private fun updateFriendship(friend: Friend, friendshipImpact: Int, loveImpact: Int) {
-        val updated = store.updateFriend(friend.id) { current ->
+    private fun updateFriendship(friendId: String, sessionId: String, friendshipImpact: Int, loveImpact: Int) {
+        val latestUserMessage = messagesFor(friendId).lastOrNull {
+            it.sessionId == sessionId && it.role == "user"
+        }?.content.orEmpty()
+        val fingerprint = relationshipOutcomeFingerprint(latestUserMessage)
+        val application = store.applyRelationshipOutcome(friendId, sessionId, fingerprint) { current ->
             current.withRelationshipDelta(friendshipImpact, loveImpact, store.userAge())
         } ?: return
+        val updated = application.friend
+        if (!application.applied) return
         relationshipState.update { it + (updated.id to RelationshipUpdate(updated.id, updated.friendshipScore, updated.loveScore)) }
     }
 
@@ -514,16 +635,28 @@ object ConversationManager {
         messageState.update { it + (friendId to messages) }
     }
 
-    internal const val DEFAULT_FOLLOW_UP_MILLIS = 60_000L // 1 minute
+    internal const val DEFAULT_FOLLOW_UP_MILLIS = 30 * 60_000L // 30 minutes
     internal const val SESSION_INACTIVITY_MILLIS = 60 * 60 * 1000L // 60 minutes
 
     /** Default check-in only when the reply did not already ask something. */
     internal fun shouldScheduleDefaultFollowUp(replyText: String, followUpQuestion: String): Boolean =
         followUpQuestion.isBlank() && !replyText.contains("?")
 
-    suspend fun runMorningGreeting(friendId: String, sessionId: String, language: AppLanguage): Boolean {
+    suspend fun runMorningGreeting(
+        friendId: String,
+        sessionId: String,
+        language: AppLanguage,
+        proactiveMessageId: String? = null
+    ): Boolean {
         val requestGeneration = dataImportGeneration
+        val proactiveMessage = proactiveMessageId?.takeIf { it.isNotBlank() }?.let(store::proactiveMessage)
+        if (proactiveMessage != null && messagesFor(friendId).any { it.messageId == proactiveMessage.idempotencyKey }) return true
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
+        if (!store.proactiveEnabled() || store.isProactivePaused(friendId)) return true
+        if (!store.canSendProactive(friendId)) {
+            ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, language)
+            return true
+        }
         // Reschedule tomorrow's greeting first so the chain never dies.
         ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, language)
         if (friend.replyAvailableAt(ZonedDateTime.now()) != null) return true
@@ -540,9 +673,62 @@ object ConversationManager {
             ).filter { it.isNotBlank() }.joinToString("\n\n")
             if (response.isNotBlank()) {
                 withCurrentImportGeneration(requestGeneration) {
+                    if (!store.proactiveEnabled() || store.isProactivePaused(friendId)) return@withCurrentImportGeneration
                     store.saveCurrentSessionId(friendId, plan.sessionId)
-                    appendAssistant(friendId, response, answer.serverMessageId, store.aiModel())
+                    appendAssistant(
+                        friendId,
+                        response,
+                        proactiveMessage?.idempotencyKey ?: answer.serverMessageId,
+                        store.aiModel(),
+                        category = "morning_greeting"
+                    )
+                    store.recordProactiveSent(friendId)
                 }
+            }
+            return true
+        } finally {
+            withCurrentImportGeneration(requestGeneration) {
+                finishJobAndResumeQueue(friendId, requestGeneration)
+            }
+        }
+    }
+
+    suspend fun runUserReminder(friendId: String, proactiveMessageId: String, language: AppLanguage): Boolean {
+        val requestGeneration = dataImportGeneration
+        val proactiveMessage = store.proactiveMessage(proactiveMessageId) ?: return true
+        val event = store.loadPlannedEvents(friendId).firstOrNull { it.id == proactiveMessage.eventId }
+            ?: return true
+        if (event.state != PlannedEventState.UPCOMING) return true
+        if (System.currentTimeMillis() < event.dueAtMillis) return false
+        if (!store.proactiveEnabled() || store.isProactivePaused(friendId)) return true
+        if (messagesFor(friendId).any { it.messageId == proactiveMessage.idempotencyKey }) {
+            store.completePlannedEvent(friendId, event.id)
+            return true
+        }
+        val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
+        if (!jobs.add(friendId)) return false
+        sendingState.update { it + friendId }
+        try {
+            val certainty = if (event.confidence == "confirmed") {
+                "The timing and details are confirmed."
+            } else {
+                "The timing or details are uncertain; do not present them as certain."
+            }
+            val instruction = "The user asked you to check in about this planned event: ${event.description}. " +
+                "$certainty Be warm and brief, and do not imply that you personally attended or witnessed it."
+            val sessionId = store.currentSessionId(friendId) ?: proactiveMessage.sessionId
+            val answer = requestReply(friend, sessionId, language, forceFollowUp = true, ephemeralInstruction = instruction)
+            if (answer.parseFailed) return false
+            val response = listOf(answer.text, answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }
+                ?.let(::limitToSingleQuestion).orEmpty()).filter { it.isNotBlank() }.joinToString("\n\n")
+            if (response.isBlank()) return false
+            withCurrentImportGeneration(requestGeneration) {
+                if (store.loadPlannedEvents(friendId).firstOrNull { it.id == event.id } != event) {
+                    return@withCurrentImportGeneration
+                }
+                store.saveCurrentSessionId(friendId, sessionId)
+                appendAssistant(friendId, response, proactiveMessage.idempotencyKey, store.aiModel(), category = "reminder")
+                store.completePlannedEvent(friendId, event.id)
             }
             return true
         } finally {
@@ -605,7 +791,7 @@ object ConversationManager {
                     }
                     store.addUserMemories(friend.id, answer.memories)
                     updateMood(friend, answer.friendshipImpact, gatedLoveImpact(friend, answer.loveImpact))
-                    updateFriendship(friend, answer.friendshipImpact, answer.loveImpact)
+                    updateFriendship(friend.id, pending.sessionId, answer.friendshipImpact, answer.loveImpact)
                     val response = listOf(
                         answer.text,
                         answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()

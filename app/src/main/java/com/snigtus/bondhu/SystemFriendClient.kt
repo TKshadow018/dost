@@ -12,8 +12,9 @@ import java.net.URLEncoder
 import java.util.UUID
 
 internal class SystemFriendClient {
-    suspend fun getCatalog(): List<SystemFriendListing> = withContext(Dispatchers.IO) {
-        val profiles = getJson("").getJSONArray("profiles")
+    suspend fun getCatalog(chatLanguage: AppLanguage): List<SystemFriendListing> = withContext(Dispatchers.IO) {
+        val languageCode = chatLanguageCode(chatLanguage)
+        val profiles = getJson("chat_language=$languageCode").getJSONArray("profiles")
         List(profiles.length()) { index ->
             val profile = profiles.getJSONObject(index)
             val id = profile.getString("id").takeIf(String::isNotBlank)
@@ -33,8 +34,8 @@ internal class SystemFriendClient {
         }.sortedBy { it.name.lowercase() }
     }
 
-    suspend fun getProfile(catalogId: String): Friend = withContext(Dispatchers.IO) {
-        val query = "id=${URLEncoder.encode(catalogId, "UTF-8")}"
+    suspend fun getProfile(catalogId: String, chatLanguage: AppLanguage): Friend = withContext(Dispatchers.IO) {
+        val query = "id=${URLEncoder.encode(catalogId, "UTF-8")}&chat_language=${chatLanguageCode(chatLanguage)}"
         val profile = getJson(query).getJSONObject("profile")
         val id = profile.getString("id").takeIf(String::isNotBlank)
             ?: throw IOException("A system friend profile has no ID")
@@ -100,6 +101,12 @@ internal class SystemFriendClient {
 
     private fun photoUrl(path: String): String =
         path.takeIf(String::isNotBlank)?.let { URL(URL(API_URL), it).toExternalForm() }.orEmpty()
+
+    private fun chatLanguageCode(language: AppLanguage): String = when (language) {
+        AppLanguage.ENGLISH -> "en"
+        AppLanguage.BANGLA -> "bn"
+        AppLanguage.HINDI -> "hi"
+    }
 
     private companion object {
         const val API_URL = "https://bisque-bear-900175.hostingersite.com/api/friends.php"

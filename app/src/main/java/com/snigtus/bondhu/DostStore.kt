@@ -31,6 +31,13 @@ class DostStore(context: Context) {
         JSONArray(preferences.getString("friends", "[]")).length() > 0
     }.getOrDefault(false)
 
+    fun needsLanguageSetup(): Boolean =
+        !preferences.getBoolean("language_setup_complete", hasUserProfile())
+
+    fun completeLanguageSetup() {
+        preferences.edit().putBoolean("language_setup_complete", true).apply()
+    }
+
     /** Saved profile whose age meets [MINIMUM_ACCOUNT_AGE]. Friends alone do not count. */
     fun hasEligibleAccount(): Boolean =
         preferences.getBoolean("user_profile_saved", false) && accountAgeResult(userAge()) == AccountAgeResult.VALID
@@ -99,6 +106,11 @@ class DostStore(context: Context) {
         preferences.edit().remove("openrouter_key_encrypted").apply()
         ""
     }
+    fun dismissedChatNoticeId(friendId: String): String =
+        preferences.getString("dismissed_chat_notice_$friendId", "") ?: ""
+    fun markChatNoticeDismissed(friendId: String, messageId: String) {
+        preferences.edit().putString("dismissed_chat_notice_$friendId", messageId).apply()
+    }
     fun saveOpenRouterApiKey(apiKey: String) {
         if (apiKey.isBlank()) {
             preferences.edit().remove("openrouter_key_encrypted").apply()
@@ -112,6 +124,10 @@ class DostStore(context: Context) {
     fun aiModel(): String = preferences.getString("ai_model", DEFAULT_AI_MODEL) ?: DEFAULT_AI_MODEL
     fun saveAiModel(model: String) {
         preferences.edit().putString("ai_model", model.trim()).apply()
+    }
+    fun anonymousTelemetryEnabled(): Boolean = preferences.getBoolean("anonymous_telemetry_enabled", false)
+    fun setAnonymousTelemetryEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("anonymous_telemetry_enabled", enabled).apply()
     }
 
     fun exportLocalData(): JSONObject {
@@ -152,10 +168,27 @@ class DostStore(context: Context) {
                     })
                 }
             }
+            val events = JSONArray().apply {
+                loadPlannedEvents(friend.id).forEach { event ->
+                    put(JSONObject().apply {
+                        put("id", event.id)
+                        put("description", event.description)
+                        put("dueAtMillis", event.dueAtMillis)
+                        put("confidence", event.confidence)
+                        put("followUpRequested", event.followUpRequested)
+                        put("state", event.state.name)
+                    })
+                }
+            }
+            val sharedMoments = sharedMomentsToJson(loadSharedMoments(friend.id))
             backupFriends.put(JSONObject().apply {
                 put("profile", friendToJson(friend, userAge()))
                 put("memories", memories)
                 put("summaries", summaries)
+                put("events", events)
+                put("relationshipOutcomes", JSONArray(loadRelationshipOutcomeIds(friend.id)))
+                put("relationshipFingerprints", JSONArray(loadRelationshipOutcomeFingerprints(friend.id)))
+                put("sharedMoments", sharedMoments)
                 put("messages", backupMessages)
                 put("currentSessionId", currentSessionId(friend.id) ?: "")
             })
@@ -175,8 +208,19 @@ class DostStore(context: Context) {
                     AppLanguage.HINDI -> "hi"
                     AppLanguage.ENGLISH -> "en"
                 })
+                put("chatLanguage", if (!hasCustomChatLanguage()) "" else when (chatLanguage()) {
+                    AppLanguage.BANGLA -> "bn"
+                    AppLanguage.HINDI -> "hi"
+                    AppLanguage.ENGLISH -> "en"
+                })
+                put("showFriendSearchAndCount", showFriendSearchAndCount())
                 put("timeZone", userTimeZoneId())
                 put("model", aiModel())
+                put("proactiveEnabled", proactiveEnabled())
+                put("proactiveCadenceMinutes", proactiveCadenceMinutes())
+                put("automaticFollowUpMinutes", automaticFollowUpMinutes())
+                put("quietHoursStartMinute", quietHoursStartMinute())
+                put("quietHoursEndMinute", quietHoursEndMinute())
             })
             put("friends", backupFriends)
         }
@@ -198,6 +242,15 @@ class DostStore(context: Context) {
         val settings = backup.getJSONObject("settings")
         val language = backupString(settings, "language", 2)
         require(language in setOf("bn", "hi", "en")) { "The backup language is invalid." }
+        val chatLanguage = if (settings.has("chatLanguage") && !settings.isNull("chatLanguage")) {
+            backupString(settings, "chatLanguage", 2)
+        } else {
+            ""
+        }
+        require(chatLanguage.isEmpty() || chatLanguage in setOf("bn", "hi", "en")) {
+            "The backup chat language is invalid."
+        }
+        val showFriendSearchAndCount = settings.optBoolean("showFriendSearchAndCount", false)
         val timeZone = backupString(settings, "timeZone", 100)
         val parsedTimeZone = runCatching { ZoneId.of(timeZone).id }.getOrNull()
         require(parsedTimeZone != null) { "The backup timezone is invalid." }
@@ -205,6 +258,15 @@ class DostStore(context: Context) {
         require(model.matches(Regex("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?"))) {
             "The backup model is invalid."
         }
+        val proactiveEnabled = settings.optBoolean("proactiveEnabled", false)
+        val proactiveCadenceMinutes = settings.optInt("proactiveCadenceMinutes", 180)
+        val automaticFollowUpMinutes = settings.optInt("automaticFollowUpMinutes", 30)
+        val quietHoursStartMinute = settings.optInt("quietHoursStartMinute", 22 * 60)
+        val quietHoursEndMinute = settings.optInt("quietHoursEndMinute", 8 * 60)
+        require(proactiveCadenceMinutes in 30..1440 && automaticFollowUpMinutes in 5..120
+            && quietHoursStartMinute in 0..1439 && quietHoursEndMinute in 0..1439
+            && quietHoursStartMinute != quietHoursEndMinute
+        ) { "The backup proactive-message settings are invalid." }
 
         val friendItems = backup.getJSONArray("friends")
         require(friendItems.length() <= MAX_BACKUP_FRIENDS) { "The backup has too many friends." }
@@ -229,6 +291,16 @@ class DostStore(context: Context) {
                     && friend.busyStartHour in 0..23
                     && friend.busyDurationHours in 4..8
                     && runCatching { ZoneId.of(friend.timeZoneId) }.isSuccess
+                    && friend.busyReplyDelayMinutes in 0..120
+                    && friend.routineBlocks.size <= 12
+                    && friend.routineBlocks.all {
+                        it.id.isNotBlank() && it.id.length <= 64
+                            && it.reason.length <= 80
+                            && it.startMinute in 0..1439
+                            && it.durationMinutes in 1..1440
+                            && it.daysOfWeek.isNotEmpty()
+                            && it.daysOfWeek.all { day -> day in 1..7 }
+                    }
             ) { "The backup contains an invalid friend profile." }
             val memoriesJson = item.getJSONArray("memories")
             require(memoriesJson.length() <= MAX_STORED_USER_MEMORIES) { "The backup has too many memories." }
@@ -252,6 +324,77 @@ class DostStore(context: Context) {
                     backupString(summary, "summary", MAX_BACKUP_TEXT_LENGTH)
                 ).also { require(it.startedAtMillis > 0 && it.endedAtMillis >= it.startedAtMillis) { "The backup contains invalid session dates." } }
             }
+            val eventsJson = item.optJSONArray("events") ?: JSONArray()
+            require(eventsJson.length() <= 100) { "The backup has too many planned events." }
+            val events = List(eventsJson.length()) { eventIndex ->
+                val event = eventsJson.getJSONObject(eventIndex)
+                val id = backupString(event, "id", 64)
+                val description = backupString(event, "description", 500).trim()
+                val confidence = backupString(event, "confidence", 20)
+                val state = runCatching { PlannedEventState.valueOf(backupString(event, "state", 20)) }
+                    .getOrElse { throw IllegalArgumentException("The backup contains an invalid planned event.") }
+                require(isBackupUuid(id) && description.isNotBlank()
+                    && confidence in setOf("confirmed", "uncertain")
+                    && event.getLong("dueAtMillis") > 0L
+                ) { "The backup contains an invalid planned event." }
+                PlannedEvent(
+                    id = id,
+                    description = description,
+                    dueAtMillis = event.getLong("dueAtMillis"),
+                    confidence = confidence,
+                    followUpRequested = event.optBoolean("followUpRequested", true),
+                    state = state
+                )
+            }
+            require(events.map { it.id }.distinct().size == events.size) {
+                "The backup contains duplicate planned events."
+            }
+            val outcomesJson = item.optJSONArray("relationshipOutcomes") ?: JSONArray()
+            require(outcomesJson.length() <= MAX_RELATIONSHIP_OUTCOMES) {
+                "The backup has too many relationship outcomes."
+            }
+            val relationshipOutcomes = List(outcomesJson.length()) { outcomeIndex ->
+                outcomesJson.getString(outcomeIndex)
+            }
+            require(relationshipOutcomes.all(::isBackupUuid)
+                && relationshipOutcomes.distinct().size == relationshipOutcomes.size
+            ) { "The backup contains invalid relationship outcomes." }
+            val fingerprintsJson = item.optJSONArray("relationshipFingerprints") ?: JSONArray()
+            require(fingerprintsJson.length() <= MAX_RELATIONSHIP_FINGERPRINTS) {
+                "The backup has too many relationship fingerprints."
+            }
+            val relationshipFingerprints = List(fingerprintsJson.length()) { fingerprintIndex ->
+                fingerprintsJson.getString(fingerprintIndex)
+            }
+            require(relationshipFingerprints.all(::isBackupUuid)
+                && relationshipFingerprints.distinct().size == relationshipFingerprints.size
+            ) { "The backup contains invalid relationship fingerprints." }
+            val momentsJson = item.optJSONArray("sharedMoments") ?: JSONArray()
+            require(momentsJson.length() <= MAX_SHARED_MOMENTS) { "The backup has too many shared moments." }
+            val sharedMoments = List(momentsJson.length()) { momentIndex ->
+                val moment = momentsJson.getJSONObject(momentIndex)
+                val id = backupString(moment, "id", 36)
+                val title = backupString(moment, "title", 200)
+                val detail = backupString(moment, "detail", 2_000)
+                val kind = backupString(moment, "kind", 40)
+                val stageIndex = if (moment.has("stageIndex") && !moment.isNull("stageIndex")) moment.getInt("stageIndex") else null
+                require(isBackupUuid(id) && title.isNotBlank() && kind.isNotBlank()
+                    && moment.getLong("createdAtMillis") > 0L
+                    && (stageIndex == null || stageIndex in 0..9)
+                ) { "The backup contains an invalid shared moment." }
+                SharedMoment(
+                    id = id,
+                    title = title,
+                    detail = detail,
+                    createdAtMillis = moment.getLong("createdAtMillis"),
+                    kind = kind,
+                    pinned = moment.optBoolean("pinned", false),
+                    stageIndex = stageIndex
+                )
+            }
+            require(sharedMoments.map { it.id }.distinct().size == sharedMoments.size) {
+                "The backup contains duplicate shared moments."
+            }
             val currentSessionId = backupString(item, "currentSessionId", 36)
             require(currentSessionId.isEmpty() || isBackupUuid(currentSessionId)) {
                 "The backup contains an invalid current session."
@@ -265,7 +408,7 @@ class DostStore(context: Context) {
                 val sessionId = backupString(message, "sessionId", 36)
                 val category = backupString(message, "category", 100)
                 val modelId = backupString(message, "modelId", 160)
-                require(role in setOf("user", "assistant") && content.length <= 25_000
+                require(role in setOf("user", "assistant", "system") && content.length <= 25_000
                     && isBackupUuid(messageId) && (sessionId.isEmpty() || isBackupUuid(sessionId))
                 ) { "The backup contains an invalid message." }
                 val imageBytes = if (message.has("imageData")) {
@@ -291,7 +434,17 @@ class DostStore(context: Context) {
                     imageBytes
                 )
             }
-            importedFriends += ImportedBackupFriend(friend, memories, summaries, messages, currentSessionId)
+            importedFriends += ImportedBackupFriend(
+                friend,
+                memories,
+                summaries,
+                events,
+                relationshipOutcomes,
+                relationshipFingerprints,
+                sharedMoments,
+                messages,
+                currentSessionId
+            )
         }
 
         val stagedImages = File(chatImagesDirectory, ".restore-${java.util.UUID.randomUUID()}").apply {
@@ -332,7 +485,14 @@ class DostStore(context: Context) {
                 .putString("user_gender", gender)
                 .putString("user_time_zone", parsedTimeZone)
                 .putString("language", language)
+                .putString("chat_language", chatLanguage)
+                .putBoolean("show_friend_search_and_count", showFriendSearchAndCount)
                 .putString("ai_model", model)
+                .putBoolean("proactive_enabled", proactiveEnabled)
+                .putInt("proactive_cadence_minutes", proactiveCadenceMinutes)
+                .putInt("automatic_follow_up_minutes", automaticFollowUpMinutes)
+                .putInt("quiet_hours_start_minute", quietHoursStartMinute)
+                .putInt("quiet_hours_end_minute", quietHoursEndMinute)
                 .putString("friends", JSONArray().apply {
                     savedFriends.forEach { put(friendToJson(it, age)) }
                 }.toString())
@@ -351,6 +511,21 @@ class DostStore(context: Context) {
                         })
                     }
                 }.toString())
+                editor.putString("planned_events_$friendId", JSONArray().apply {
+                    imported.events.forEach { event ->
+                        put(JSONObject().apply {
+                            put("id", event.id)
+                            put("description", event.description)
+                            put("dueAtMillis", event.dueAtMillis)
+                            put("confidence", event.confidence)
+                            put("followUpRequested", event.followUpRequested)
+                            put("state", event.state.name)
+                        })
+                    }
+                }.toString())
+                editor.putString("relationship_outcomes_$friendId", JSONArray(imported.relationshipOutcomes).toString())
+                editor.putString("relationship_fingerprints_$friendId", JSONArray(imported.relationshipFingerprints).toString())
+                editor.putString("shared_moments_$friendId", sharedMomentsToJson(imported.sharedMoments).toString())
                 imported.currentSessionId.takeIf(String::isNotEmpty)?.let {
                     editor.putString("current_session_$friendId", it)
                 }
@@ -393,13 +568,73 @@ class DostStore(context: Context) {
         updated
     }
 
-    fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
-        val userAge = userAge()
-        val json = JSONArray()
-        friends.forEach { friend ->
-            json.put(friendToJson(friend, userAge))
+    internal fun applyRelationshipOutcome(
+        friendId: String,
+        sessionId: String,
+        fingerprint: String?,
+        transform: (Friend) -> Friend
+    ): RelationshipApplication? = synchronized(preferences) {
+        require(isBackupUuid(sessionId)) { "The relationship outcome session is invalid." }
+        val outcomes = loadRelationshipOutcomeIds(friendId)
+        val fingerprints = loadRelationshipOutcomeFingerprints(friendId)
+        val friends = loadFriends()
+        val index = friends.indexOfFirst { it.id == friendId }
+        if (index < 0) return null
+        if (!shouldApplyRelationshipOutcome(outcomes, sessionId)) return RelationshipApplication(friends[index], false)
+
+        val previous = friends[index]
+        val nextOutcomes = (outcomes + sessionId).takeLast(MAX_RELATIONSHIP_OUTCOMES)
+        if (!shouldApplyRelationshipOutcome(outcomes, fingerprints, sessionId, fingerprint)) {
+            check(
+                preferences.edit()
+                    .putString("relationship_outcomes_$friendId", JSONArray(nextOutcomes).toString())
+                    .commit()
+            ) { "Could not save the relationship outcome." }
+            return RelationshipApplication(previous, false)
         }
-        preferences.edit().putString("friends", json.toString()).apply()
+        val updated = transform(previous)
+        friends[index] = updated
+        val editor = preferences.edit()
+            .putString("friends", friendsToJson(friends).toString())
+            .putString("relationship_outcomes_$friendId", JSONArray(nextOutcomes).toString())
+        if (fingerprint != null) {
+            val nextFingerprints = (fingerprints + fingerprint).takeLast(MAX_RELATIONSHIP_FINGERPRINTS)
+            editor.putString("relationship_fingerprints_$friendId", JSONArray(nextFingerprints).toString())
+        }
+        val previousStage = friendshipStageIndex(previous.friendshipScore)
+        val nextStage = friendshipStageIndex(updated.friendshipScore)
+        if (nextStage > previousStage) {
+            val moment = SharedMoment(
+                id = stableIdempotencyKey("relationship-stage:$friendId:$sessionId:$nextStage"),
+                title = "Relationship stage",
+                detail = "A conversation helped your friendship reach a new stage.",
+                createdAtMillis = System.currentTimeMillis(),
+                kind = "relationship_stage",
+                stageIndex = nextStage
+            )
+            val moments = boundedSharedMoments(loadSharedMoments(friendId).filterNot { it.id == moment.id } + moment)
+            editor.putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString())
+        }
+        check(editor.commit()) { "Could not save the relationship update." }
+        RelationshipApplication(updated, true)
+    }
+
+    fun loadRelationshipOutcomeIds(friendId: String): List<String> = runCatching {
+        val json = JSONArray(preferences.getString("relationship_outcomes_$friendId", "[]"))
+        List(json.length()) { index -> json.getString(index) }
+    }.getOrDefault(emptyList())
+
+    fun loadRelationshipOutcomeFingerprints(friendId: String): List<String> = runCatching {
+        val json = JSONArray(preferences.getString("relationship_fingerprints_$friendId", "[]"))
+        List(json.length()) { index -> json.getString(index) }
+    }.getOrDefault(emptyList())
+
+    fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
+        preferences.edit().putString("friends", friendsToJson(friends).toString()).apply()
+    }
+
+    private fun friendsToJson(friends: List<Friend>): JSONArray = JSONArray().apply {
+        friends.forEach { friend -> put(friendToJson(friend, userAge())) }
     }
 
     private fun messageFile(friendId: String): File {
@@ -473,6 +708,16 @@ class DostStore(context: Context) {
         item.optBoolean("profilePending", false),
         item.optString("greeting"),
         item.optString("relationship")
+    ).copy(
+        routineBlocks = item.optJSONArray("routineBlocks")?.let { blocks ->
+            List(blocks.length().coerceAtMost(12)) { index ->
+                routineBlockFromJson(blocks.getJSONObject(index))
+            }
+        }.orEmpty(),
+        busyReplyBehavior = runCatching { BusyReplyBehavior.valueOf(item.optString("busyReplyBehavior", "WAIT")) }
+            .getOrDefault(BusyReplyBehavior.WAIT),
+        busyReplyDelayMinutes = item.optInt("busyReplyDelayMinutes", 30).coerceIn(0, 120),
+        favorite = item.optBoolean("favorite", false)
     )
 
     private fun friendToJson(friend: Friend, userAge: String): JSONObject = JSONObject().apply {
@@ -491,6 +736,37 @@ class DostStore(context: Context) {
         put("profilePending", friend.profilePending)
         put("greeting", friend.greeting)
         put("relationship", friend.relationship)
+        put("favorite", friend.favorite)
+        put("routineBlocks", JSONArray().apply {
+            friend.routineBlocks.forEach { block ->
+                put(JSONObject().apply {
+                    put("id", block.id)
+                    put("reason", block.reason)
+                    put("startMinute", block.startMinute)
+                    put("durationMinutes", block.durationMinutes)
+                    put("daysOfWeek", JSONArray().apply { block.daysOfWeek.sorted().forEach(::put) })
+                })
+            }
+        })
+        put("busyReplyBehavior", friend.busyReplyBehavior.name)
+        put("busyReplyDelayMinutes", friend.busyReplyDelayMinutes.coerceIn(0, 120))
+    }
+
+    private fun routineBlockFromJson(item: JSONObject): RoutineBlock {
+        val days = item.optJSONArray("daysOfWeek")?.let { values ->
+            buildSet {
+                for (index in 0 until values.length()) {
+                    values.optInt(index).takeIf { it in 1..7 }?.let(::add)
+                }
+            }
+        }.orEmpty()
+        return RoutineBlock(
+            id = item.optString("id").takeIf(String::isNotBlank) ?: java.util.UUID.randomUUID().toString(),
+            reason = item.optString("reason"),
+            startMinute = item.optInt("startMinute", 9 * 60).coerceIn(0, 1439),
+            durationMinutes = item.optInt("durationMinutes", 8 * 60).coerceIn(1, 24 * 60),
+            daysOfWeek = days.ifEmpty { (1..7).toSet() }
+        )
     }
 
     private fun backupString(json: JSONObject, key: String, maximumLength: Int): String {
@@ -552,10 +828,17 @@ class DostStore(context: Context) {
             .remove("user_memories_${friend.id}")
             .remove("structured_user_profile_${friend.id}")
             .remove("session_summaries_${friend.id}")
+            .remove("relationship_outcomes_${friend.id}")
+            .remove("relationship_fingerprints_${friend.id}")
+            .remove("shared_moments_${friend.id}")
             .remove("unread_${friend.id}")
             .remove("current_session_${friend.id}")
             .remove("scheduled_reply_${friend.id}")
+            .remove("planned_events_${friend.id}")
+            .remove("proactive_paused_until_${friend.id}")
+            .remove("last_proactive_sent_${friend.id}")
             .apply()
+        removeProactiveMessages(friend.id)
     }
 
     private fun deleteChatImage(path: String) {
@@ -596,6 +879,273 @@ class DostStore(context: Context) {
 
     fun setScheduledReply(friendId: String, pending: Boolean) {
         preferences.edit().putBoolean("scheduled_reply_$friendId", pending).apply()
+    }
+
+    fun proactiveEnabled(): Boolean = preferences.getBoolean("proactive_enabled", false)
+    fun setProactiveEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("proactive_enabled", enabled).apply()
+    }
+
+    fun automaticFollowUpMinutes(): Int = preferences.getInt("automatic_follow_up_minutes", 30).coerceIn(5, 120)
+    fun setAutomaticFollowUpMinutes(minutes: Int) {
+        require(minutes in 5..120)
+        preferences.edit().putInt("automatic_follow_up_minutes", minutes).apply()
+    }
+
+    fun quietHoursStartMinute(): Int = preferences.getInt("quiet_hours_start_minute", 22 * 60).coerceIn(0, 1439)
+    fun quietHoursEndMinute(): Int = preferences.getInt("quiet_hours_end_minute", 8 * 60).coerceIn(0, 1439)
+    fun setQuietHours(startMinute: Int, endMinute: Int) {
+        require(startMinute in 0..1439 && endMinute in 0..1439 && startMinute != endMinute)
+        preferences.edit()
+            .putInt("quiet_hours_start_minute", startMinute)
+            .putInt("quiet_hours_end_minute", endMinute)
+            .apply()
+    }
+
+    fun proactivePausedUntil(friendId: String): Long = preferences.getLong("proactive_paused_until_$friendId", 0L)
+    fun isProactivePaused(friendId: String, nowMillis: Long = System.currentTimeMillis()): Boolean =
+        proactivePausedUntil(friendId) > nowMillis
+
+    fun pauseProactive(friendId: String, untilMillis: Long) {
+        require(untilMillis > System.currentTimeMillis())
+        preferences.edit().putLong("proactive_paused_until_$friendId", untilMillis).apply()
+    }
+
+    fun resumeProactive(friendId: String) {
+        preferences.edit().remove("proactive_paused_until_$friendId").apply()
+    }
+
+    fun canSendProactive(friendId: String, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        return nextProactiveEligibleAt(friendId, nowMillis)?.let { it <= nowMillis } ?: false
+    }
+
+    fun recordProactiveSent(friendId: String, nowMillis: Long = System.currentTimeMillis()) {
+        preferences.edit()
+            .putLong("last_proactive_sent_$friendId", nowMillis)
+            .putLong("last_proactive_global_sent", nowMillis)
+            .apply()
+    }
+
+    fun nextProactiveEligibleAt(friendId: String, nowMillis: Long = System.currentTimeMillis()): Long? {
+        if (!proactiveEnabled()) return null
+        val pausedUntil = proactivePausedUntil(friendId)
+        if (pausedUntil == Long.MAX_VALUE) return null
+        val lastSent = preferences.getLong("last_proactive_sent_$friendId", 0L)
+        val cadenceMillis = preferences.getInt("proactive_cadence_minutes", 180).coerceIn(30, 1440) * 60_000L
+        val globalEligible = preferences.getLong("last_proactive_global_sent", 0L) + GLOBAL_PROACTIVE_SPACING_MILLIS
+        val timeZone = validZoneId(userTimeZoneId())
+        var eligible = nextTimeAfterQuietHours(
+            java.time.Instant.ofEpochMilli(maxOf(nowMillis, pausedUntil, lastSent + cadenceMillis, globalEligible)).atZone(timeZone),
+            quietHoursStartMinute(),
+            quietHoursEndMinute()
+        ).toInstant().toEpochMilli()
+        val reservedDueTimes = loadProactiveMessages()
+            .filter { it.trigger != ProactiveTrigger.USER_REMINDER && it.state == ProactiveDeliveryState.SCHEDULED }
+            .map { it.dueAtMillis }
+        while (true) {
+            val staggered = staggerProactiveTime(eligible, reservedDueTimes)
+            if (staggered == eligible) break
+            eligible = nextTimeAfterQuietHours(
+                java.time.Instant.ofEpochMilli(staggered).atZone(timeZone),
+                quietHoursStartMinute(),
+                quietHoursEndMinute()
+            ).toInstant().toEpochMilli()
+        }
+        return eligible
+    }
+
+    fun setProactiveCadenceMinutes(minutes: Int) {
+        require(minutes in 30..1440)
+        preferences.edit().putInt("proactive_cadence_minutes", minutes).apply()
+    }
+
+    fun proactiveCadenceMinutes(): Int = preferences.getInt("proactive_cadence_minutes", 180).coerceIn(30, 1440)
+
+    fun loadProactiveMessages(friendId: String? = null): List<ProactiveMessage> = runCatching {
+        val json = JSONArray(preferences.getString("proactive_messages", "[]"))
+        List(json.length()) { index ->
+            val item = json.getJSONObject(index)
+            ProactiveMessage(
+                id = item.getString("id"),
+                friendId = item.getString("friendId"),
+                trigger = ProactiveTrigger.valueOf(item.getString("trigger")),
+                sessionId = item.optString("sessionId"),
+                dueAtMillis = item.getLong("dueAtMillis"),
+                reason = item.optString("reason"),
+                idempotencyKey = item.getString("idempotencyKey"),
+                expectedUserMessageTimestamp = item.optLong("expectedUserMessageTimestamp", 0L),
+                eventId = item.optString("eventId"),
+                state = ProactiveDeliveryState.valueOf(item.optString("state", "SCHEDULED")),
+                updatedAtMillis = item.optLong("updatedAtMillis", 0L)
+            )
+        }.filter { friendId == null || it.friendId == friendId }
+    }.getOrDefault(emptyList())
+
+    fun saveProactiveMessage(message: ProactiveMessage) = synchronized(preferences) {
+        val all = loadProactiveMessages().filterNot { it.id == message.id } + message
+        persistProactiveMessages(all)
+    }
+
+    private fun persistProactiveMessages(messages: List<ProactiveMessage>) {
+        val json = JSONArray()
+        messages.takeLast(200).forEach { item ->
+            json.put(JSONObject().apply {
+                put("id", item.id)
+                put("friendId", item.friendId)
+                put("trigger", item.trigger.name)
+                put("sessionId", item.sessionId)
+                put("dueAtMillis", item.dueAtMillis)
+                put("reason", item.reason)
+                put("idempotencyKey", item.idempotencyKey)
+                put("expectedUserMessageTimestamp", item.expectedUserMessageTimestamp)
+                put("eventId", item.eventId)
+                put("state", item.state.name)
+                put("updatedAtMillis", item.updatedAtMillis)
+            })
+        }
+        preferences.edit().putString("proactive_messages", json.toString()).apply()
+    }
+
+    private fun removeProactiveMessages(friendId: String) = synchronized(preferences) {
+        persistProactiveMessages(loadProactiveMessages().filterNot { it.friendId == friendId })
+    }
+
+    fun proactiveMessage(id: String): ProactiveMessage? = loadProactiveMessages().firstOrNull { it.id == id }
+
+    fun claimProactiveMessage(id: String, nowMillis: Long = System.currentTimeMillis()): ProactiveMessage? = synchronized(preferences) {
+        val existing = proactiveMessage(id) ?: return null
+        val staleClaim = existing.state == ProactiveDeliveryState.SENDING && nowMillis - existing.updatedAtMillis >= 15 * 60_000L
+        if (existing.state != ProactiveDeliveryState.SCHEDULED && !staleClaim) return null
+        existing.copy(state = ProactiveDeliveryState.SENDING, updatedAtMillis = nowMillis).also(::saveProactiveMessage)
+    }
+
+    fun finishProactiveMessage(id: String, state: ProactiveDeliveryState, nowMillis: Long = System.currentTimeMillis()) {
+        require(state == ProactiveDeliveryState.COMPLETED || state == ProactiveDeliveryState.CANCELLED || state == ProactiveDeliveryState.SCHEDULED)
+        val existing = proactiveMessage(id) ?: return
+        val nextState = proactiveStateAfterFinish(existing.state, state)
+        if (nextState == existing.state) return
+        saveProactiveMessage(existing.copy(state = nextState, updatedAtMillis = nowMillis))
+        if (nextState == ProactiveDeliveryState.COMPLETED && existing.trigger != ProactiveTrigger.USER_REMINDER) {
+            preferences.edit()
+                .putLong("last_proactive_sent_${existing.friendId}", nowMillis)
+                .putLong("last_proactive_global_sent", nowMillis)
+                .apply()
+        }
+    }
+
+    fun loadPlannedEvents(friendId: String): List<PlannedEvent> = runCatching {
+        val json = JSONArray(preferences.getString("planned_events_$friendId", "[]"))
+        List(json.length()) { index ->
+            val item = json.getJSONObject(index)
+            PlannedEvent(
+                id = item.getString("id"),
+                description = item.getString("description"),
+                dueAtMillis = item.getLong("dueAtMillis"),
+                confidence = item.optString("confidence", "confirmed"),
+                followUpRequested = item.optBoolean("followUpRequested", true),
+                state = PlannedEventState.valueOf(item.optString("state", "UPCOMING"))
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    fun savePlannedEvent(friendId: String, event: PlannedEvent) {
+        require(isBackupUuid(event.id) && event.description.isNotBlank()
+            && event.description.length <= 500 && event.dueAtMillis > 0L
+            && event.confidence in setOf("confirmed", "uncertain")
+        ) { "The planned event is invalid." }
+        val events = loadPlannedEvents(friendId).filterNot { it.id == event.id } + event
+        require(events.size <= 100) { "A friend can have up to 100 planned events." }
+        preferences.edit().putString("planned_events_$friendId", plannedEventsToJson(events).toString()).apply()
+    }
+
+    fun completePlannedEvent(friendId: String, eventId: String, completedAtMillis: Long = System.currentTimeMillis()): PlannedEvent? =
+        synchronized(preferences) {
+            val event = loadPlannedEvents(friendId).firstOrNull { it.id == eventId } ?: return null
+            if (event.state != PlannedEventState.UPCOMING) return event
+            val completed = event.copy(state = PlannedEventState.COMPLETED)
+            val events = loadPlannedEvents(friendId).map { if (it.id == eventId) completed else it }
+            val moment = completedEventMoment(completed, completedAtMillis)
+            val moments = boundedSharedMoments(loadSharedMoments(friendId).filterNot { it.id == moment.id } + moment)
+            check(
+                preferences.edit()
+                    .putString("planned_events_$friendId", plannedEventsToJson(events).toString())
+                    .putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString())
+                    .commit()
+            ) { "Could not complete the planned event." }
+            completed
+        }
+
+    private fun plannedEventsToJson(events: List<PlannedEvent>): JSONArray = JSONArray().apply {
+        events.forEach { item ->
+            put(JSONObject().apply {
+                put("id", item.id)
+                put("description", item.description)
+                put("dueAtMillis", item.dueAtMillis)
+                put("confidence", item.confidence)
+                put("followUpRequested", item.followUpRequested)
+                put("state", item.state.name)
+            })
+        }
+    }
+
+    fun updatePlannedEvent(friendId: String, eventId: String, transform: (PlannedEvent) -> PlannedEvent): PlannedEvent? {
+        val event = loadPlannedEvents(friendId).firstOrNull { it.id == eventId } ?: return null
+        return transform(event).also { savePlannedEvent(friendId, it) }
+    }
+
+    fun loadSharedMoments(friendId: String): List<SharedMoment> = runCatching {
+        val json = JSONArray(preferences.getString("shared_moments_$friendId", "[]"))
+        List(json.length()) { index ->
+            val item = json.getJSONObject(index)
+            SharedMoment(
+                id = item.getString("id"),
+                title = item.optString("title"),
+                detail = item.optString("detail"),
+                createdAtMillis = item.getLong("createdAtMillis"),
+                kind = item.getString("kind"),
+                pinned = item.optBoolean("pinned", false),
+                stageIndex = if (item.has("stageIndex") && !item.isNull("stageIndex")) item.getInt("stageIndex") else null
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    fun saveSharedMoment(friendId: String, moment: SharedMoment) {
+        require(isBackupUuid(moment.id) && moment.title.length <= 200 && moment.detail.length <= 2_000
+            && moment.createdAtMillis > 0L && moment.kind.length in 1..40
+            && (moment.stageIndex == null || moment.stageIndex in 0..9)
+        ) { "The shared moment is invalid." }
+        val moments = boundedSharedMoments(loadSharedMoments(friendId).filterNot { it.id == moment.id } + moment)
+        preferences.edit().putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString()).apply()
+    }
+
+    fun updateSharedMoment(friendId: String, momentId: String, transform: (SharedMoment) -> SharedMoment): SharedMoment? {
+        val moment = loadSharedMoments(friendId).firstOrNull { it.id == momentId } ?: return null
+        return transform(moment).also { saveSharedMoment(friendId, it) }
+    }
+
+    fun deleteSharedMoment(friendId: String, momentId: String) {
+        val moments = loadSharedMoments(friendId).filterNot { it.id == momentId }
+        preferences.edit().putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString()).apply()
+    }
+
+    private fun sharedMomentsToJson(moments: List<SharedMoment>): JSONArray = JSONArray().apply {
+        moments.forEach { moment ->
+            put(JSONObject().apply {
+                put("id", moment.id)
+                put("title", moment.title)
+                put("detail", moment.detail)
+                put("createdAtMillis", moment.createdAtMillis)
+                put("kind", moment.kind)
+                put("pinned", moment.pinned)
+                moment.stageIndex?.let { put("stageIndex", it) }
+            })
+        }
+    }
+
+    private fun boundedSharedMoments(moments: List<SharedMoment>): List<SharedMoment> {
+        val pinned = moments.filter { it.pinned }.takeLast(MAX_SHARED_MOMENTS)
+        val unpinned = moments.filterNot { it.pinned }.takeLast((MAX_SHARED_MOMENTS - pinned.size).coerceAtLeast(0))
+        return (pinned + unpinned).sortedBy { it.createdAtMillis }
     }
 
     fun loadSessionSummaries(friendId: String): List<SessionSummary> = runCatching {
@@ -700,11 +1250,34 @@ class DostStore(context: Context) {
             AppLanguage.ENGLISH -> "en"
         }).apply()
     }
+    fun chatLanguage(): AppLanguage = when (preferences.getString("chat_language", null)) {
+        "bn" -> AppLanguage.BANGLA
+        "hi" -> AppLanguage.HINDI
+        "en" -> AppLanguage.ENGLISH
+        else -> language()
+    }
+    fun hasCustomChatLanguage(): Boolean = preferences.getString("chat_language", null) in setOf("bn", "hi", "en")
+    fun saveChatLanguage(language: AppLanguage) {
+        preferences.edit().putString("chat_language", when (language) {
+            AppLanguage.BANGLA -> "bn"
+            AppLanguage.HINDI -> "hi"
+            AppLanguage.ENGLISH -> "en"
+        }).apply()
+    }
+    fun showFriendSearchAndCount(): Boolean =
+        preferences.getBoolean("show_friend_search_and_count", false)
+    fun setShowFriendSearchAndCount(show: Boolean) {
+        preferences.edit().putBoolean("show_friend_search_and_count", show).apply()
+    }
 
     private data class ImportedBackupFriend(
         val friend: Friend,
         val memories: List<UserMemory>,
         val summaries: List<SessionSummary>,
+        val events: List<PlannedEvent>,
+        val relationshipOutcomes: List<String>,
+        val relationshipFingerprints: List<String>,
+        val sharedMoments: List<SharedMoment>,
         val messages: List<ImportedBackupMessage>,
         val currentSessionId: String
     )
@@ -712,12 +1285,16 @@ class DostStore(context: Context) {
     private data class ImportedBackupMessage(var message: ChatMessage, val imageBytes: ByteArray?)
 
     private companion object {
+        const val MAX_RELATIONSHIP_OUTCOMES = 1_000
+        const val MAX_RELATIONSHIP_FINGERPRINTS = 100
+        const val MAX_SHARED_MOMENTS = 100
         const val API_KEY_ALIAS = "dost_openrouter_api_key"
         const val DEFAULT_AI_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
         const val GCM_IV_LENGTH = 12
         const val GCM_TAG_LENGTH = 128
         const val BACKUP_FORMAT = "dost-local-backup"
         const val BACKUP_VERSION = 1
+
         const val MAX_BACKUP_FRIENDS = 10
         const val MAX_BACKUP_TEXT_LENGTH = 250_000
         const val MAX_BACKUP_IMAGE_BYTES = 375_000

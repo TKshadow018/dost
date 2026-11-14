@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,10 +21,24 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.CancellationException
@@ -99,8 +114,9 @@ fun DostApp(
     }
     val store = appViewModel.store
     var language by appViewModel.language
+    var chatLanguage by appViewModel.chatLanguage
     var screen by appViewModel.screen
-    var registerStep by appViewModel.registerStep
+    var showFriendSearchAndCount by remember { mutableStateOf(store.showFriendSearchAndCount()) }
     var name by appViewModel.name
     var email by appViewModel.email
     var age by appViewModel.age
@@ -108,6 +124,12 @@ fun DostApp(
     var userTimeZoneId by appViewModel.userTimeZoneId
     var openRouterApiKey by appViewModel.openRouterApiKey
     var aiModel by appViewModel.aiModel
+    var anonymousTelemetryEnabled by remember { mutableStateOf(store.anonymousTelemetryEnabled()) }
+    var proactiveEnabled by remember { mutableStateOf(store.proactiveEnabled()) }
+    var proactiveCadenceMinutes by remember { mutableIntStateOf(store.proactiveCadenceMinutes()) }
+    var automaticFollowUpMinutes by remember { mutableIntStateOf(store.automaticFollowUpMinutes()) }
+    var quietHoursStartMinute by remember { mutableIntStateOf(store.quietHoursStartMinute()) }
+    var quietHoursEndMinute by remember { mutableIntStateOf(store.quietHoursEndMinute()) }
     val friends = appViewModel.friends
     var selectedFriend by appViewModel.selectedFriend
     var closeAfterOverlayPermission by appViewModel.closeAfterOverlayPermission
@@ -116,41 +138,118 @@ fun DostApp(
     var authMode by rememberSaveable { mutableStateOf(AuthMode.SIGN_IN) }
     var authRequestState by remember { mutableStateOf<AuthRequestState>(AuthRequestState.Idle) }
     var settingsNotice by remember { mutableStateOf("") }
+    var backupPasswordMode by rememberSaveable { mutableStateOf<String?>(null) }
+    var backupPassword by rememberSaveable { mutableStateOf("") }
+    var backupPasswordConfirmation by rememberSaveable { mutableStateOf("") }
+    var pendingEncryptedBackup by remember { mutableStateOf<String?>(null) }
+    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
+    var backupPasswordError by remember { mutableStateOf("") }
+    var settingsReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var friendProfileReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var knowledgeReturnScreen by rememberSaveable { mutableStateOf(AppScreen.SETTINGS) }
+    var knowledgeFriendFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var chatReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var gameReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    val homeListState = rememberLazyListState()
+    val knowledgeListState = rememberLazyListState()
+    var systemFriendCatalog by remember { mutableStateOf(emptyList<SystemFriendListing>()) }
+    var systemFriendCatalogLoading by remember { mutableStateOf(false) }
+    var systemFriendCatalogError by remember { mutableStateOf<String?>(null) }
+    var addingSystemFriendId by remember { mutableStateOf<String?>(null) }
+
+    suspend fun importBackupText(backupText: String) {
+        withContext(Dispatchers.IO) {
+            ConversationManager.importLocalData(JSONObject(backupText))
+        }
+        language = store.language()
+        chatLanguage = store.chatLanguage()
+        showFriendSearchAndCount = store.showFriendSearchAndCount()
+        name = store.userName()
+        email = store.userEmail()
+        age = store.userAge()
+        gender = store.userGender()
+        userTimeZoneId = store.userTimeZoneId()
+        openRouterApiKey = store.openRouterApiKey()
+        aiModel = store.aiModel()
+        friends.clear()
+        friends.addAll(store.loadFriends())
+        selectedFriend = null
+        knowledgeFriendFilter = null
+        screen = AppScreen.HOME
+        settingsNotice = "Local data imported."
+    }
+
+    BackHandler(
+        enabled = screen in setOf(
+            AppScreen.CHAT,
+            AppScreen.FRIEND_PROFILE,
+            AppScreen.SYSTEM_FRIEND_PICKER,
+            AppScreen.KNOWLEDGE,
+            AppScreen.GAMES,
+            AppScreen.SETTINGS,
+            AppScreen.REGISTER
+        ) || screen == AppScreen.AUTH && authMode != AuthMode.SIGN_IN
+    ) {
+        when (screen) {
+            AppScreen.CHAT -> screen = chatReturnScreen
+            AppScreen.FRIEND_PROFILE -> screen = friendProfileReturnScreen
+            AppScreen.SYSTEM_FRIEND_PICKER -> screen = AppScreen.HOME
+            AppScreen.GAMES -> screen = gameReturnScreen
+            AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
+            AppScreen.SETTINGS -> screen = settingsReturnScreen
+            AppScreen.REGISTER -> screen = AppScreen.AUTH
+            AppScreen.AUTH -> authMode = AuthMode.SIGN_IN
+            else -> Unit
+        }
+    }
+    val systemFriendClient = remember { SystemFriendClient() }
     val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
             settingsNotice = try {
-                val backup = withContext(Dispatchers.IO) { store.exportLocalData().toString(2) }
+                val exportPassword = pendingExportPassword ?: error("The backup passphrase was lost.")
+                val password = exportPassword.toCharArray()
+                val backup = withContext(Dispatchers.IO) {
+                    try {
+                        LocalBackupCrypto.encrypt(store.exportLocalData().toString(2), password)
+                    } finally {
+                        password.fill('\u0000')
+                    }
+                }
                 require(backup.length <= MAX_LOCAL_BACKUP_CHARS) { "The backup is too large to export." }
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(backup) }
                         ?: throw java.io.IOException("Could not open the selected file.")
                 }
-                "Local data exported."
+                "Encrypted backup exported. Keep the passphrase separate; it cannot be recovered."
             } catch (error: Exception) {
                 "Export failed: ${error.message?.take(160) ?: "could not write the file"}"
+            } finally {
+                pendingExportPassword = null
+                backupPassword = ""
+                backupPasswordConfirmation = ""
             }
+        }
+        else {
+            pendingExportPassword = null
+            backupPassword = ""
+            backupPasswordConfirmation = ""
         }
     }
     val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             settingsNotice = "Importing local data…"
             try {
-                withContext(Dispatchers.IO) {
-                    ConversationManager.importLocalData(JSONObject(readLocalBackup(context, uri)))
+                val backupText = withContext(Dispatchers.IO) { readLocalBackup(context, uri) }
+                if (LocalBackupCrypto.isEncryptedBackup(backupText)) {
+                    pendingEncryptedBackup = backupText
+                    backupPassword = ""
+                    backupPasswordConfirmation = ""
+                    backupPasswordError = ""
+                    backupPasswordMode = "import"
+                    settingsNotice = "Enter the passphrase used to encrypt this backup."
+                } else {
+                    importBackupText(backupText)
                 }
-                language = store.language()
-                name = store.userName()
-                email = store.userEmail()
-                age = store.userAge()
-                gender = store.userGender()
-                userTimeZoneId = store.userTimeZoneId()
-                openRouterApiKey = store.openRouterApiKey()
-                aiModel = store.aiModel()
-                friends.clear()
-                friends.addAll(store.loadFriends())
-                selectedFriend = null
-                screen = AppScreen.HOME
-                settingsNotice = "Local data imported."
             } catch (error: Exception) {
                 settingsNotice = "Import failed: ${error.message?.take(160) ?: "the file is invalid"}"
             }
@@ -317,12 +416,12 @@ fun DostApp(
     }
 
     LaunchedEffect(openFriendRequest?.nonce) {
-        if (screen == AppScreen.SPLASH) return@LaunchedEffect
+        if (screen in setOf(AppScreen.SPLASH, AppScreen.LANGUAGE_SETUP)) return@LaunchedEffect
         openRequestedFriend(openFriendRequest?.friendId)
     }
     LaunchedEffect(screen, authRepository.currentAccount?.uid, authRepository.currentAccount?.emailVerified) {
         val currentAccount = authRepository.currentAccount
-        if (currentAccount?.needsEmailVerification == true && screen != AppScreen.SPLASH) {
+        if (currentAccount?.needsEmailVerification == true && screen !in setOf(AppScreen.SPLASH, AppScreen.LANGUAGE_SETUP)) {
             if (authMode != AuthMode.VERIFY_EMAIL) {
                 email = currentAccount.email
                 authMode = AuthMode.VERIFY_EMAIL
@@ -340,7 +439,7 @@ fun DostApp(
             }
             return@LaunchedEffect
         }
-        if (screen !in setOf(AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
+        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
         if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
             authRepository.signOut()
@@ -364,7 +463,11 @@ fun DostApp(
         closeAfterOverlayPermission = false
     }
 
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            settingsNotice = "Friend messages are enabled, but Android notifications are off. You can still read messages in Dost."
+        }
+    }
     val relationshipUpdates = ConversationManager.relationshipUpdates.collectAsState().value
     LaunchedEffect(relationshipUpdates) {
         if (relationshipUpdates.isEmpty()) return@LaunchedEffect
@@ -377,14 +480,13 @@ fun DostApp(
         }
     }
     LaunchedEffect(screen) {
-        if (screen == AppScreen.HOME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (screen == AppScreen.HOME && proactiveEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ReplyNotifier.ensureChannel(context)
             if (!ReplyNotifier.canNotify(context)) {
                 notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
     }
-
     fun requestFloatingChat(friendId: String? = null, closeApp: Boolean = false) {
         bubbleFriendId = friendId ?: selectedFriend?.id ?: friends.firstOrNull()?.id
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
@@ -466,11 +568,84 @@ fun DostApp(
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
     }
 
+    fun loadSystemFriendCatalog() {
+        systemFriendCatalogLoading = true
+        systemFriendCatalogError = null
+        scope.launch {
+            try {
+                systemFriendCatalog = systemFriendClient.getCatalog(chatLanguage)
+            } catch (error: java.io.IOException) {
+                systemFriendCatalogError = LocalizedText.LOAD_FRIENDS_FAILED.resolve(language)
+            } catch (error: org.json.JSONException) {
+                systemFriendCatalogError = LocalizedText.INVALID_FRIEND_CATALOG.resolve(language)
+            } finally {
+                systemFriendCatalogLoading = false
+            }
+        }
+    }
+
+    fun addCatalogFriend(listing: SystemFriendListing) {
+        val addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet()
+        if (addingSystemFriendId != null || listing.id in addedCatalogIds || friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS) return
+        addingSystemFriendId = listing.id
+        systemFriendCatalogError = null
+        scope.launch {
+            try {
+                val profile = systemFriendClient.getProfile(listing.id, chatLanguage)
+                val friendWithCachedPhoto = systemFriendClient.savePhotoForOfflineUse(context, profile)
+                addSystemFriend(friendWithCachedPhoto)
+                screen = AppScreen.HOME
+            } catch (error: java.io.IOException) {
+                systemFriendCatalogError = LocalizedText.ADD_SYSTEM_FRIEND_FAILED.resolve(language)
+            } catch (error: org.json.JSONException) {
+                systemFriendCatalogError = LocalizedText.INVALID_SYSTEM_FRIEND.resolve(language)
+            } finally {
+                addingSystemFriendId = null
+            }
+        }
+    }
+
+    fun openFriendProfile(friend: Friend, returnTo: AppScreen) {
+        selectedFriend = friend
+        friendProfileReturnScreen = returnTo
+        screen = AppScreen.FRIEND_PROFILE
+    }
+
+    fun updateFriendTimeZone(friend: Friend, timeZoneId: String) {
+        val updated = store.updateFriend(friend.id) { current ->
+            current.copy(timeZoneId = validZoneId(timeZoneId).id)
+        } ?: return
+        val index = friends.indexOfFirst { it.id == friend.id }
+        if (index >= 0) friends[index] = updated
+        selectedFriend = updated
+        ConversationManager.refreshBusyReply(updated)
+        ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+    }
+
+    fun updateFriendSchedule(friend: Friend, blocks: List<RoutineBlock>, behavior: BusyReplyBehavior, delayMinutes: Int) {
+        val primaryBlock = blocks.firstOrNull() ?: return
+        val updated = store.updateFriend(friend.id) { current ->
+            current.copy(
+                routineBlocks = blocks,
+                busyReplyBehavior = behavior,
+                busyReplyDelayMinutes = delayMinutes.coerceIn(0, 120),
+                busyStartHour = primaryBlock.startMinute / 60,
+                busyDurationHours = (primaryBlock.durationMinutes / 60).coerceIn(4, 8),
+                busyReason = primaryBlock.reason
+            )
+        } ?: return
+        val index = friends.indexOfFirst { it.id == friend.id }
+        if (index >= 0) friends[index] = updated
+        selectedFriend = updated
+        ConversationManager.refreshBusyReply(updated)
+        ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+    }
+
     androidx.compose.animation.AnimatedContent(
         targetState = screen,
         label = "pageTransition",
         transitionSpec = {
-            val order = listOf(AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.CHAT, AppScreen.KNOWLEDGE)
+            val order = listOf(AppScreen.LANGUAGE_SETUP, AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.FRIEND_PROFILE, AppScreen.SETTINGS, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE)
             val forward = order.indexOf(targetState) >= order.indexOf(initialState)
             val slideIn = slideInHorizontally(animationSpec = tween(300)) { if (forward) it else -it }
             val slideOut = slideOutHorizontally(animationSpec = tween(300)) { if (forward) -it else it }
@@ -478,7 +653,19 @@ fun DostApp(
         }
     ) { currentScreen ->
     when (currentScreen) {
-        AppScreen.SPLASH -> DostSplashScreen(language) {
+        AppScreen.LANGUAGE_SETUP -> LanguageSetupScreen(
+            appLanguage = language,
+            chatLanguage = chatLanguage,
+            onAppLanguageChange = { language = it },
+            onChatLanguageChange = { chatLanguage = it },
+            onContinue = {
+                store.saveLanguage(language)
+                store.saveChatLanguage(chatLanguage)
+                store.completeLanguageSetup()
+                screen = AppScreen.SPLASH
+            }
+        )
+        AppScreen.SPLASH -> DostSplashScreen(language, chatLanguage) {
             var currentAccount = authRepository.currentAccount
             if (currentAccount?.needsEmailVerification == true) {
                 email = currentAccount.email
@@ -517,6 +704,7 @@ fun DostApp(
                 val resolved = ChatLaunch.friendToOpen(destination == AppScreen.HOME, requestedId, friends.map { it.id }.toSet())
                 if (resolved != null) {
                     selectedFriend = friends.first { it.id == resolved }
+                    chatReturnScreen = AppScreen.HOME
                     screen = AppScreen.CHAT
                 } else {
                     screen = destination
@@ -532,7 +720,7 @@ fun DostApp(
             emailSignInEnabled = authRepository.emailSignInEnabled,
             googleSignInEnabled = authRepository.googleSignInEnabled,
             onSignIn = { authEmail, password ->
-                authenticate { authRepository.signIn(authEmail, password) }
+                authenticate({ authRepository.signIn(authEmail, password) })
             },
             onCreateAccount = { authEmail, password ->
                 authenticate({ authRepository.createAccount(authEmail, password) }, sendVerificationEmail = true)
@@ -551,13 +739,12 @@ fun DostApp(
                         }
                     )
                 } else {
-                    authenticate { authRepository.signInWithGoogle(activity) }
+                    authenticate({ authRepository.signInWithGoogle(activity) })
                 }
             }
         )
         AppScreen.REGISTER -> RegisterScreen(
             language = language,
-            step = registerStep,
             name = name,
             email = email,
             age = age,
@@ -566,28 +753,33 @@ fun DostApp(
             onEmailChange = { email = it },
             onAgeChange = { age = it },
             onGenderChange = { gender = it },
-            onNext = {
-                if (name.isNotBlank() && email.isNotBlank() && accountAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank()) {
-                    registerStep = 2
-                }
-            },
-            onFinish = finish@{ friend ->
-                if (accountAgeResult(age) != AccountAgeResult.VALID) return@finish
-                if (friend != null && friendAgeResult(friend.age) != AccountAgeResult.VALID) return@finish
+            onFinish = finish@{
+                if (name.isBlank() || email.isBlank() || accountAgeResult(age) != AccountAgeResult.VALID || gender.isBlank()) return@finish
                 store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
-                friend?.let { addFriendWithProfile(it.copy(age = it.age.trim())) }
                 screen = AppScreen.HOME
             },
-            onBack = { if (registerStep == 2) registerStep = 1 else screen = AppScreen.AUTH },
+            onBack = { screen = AppScreen.AUTH },
             emailEditable = false
         )
         AppScreen.HOME -> if (hasLocalAccountAccess()) HomeScreen(
             language = language,
+            showFriendSearchAndCount = showFriendSearchAndCount,
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
-            signedInEmail = authRepository.currentAccount?.email,
             friends = friends,
-            onAddFriend = { addFriendWithProfile(it) },
-            onAddSystemFriend = { addSystemFriend(it) },
+            listState = homeListState,
+            onBrowseSystemFriends = {
+                screen = AppScreen.SYSTEM_FRIEND_PICKER
+                loadSystemFriendCatalog()
+            },
+            onOpenGames = {
+                gameReturnScreen = AppScreen.HOME
+                screen = AppScreen.GAMES
+            },
+            onOpenSettings = {
+                settingsReturnScreen = AppScreen.HOME
+                screen = AppScreen.SETTINGS
+            },
+            onOpenFriendProfile = { openFriendProfile(it, AppScreen.HOME) },
             onDeleteFriend = { friend ->
                 friends.remove(friend)
                 store.saveFriends(friends)
@@ -596,19 +788,105 @@ fun DostApp(
                 generatingProfileIds = generatingProfileIds - friend.id
                 profileErrors = profileErrors - friend.id
             },
-            onOpenChat = { selectedFriend = it; screen = AppScreen.CHAT },
+            onToggleFavorite = { friend ->
+                val updated = store.updateFriend(friend.id) { it.copy(favorite = !it.favorite) }
+                val index = friends.indexOfFirst { it.id == friend.id }
+                if (updated != null && index >= 0) friends[index] = updated
+            },
+            onOpenChat = { chatReturnScreen = AppScreen.HOME; selectedFriend = it; screen = AppScreen.CHAT },
+            generatingProfileIds = generatingProfileIds,
+            profileFailedIds = profileErrors.keys
+        )
+        AppScreen.SETTINGS -> if (hasLocalAccountAccess()) SettingsScreen(
+            language = language,
+            chatLanguage = chatLanguage,
+            showFriendSearchAndCount = showFriendSearchAndCount,
+            friends = friends,
             userTimeZoneId = userTimeZoneId,
-            onUserTimeZoneChange = { userTimeZoneId = it; store.saveUserTimeZoneId(it) },
+            signedInEmail = authRepository.currentAccount?.email,
             openRouterApiKey = openRouterApiKey,
             aiModel = aiModel,
+            anonymousTelemetryEnabled = anonymousTelemetryEnabled,
+            proactiveEnabled = proactiveEnabled,
+            proactiveCadenceMinutes = proactiveCadenceMinutes,
+            automaticFollowUpMinutes = automaticFollowUpMinutes,
+            quietHoursStartMinute = quietHoursStartMinute,
+            quietHoursEndMinute = quietHoursEndMinute,
+            settingsNotice = settingsNotice,
+            onBack = { screen = settingsReturnScreen },
+            onDeleteFriend = { friend ->
+                friends.remove(friend)
+                store.saveFriends(friends)
+                ConversationManager.removeFriend(friend.id)
+                store.deleteFriendData(friend)
+                generatingProfileIds = generatingProfileIds - friend.id
+                profileErrors = profileErrors - friend.id
+            },
+            onLanguageChange = {
+                language = it
+                store.saveLanguage(it)
+                if (!store.hasCustomChatLanguage()) chatLanguage = it
+                ConversationManager.refreshProactiveWork()
+            },
+            onChatLanguageChange = {
+                chatLanguage = it
+                store.saveChatLanguage(it)
+            },
+            onShowFriendSearchAndCountChange = {
+                showFriendSearchAndCount = it
+                store.setShowFriendSearchAndCount(it)
+            },
+            onUserTimeZoneChange = {
+                userTimeZoneId = it
+                store.saveUserTimeZoneId(it)
+                ConversationManager.refreshProactiveWork()
+            },
+            onAnonymousTelemetryChange = {
+                store.setAnonymousTelemetryEnabled(it)
+                anonymousTelemetryEnabled = it
+            },
+            onProactiveEnabledChange = {
+                store.setProactiveEnabled(it)
+                proactiveEnabled = it
+                ConversationManager.refreshProactiveWork()
+                if (!it) {
+                    scope.launch {
+                        AnonymousTelemetry.record(
+                            store.anonymousTelemetryEnabled(),
+                            AnonymousTelemetryEvent.PROACTIVE_MESSAGES_DISABLED
+                        )
+                    }
+                } else if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    ReplyNotifier.ensureChannel(context)
+                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
+            onProactiveCadenceChange = {
+                store.setProactiveCadenceMinutes(it)
+                proactiveCadenceMinutes = it
+                ConversationManager.refreshProactiveWork()
+            },
+            onAutomaticFollowUpChange = {
+                store.setAutomaticFollowUpMinutes(it)
+                automaticFollowUpMinutes = it
+            },
+            onQuietHoursChange = { start, end ->
+                store.setQuietHours(start, end)
+                quietHoursStartMinute = start
+                quietHoursEndMinute = end
+                ConversationManager.refreshProactiveWork()
+            },
             onAiSettingsSave = { apiKey, model ->
                 openRouterApiKey = apiKey
                 aiModel = model
                 store.saveOpenRouterApiKey(apiKey)
                 store.saveAiModel(model)
             },
-            onLanguageChange = { language = it; store.saveLanguage(it) },
-            onKnowledge = { screen = AppScreen.KNOWLEDGE },
+            onKnowledge = { knowledgeReturnScreen = AppScreen.SETTINGS; knowledgeFriendFilter = null; screen = AppScreen.KNOWLEDGE },
             onSignOut = {
                 authRepository.signOut()
                 store.markAuthenticationRequired()
@@ -617,11 +895,13 @@ fun DostApp(
                 authRequestState = AuthRequestState.Idle
                 screen = AppScreen.AUTH
             },
-            generatingProfileIds = generatingProfileIds,
-            profileFailedIds = profileErrors.keys,
-            onExportLocalData = { backupExportLauncher.launch("dost-local-backup.json") },
+            onExportLocalData = {
+                backupPassword = ""
+                backupPasswordConfirmation = ""
+                backupPasswordError = ""
+                backupPasswordMode = "export"
+            },
             onImportLocalData = { backupImportLauncher.launch(arrayOf("application/json")) },
-            settingsNotice = settingsNotice,
             onDeleteServerArchive = {
                 scope.launch {
                     settingsNotice = "Deleting server archive…"
@@ -634,38 +914,224 @@ fun DostApp(
                 }
             }
         )
+        AppScreen.SYSTEM_FRIEND_PICKER -> if (hasLocalAccountAccess()) SystemFriendPickerScreen(
+            language = language,
+            catalog = systemFriendCatalog,
+            isLoading = systemFriendCatalogLoading,
+            error = systemFriendCatalogError,
+            addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet(),
+            addingCatalogId = addingSystemFriendId,
+            systemLimitReached = friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
+            customLimitReached = friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS,
+            onRefresh = ::loadSystemFriendCatalog,
+            onSelect = ::addCatalogFriend,
+            onCreateCustomFriend = {
+                addFriendWithProfile(it)
+                screen = AppScreen.HOME
+            },
+            onManageFriends = {
+                settingsReturnScreen = AppScreen.SYSTEM_FRIEND_PICKER
+                screen = AppScreen.SETTINGS
+            },
+            onBack = { screen = AppScreen.HOME }
+        )
+        AppScreen.FRIEND_PROFILE -> if (hasLocalAccountAccess()) selectedFriend?.let { friend ->
+            FriendProfileScreen(
+                friend = friend,
+                language = language,
+                userAge = store.userAge(),
+                userTimeZoneId = store.userTimeZoneId(),
+                memoryCount = store.loadUserMemories(friend.id).size,
+                plannedEvents = store.loadPlannedEvents(friend.id),
+                sharedMoments = store.loadSharedMoments(friend.id),
+                anonymousTelemetryEnabled = anonymousTelemetryEnabled,
+                proactivePausedUntil = store.proactivePausedUntil(friend.id),
+                onBack = { screen = friendProfileReturnScreen },
+                onOpenMemories = {
+                    knowledgeReturnScreen = AppScreen.FRIEND_PROFILE
+                    knowledgeFriendFilter = friend.id
+                    screen = AppScreen.KNOWLEDGE
+                },
+                onTimeZoneChange = { updateFriendTimeZone(friend, it) },
+                onSaveSchedule = { blocks, behavior, delayMinutes ->
+                    updateFriendSchedule(friend, blocks, behavior, delayMinutes)
+                },
+                onSaveReminder = { event ->
+                    if (event.state == PlannedEventState.COMPLETED) {
+                        store.completePlannedEvent(friend.id, event.id)
+                    } else {
+                        store.savePlannedEvent(friend.id, event)
+                    }
+                    if (event.state == PlannedEventState.UPCOMING && event.followUpRequested) {
+                        ConversationWorkScheduler.scheduleUserReminder(context, friend, event, language)
+                    } else {
+                        ConversationWorkScheduler.cancelUserReminder(context, event.id)
+                    }
+                },
+                onSaveMoment = { store.saveSharedMoment(friend.id, it) },
+                onDeleteMoment = { store.deleteSharedMoment(friend.id, it) },
+                onPauseProactive = {
+                    ConversationManager.pauseFriendProactive(friend.id, it)
+                    scope.launch {
+                        AnonymousTelemetry.record(
+                            store.anonymousTelemetryEnabled(),
+                            AnonymousTelemetryEvent.PROACTIVE_MESSAGES_PAUSED
+                        )
+                    }
+                },
+                onResumeProactive = { ConversationManager.resumeFriendProactive(friend.id) }
+            )
+        }
         AppScreen.CHAT -> if (hasLocalAccountAccess()) selectedFriend?.let { friend ->
             ChatScreen(
                 friend = friend,
                 store = store,
-                onBack = { screen = AppScreen.HOME },
+                onBack = { screen = chatReturnScreen },
                 language = language,
+                initialDraft = appViewModel.chatDrafts[friend.id].orEmpty(),
+                initialImagePath = appViewModel.chatImageDrafts[friend.id].orEmpty(),
+                onDraftChange = { appViewModel.chatDrafts[friend.id] = it },
+                onImageDraftChange = { path ->
+                    if (path.isBlank()) appViewModel.chatImageDrafts.remove(friend.id)
+                    else appViewModel.chatImageDrafts[friend.id] = path
+                },
+                onFriendProfile = { openFriendProfile(friend, AppScreen.CHAT) },
+                onOpenGames = {
+                    gameReturnScreen = AppScreen.CHAT
+                    screen = AppScreen.GAMES
+                },
                 profileGenerating = friend.id in generatingProfileIds,
                 profileError = profileErrors[friend.id],
                 onRetryProfile = { startProfileGeneration(friend.id) },
                 onUseBasicProfile = { continueWithBasicProfile(friend.id) },
                 onFloatingChat = { requestFloatingChat(friend.id, closeApp = true) },
-                onFriendTimeZoneChange = { timeZoneId ->
-                    val updated = store.updateFriend(friend.id) { current ->
-                        current.copy(timeZoneId = validZoneId(timeZoneId).id)
-                    }
-                    if (updated != null) {
-                        val index = friends.indexOfFirst { it.id == friend.id }
-                        if (index >= 0) friends[index] = updated
-                        selectedFriend = updated
-                        ConversationManager.refreshBusyReply(updated)
-                    }
-                }
+                onFriendTimeZoneChange = { updateFriendTimeZone(friend, it) }
             )
         }
+        AppScreen.GAMES -> if (hasLocalAccountAccess()) MiniGamesScreen(
+            language = language,
+            onBack = { screen = gameReturnScreen }
+        )
         AppScreen.KNOWLEDGE -> if (hasLocalAccountAccess()) KnowledgeScreen(
             language = language,
             friends = friends,
             store = store,
-            onBack = { screen = AppScreen.HOME }
+            listState = knowledgeListState,
+            friendIdFilter = knowledgeFriendFilter,
+            onBack = { screen = knowledgeReturnScreen },
+            onOpenChat = { chatReturnScreen = AppScreen.KNOWLEDGE; selectedFriend = it; screen = AppScreen.CHAT }
         )
     }
     }
+    if (backupPasswordMode != null) {
+        val exporting = backupPasswordMode == "export"
+        BackupPassphraseDialog(
+            exporting = exporting,
+            password = backupPassword,
+            confirmation = backupPasswordConfirmation,
+            error = backupPasswordError,
+            onPasswordChange = { backupPassword = it },
+            onConfirmationChange = { backupPasswordConfirmation = it },
+            onDismiss = {
+                backupPasswordMode = null
+                backupPassword = ""
+                backupPasswordConfirmation = ""
+                backupPasswordError = ""
+                pendingEncryptedBackup = null
+            },
+            onConfirm = {
+                backupPasswordError = ""
+                if (exporting) {
+                    pendingExportPassword = backupPassword
+                    backupPasswordMode = null
+                    backupExportLauncher.launch("dost-encrypted-backup.json")
+                } else {
+                    val backup = pendingEncryptedBackup
+                    if (backup != null) {
+                        val password = backupPassword.toCharArray()
+                        scope.launch {
+                            try {
+                                val decrypted = withContext(Dispatchers.IO) {
+                                    LocalBackupCrypto.decrypt(backup, password)
+                                }
+                                require(decrypted.length <= MAX_LOCAL_BACKUP_CHARS) { "The backup is too large to import." }
+                                importBackupText(decrypted)
+                                backupPasswordMode = null
+                                pendingEncryptedBackup = null
+                                backupPassword = ""
+                                backupPasswordConfirmation = ""
+                            } catch (error: Exception) {
+                                backupPasswordError = error.message?.take(160) ?: "The encrypted backup could not be opened."
+                            } finally {
+                                password.fill('\u0000')
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun BackupPassphraseDialog(
+    exporting: Boolean,
+    password: String,
+    confirmation: String,
+    error: String,
+    onPasswordChange: (String) -> Unit,
+    onConfirmationChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val validPassword = password.length in 12..256
+    val validConfirmation = !exporting || password == confirmation
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (exporting) "Protect your backup" else "Unlock your backup") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    if (exporting) {
+                        "Choose a passphrase with at least 12 characters. You will need it to restore this file; Dost cannot recover it."
+                    } else {
+                        "Enter the passphrase used when this backup was created. Importing replaces the current local data."
+                    }
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { onPasswordChange(it.take(256)) },
+                    label = { Text(if (exporting) "Passphrase" else "Backup passphrase") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (exporting) {
+                    OutlinedTextField(
+                        value = confirmation,
+                        onValueChange = { onConfirmationChange(it.take(256)) },
+                        label = { Text("Confirm passphrase") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                when {
+                    error.isNotBlank() -> Text(error)
+                    !validPassword -> Text("Use 12 to 256 characters.")
+                    !validConfirmation -> Text("The passphrases do not match.")
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = validPassword && validConfirmation) {
+                Text(if (exporting) "Create encrypted backup" else "Unlock and import")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 private fun readLocalBackup(context: Context, uri: Uri): String {
@@ -683,7 +1149,7 @@ private fun readLocalBackup(context: Context, uri: Uri): String {
     }
 }
 
-private const val MAX_LOCAL_BACKUP_CHARS = 25_000_000
+private const val MAX_LOCAL_BACKUP_CHARS = 35_000_000
 
 @Preview(showBackground = true)
 @Composable

@@ -12,15 +12,34 @@ class RelationshipScoreTest {
         val openingFriendship = 20
         var storedFriendship = openingFriendship
         var storedLove = 0
-        val impacts = listOf(2, 2, 1, -1, 2)
-        impacts.forEach { impact ->
+        listOf(2, 2, 1, -1, 2).forEach { impact ->
             val next = applyRelationshipDelta(storedFriendship, storedLove, impact, 0)
             storedFriendship = next.friendship
             storedLove = next.love
         }
+
+        assertEquals(20, openingFriendship)
         assertEquals(26, storedFriendship)
-        // The old live-send bug kept the opening score and applied only the latest delta.
-        assertNotEquals(openingFriendship + impacts.last(), storedFriendship)
+        assertNotEquals(openingFriendship + 2, storedFriendship)
+    }
+
+    @Test
+    fun oneScoreOutcomePerConversationSessionPreventsRepeatedTurnFarming() {
+        val openingFriendship = 20
+        var storedFriendship = openingFriendship
+        var storedLove = 0
+        val outcomes = mutableSetOf<String>()
+        val replies = listOf("session-1" to 2, "session-1" to 2, "session-2" to 1, "session-3" to -1, "session-3" to 2)
+        replies.forEach { (sessionId, impact) ->
+            if (shouldApplyRelationshipOutcome(outcomes, sessionId)) {
+                val next = applyRelationshipDelta(storedFriendship, storedLove, impact, 0)
+                storedFriendship = next.friendship
+                storedLove = next.love
+                outcomes += sessionId
+            }
+        }
+        assertEquals(20, openingFriendship)
+        assertEquals(22, storedFriendship)
         assertEquals(0, storedLove)
     }
 
@@ -85,9 +104,54 @@ class RelationshipScoreTest {
     }
 
     @Test
-    fun checkInAndLiveSendShareTheSameStoredScorePath() {
-        val afterCheckIn = applyRelationshipDelta(30, 0, 2, 0)
+    fun automaticCheckInsDoNotAwardRelationshipProgress() {
+        val afterCheckIn = RelationshipScores(30, 0)
         val afterLiveSend = applyRelationshipDelta(afterCheckIn.friendship, afterCheckIn.love, 1, 0)
-        assertEquals(33, afterLiveSend.friendship)
+        assertEquals(31, afterLiveSend.friendship)
+    }
+
+    @Test
+    fun relationshipOutcomeIsAppliedOnlyOncePerSessionId() {
+        assertTrue(shouldApplyRelationshipOutcome(emptySet(), "session-1"))
+        assertTrue(shouldApplyRelationshipOutcome(setOf("session-1"), "session-2"))
+        org.junit.Assert.assertFalse(shouldApplyRelationshipOutcome(setOf("session-1"), "session-1"))
+        org.junit.Assert.assertFalse(shouldApplyRelationshipOutcome(emptySet(), ""))
+    }
+
+    @Test
+    fun repeatedIdenticalTurnsCannotEarnProgressAcrossSessions() {
+        val fingerprint = relationshipOutcomeFingerprint("  I had a good day. ")
+        assertTrue(fingerprint != null)
+        assertTrue(shouldApplyRelationshipOutcome(emptySet(), emptySet(), "session-1", fingerprint))
+        org.junit.Assert.assertFalse(
+            shouldApplyRelationshipOutcome(emptySet(), setOf(fingerprint!!), "session-2", fingerprint)
+        )
+        org.junit.Assert.assertEquals(fingerprint, relationshipOutcomeFingerprint("i HAD a good day."))
+        org.junit.Assert.assertEquals(null, relationshipOutcomeFingerprint("   "))
+    }
+
+    @Test
+    fun friendshipStageThresholdsAreDeterministic() {
+        assertEquals(0, friendshipStageIndex(0))
+        assertEquals(0, friendshipStageIndex(10))
+        assertEquals(1, friendshipStageIndex(11))
+        assertEquals(6, friendshipStageIndex(70))
+        assertEquals(7, friendshipStageIndex(71))
+        assertEquals(9, friendshipStageIndex(100))
+    }
+
+    @Test
+    fun conversationStartersUseDistinctFriendInterests() {
+        val friend = Friend(
+            id = "friend",
+            name = "Sam",
+            age = "24",
+            gender = "Unspecified",
+            interests = "Music, hiking, Music"
+        )
+        val starters = conversationStarters(friend, AppLanguage.ENGLISH)
+        assertEquals(2, starters.size)
+        assertTrue(starters[0].contains("Music"))
+        assertTrue(starters[1].contains("hiking"))
     }
 }

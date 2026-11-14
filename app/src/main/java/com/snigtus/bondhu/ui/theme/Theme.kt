@@ -10,30 +10,57 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 
 private val DarkColorScheme = darkColorScheme(
-    primary = DostTealLight,
+    primary = DostBlueLight,
     onPrimary = DostInk,
-    secondary = DostAccent,
+    primaryContainer = Color(0xFF1E3A8A),
+    onPrimaryContainer = Color(0xFFDBEAFE),
+    secondary = DostGreenLight,
+    onSecondary = Color(0xFF064E3B),
+    secondaryContainer = Color(0xFF064E3B),
+    onSecondaryContainer = Color(0xFFD1FAE5),
     background = DostInk,
-    surface = DostInk,
-    surfaceVariant = DostSurfaceVariant,
     onBackground = DostOnDark,
+    surface = DostSurface,
     onSurface = DostOnDark,
-    onSurfaceVariant = DostOnDark
+    surfaceVariant = DostSurfaceVariant,
+    onSurfaceVariant = DostOnDarkMuted,
+    outline = Color(0xFF94A3B8),
+    outlineVariant = Color(0xFF334155),
+    error = Color(0xFFFCA5A5),
+    onError = Color(0xFF7F1D1D)
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = DostTeal,
-    secondary = DostAccent,
-    tertiary = Pink40
+    primary = DostBlue,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFDBEAFE),
+    onPrimaryContainer = Color(0xFF1E3A8A),
+    secondary = DostGreen,
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFD1FAE5),
+    onSecondaryContainer = Color(0xFF064E3B),
+    tertiary = DostAccent,
+    onTertiary = Color.White,
+    background = Color(0xFFF8FAFC),
+    onBackground = Color(0xFF0F172A),
+    surface = Color.White,
+    onSurface = Color(0xFF0F172A),
+    surfaceVariant = Color(0xFFF1F5F9),
+    onSurfaceVariant = Color(0xFF475569),
+    outline = Color(0xFF64748B),
+    outlineVariant = Color(0xFFCBD5E1),
+    error = Color(0xFFB91C1C),
+    onError = Color.White
 )
 
 @Composable
 fun DostTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -42,7 +69,8 @@ fun DostTheme(
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
 
-        else -> DarkColorScheme
+        darkTheme -> DarkColorScheme
+        else -> LightColorScheme
     }
 
     MaterialTheme(

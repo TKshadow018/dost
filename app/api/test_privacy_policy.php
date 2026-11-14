@@ -50,7 +50,7 @@ $required = array(
     'user or friend is under 18' => 'states the romance age gate',
     'child-directed service' => 'states that Dost is not a child-directed service',
     'tushartk018@gmail.com' => 'keeps the archive-request contact address',
-    'November 12, 2026' => 'uses the revised effective date',
+    'November 14, 2026' => 'uses the revised effective date',
     'API keys are not written into conversation logs' => 'still says API keys are not logged',
     'chat_images' => 'mentions chat image files',
     'system-friend-photos' => 'says system-friend photos are excluded from backup',
@@ -58,7 +58,11 @@ $required = array(
     'up to the seven most recent summaries' => 'names session summaries sent with each turn',
     'friendship score and love score' => 'names relationship scores sent with each turn',
     'does not display the installation id' => 'says the app does not display the installation id',
-    'installation id' => 'describes install-id lookup for newer archives'
+    'installation id' => 'describes install-id lookup for newer archives',
+    'Share anonymous event counts' => 'discloses optional event-only analytics',
+    'daily event totals for 90 days' => 'states analytics data retention',
+    'does not receive message content, profile details, account data, or installation ids' => 'states analytics excludes conversation and identity data',
+    'may see your IP address' => 'discloses IP visibility to the API host'
 );
 foreach ($required as $needle => $reason) {
     if (strpos($text, $needle) === false) {

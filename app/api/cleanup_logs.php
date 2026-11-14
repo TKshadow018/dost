@@ -6,6 +6,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require_once __DIR__ . '/archive_store.php';
+require_once __DIR__ . '/telemetry_store.php';
 
 define('DOST_RETENTION_DAYS', 3650);
 
@@ -226,6 +227,15 @@ $storageDirectory = conversation_storage_base_directory();
 if ($storageDirectory === false) {
     fwrite(STDERR, "Conversation archive directory is inside the web root or is not an absolute path. Set DOST_CONVERSATION_STORAGE_DIR outside the web root.\n");
     exit(1);
+}
+
+$telemetryDirectory = dirname($storageDirectory) . DIRECTORY_SEPARATOR . 'anonymous-telemetry';
+if (is_dir($telemetryDirectory)) {
+    if (is_link($telemetryDirectory) || dost_prepare_storage_directory($telemetryDirectory) === false) {
+        fwrite(STDERR, "Could not safely resolve the anonymous telemetry directory.\n");
+        exit(1);
+    }
+    dost_telemetry_prune($telemetryDirectory, dost_telemetry_retention_cutoff());
 }
 
 $primary = run_conversation_archive_cleanup($storageDirectory, true);
