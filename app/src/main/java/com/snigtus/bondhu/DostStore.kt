@@ -17,6 +17,14 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+private const val SYSTEM_FRIEND_PASS_KEY_PREFIX = "system_friend_passed_at_"
+internal const val SYSTEM_FRIEND_PASS_DURATION_MILLIS = 7L * 24L * 60L * 60L * 1000L
+
+internal fun isSystemFriendPassActive(passedAtMillis: Long, nowMillis: Long): Boolean =
+    passedAtMillis > 0L
+        && passedAtMillis <= nowMillis
+        && nowMillis - passedAtMillis < SYSTEM_FRIEND_PASS_DURATION_MILLIS
+
 class DostStore(context: Context) {
     private val context = context
     private val preferences: SharedPreferences = context.getSharedPreferences("dost_local_data", Context.MODE_PRIVATE)
@@ -128,6 +136,47 @@ class DostStore(context: Context) {
     fun anonymousTelemetryEnabled(): Boolean = preferences.getBoolean("anonymous_telemetry_enabled", false)
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("anonymous_telemetry_enabled", enabled).apply()
+    }
+    internal fun peopleProfileDraft(): PeopleProfileDraft = PeopleProfileDraft(
+        country = preferences.getString("people_profile_country", "") ?: "",
+        bio = preferences.getString("people_profile_bio", "") ?: "",
+        interests = preferences.getString("people_profile_interests", "") ?: ""
+    )
+    internal fun savePeopleProfileDraft(draft: PeopleProfileDraft) {
+        preferences.edit()
+            .putString("people_profile_country", draft.country)
+            .putString("people_profile_bio", draft.bio)
+            .putString("people_profile_interests", draft.interests)
+            .apply()
+    }
+    fun passedSystemFriendIds(nowMillis: Long = System.currentTimeMillis()): Set<String> {
+        val passedIds = mutableSetOf<String>()
+        val editor = preferences.edit()
+        var removedExpiredPass = false
+        preferences.all.forEach { (key, value) ->
+            if (!key.startsWith(SYSTEM_FRIEND_PASS_KEY_PREFIX)) return@forEach
+            val catalogId = key.removePrefix(SYSTEM_FRIEND_PASS_KEY_PREFIX)
+            val passedAtMillis = value as? Long
+            if (catalogId.isBlank() || passedAtMillis == null || !isSystemFriendPassActive(passedAtMillis, nowMillis)) {
+                editor.remove(key)
+                removedExpiredPass = true
+            } else {
+                passedIds += catalogId
+            }
+        }
+        if (removedExpiredPass) editor.apply()
+        return passedIds
+    }
+    fun markSystemFriendPassed(catalogId: String, nowMillis: Long = System.currentTimeMillis()) {
+        require(catalogId.matches(Regex("[A-Za-z0-9_-]{1,120}"))) { "Invalid system friend catalog ID" }
+        preferences.edit().putLong(SYSTEM_FRIEND_PASS_KEY_PREFIX + catalogId, nowMillis).apply()
+    }
+    fun clearPassedSystemFriends() {
+        val editor = preferences.edit()
+        preferences.all.keys
+            .filter { it.startsWith(SYSTEM_FRIEND_PASS_KEY_PREFIX) }
+            .forEach { editor.remove(it) }
+        editor.apply()
     }
 
     fun exportLocalData(): JSONObject {

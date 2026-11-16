@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,7 +40,7 @@ import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.*
 
 @Composable
-internal fun HomeScreen(language: AppLanguage, showFriendSearchAndCount: Boolean, userName: String, friends: List<Friend>, listState: LazyListState, onBrowseSystemFriends: () -> Unit, onOpenGames: () -> Unit, onOpenSettings: () -> Unit, onOpenFriendProfile: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onToggleFavorite: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>) {
+internal fun HomeScreen(language: AppLanguage, showFriendSearchAndCount: Boolean, userName: String, friends: List<Friend>, listState: LazyListState, onBrowseSystemFriends: () -> Unit, onOpenPeople: () -> Unit, onOpenGames: () -> Unit, onOpenSettings: () -> Unit, onOpenFriendProfile: (Friend) -> Unit, onDeleteFriend: (Friend) -> Unit, onToggleFavorite: (Friend) -> Unit, onOpenChat: (Friend) -> Unit, generatingProfileIds: Set<String>, profileFailedIds: Set<String>, peopleEnabled: Boolean = true) {
     val unreadCounts = ConversationManager.unread.collectAsState().value
     val messageMap = ConversationManager.messages.collectAsState().value
     var searchQuery by remember(showFriendSearchAndCount) { mutableStateOf("") }
@@ -69,6 +70,14 @@ internal fun HomeScreen(language: AppLanguage, showFriendSearchAndCount: Boolean
                             imageVector = Icons.Filled.SportsEsports,
                             contentDescription = when { bangla -> "খেলা"; hindi -> "खेल"; else -> "Games" }
                         )
+                    }
+                    if (peopleEnabled) {
+                        IconButton(onClick = onOpenPeople) {
+                            Icon(
+                                imageVector = Icons.Filled.People,
+                                contentDescription = when { bangla -> "বাস্তব মানুষ"; hindi -> "लोग"; else -> "People" }
+                            )
+                        }
                     }
                     TextButton(onClick = onOpenSettings) { Text(when { bangla -> "সেটিংস"; hindi -> "सेटिंग्स"; else -> "Settings" }) }
                     TextButton(onClick = onBrowseSystemFriends, enabled = canAddAnyFriend) { Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }) }

@@ -4,7 +4,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, SYSTEM_FRIEND_PICKER, CHAT, GAMES, KNOWLEDGE }
+enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, SYSTEM_FRIEND_PICKER, CHAT, PEOPLE, PEOPLE_CHAT, GAMES, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
 enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD, VERIFY_EMAIL }
 
@@ -293,8 +293,12 @@ data class SystemFriendListing(
     val photoUrl: String
 )
 
-fun availableSystemFriendDeck(catalog: List<SystemFriendListing>, addedCatalogIds: Set<String>): List<SystemFriendListing> =
-    catalog.filterNot { it.id in addedCatalogIds }
+fun availableSystemFriendDeck(
+    catalog: List<SystemFriendListing>,
+    addedCatalogIds: Set<String>,
+    passedCatalogIds: Set<String> = emptySet()
+): List<SystemFriendListing> =
+    catalog.filterNot { it.id in addedCatalogIds || it.id in passedCatalogIds }
 
 fun initialGreetingMessage(friend: Friend, history: List<ChatMessage>, sessionId: String): ChatMessage? {
     val greeting = friend.greeting.trim()
@@ -720,10 +724,10 @@ fun loveLevel(score: Int): String = when (score.coerceIn(0, 100)) {
 }
 
 /**
- * Youngest self-reported age that may create an account.
- * Under 13 is refused (COPPA / Play Families). Ages 13–17 may use the app with romance locked.
+ * The app is for adults because real-person matchmaking is a core feature.
+ * Play Age Signals gates app access; this local age is only used for account setup.
  */
-const val MINIMUM_ACCOUNT_AGE = 13
+const val MINIMUM_ACCOUNT_AGE = 18
 
 /** Love meter and the romantic prompt ladder require both the user and the friend to be at least this age. */
 const val ROMANCE_MINIMUM_AGE = 18

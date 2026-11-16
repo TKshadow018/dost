@@ -489,17 +489,17 @@ fun GenderField(value: String, onValueChange: (String) -> Unit, language: AppLan
 }
 
 fun accountAgeHint(language: AppLanguage): String = when (language) {
-    AppLanguage.BANGLA -> "দোস্ত ১৩ বছর বা তার বেশি বয়সীদের জন্য। ভালোবাসার মাপকাঠি ১৮ বছরের আগে বন্ধ থাকে।"
-    AppLanguage.HINDI -> "दोस्त 13 साल या उससे बड़े लोगों के लिए है। प्रेम मीटर 18 साल से पहले बंद रहता है।"
-    AppLanguage.ENGLISH -> "Dost is for people 13 and older. The love meter stays off until you are 18."
+    AppLanguage.BANGLA -> "দোস্ত ১৮ বছর বা তার বেশি বয়সীদের জন্য।"
+    AppLanguage.HINDI -> "दोस्त 18 साल या उससे बड़े लोगों के लिए है।"
+    AppLanguage.ENGLISH -> "Dost is for people 18 and older."
 }
 
 fun accountAgeError(age: String, language: AppLanguage): String? = when (accountAgeResult(age)) {
     AccountAgeResult.VALID, AccountAgeResult.EMPTY -> null
     AccountAgeResult.UNDER_MINIMUM -> when (language) {
-        AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি করতে কমপক্ষে ১৩ বছর বয়স লাগবে।"
-        AppLanguage.HINDI -> "खाता बनाने के लिए कम से कम 13 साल की उम्र होनी चाहिए।"
-        AppLanguage.ENGLISH -> "You need to be 13 or older to create an account."
+        AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি করতে কমপক্ষে ১৮ বছর বয়স লাগবে।"
+        AppLanguage.HINDI -> "खाता बनाने के लिए कम से कम 18 साल की उम्र होनी चाहिए।"
+        AppLanguage.ENGLISH -> "You need to be 18 or older to create an account."
     }
     AccountAgeResult.NOT_A_WHOLE_NUMBER -> when (language) {
         AppLanguage.BANGLA -> "বয়স পুরো সংখ্যায় লিখুন।"

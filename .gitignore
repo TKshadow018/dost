@@ -20,3 +20,4 @@ local.properties
 /app/api/config.php
 /dost-private-data/
 /app/src/main/assets/emails_list.csv
+tests/firestore/node_modules/

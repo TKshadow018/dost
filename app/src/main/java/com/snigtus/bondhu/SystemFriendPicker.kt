@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
@@ -74,11 +75,14 @@ internal fun SystemFriendPickerScreen(
     isLoading: Boolean,
     error: String?,
     addedCatalogIds: Set<String>,
+    passedCatalogIds: Set<String>,
     addingCatalogId: String?,
     systemLimitReached: Boolean,
     customLimitReached: Boolean,
     onRefresh: () -> Unit,
     onSelect: (SystemFriendListing) -> Unit,
+    onPassCatalogFriend: (String) -> Unit,
+    onStartOver: () -> Unit,
     onCreateCustomFriend: (Friend) -> Unit,
     onManageFriends: () -> Unit,
     onBack: () -> Unit
@@ -163,7 +167,10 @@ internal fun SystemFriendPickerScreen(
                     language = language,
                     addingCatalogId = addingCatalogId,
                     systemLimitReached = systemLimitReached,
+                    initialPassedIds = passedCatalogIds,
                     onSelect = onSelect,
+                    onPass = onPassCatalogFriend,
+                    onStartOver = onStartOver,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
                 addingCatalogId != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -283,12 +290,15 @@ private fun SystemFriendCardDeck(
     language: AppLanguage,
     addingCatalogId: String?,
     systemLimitReached: Boolean,
+    initialPassedIds: Set<String>,
     onSelect: (SystemFriendListing) -> Unit,
+    onPass: (String) -> Unit,
+    onStartOver: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var passedIds by remember { mutableStateOf(emptySet<String>()) }
+    var passedIds by remember(catalog, initialPassedIds) { mutableStateOf(initialPassedIds) }
     var showFullProfile by remember { mutableStateOf(false) }
-    val remaining = catalog.filterNot { it.id in passedIds }
+    val remaining = availableSystemFriendDeck(catalog, emptySet(), passedIds)
     val current = remaining.firstOrNull()
     val next = remaining.getOrNull(1)
     val bangla = language == AppLanguage.BANGLA
@@ -297,8 +307,16 @@ private fun SystemFriendCardDeck(
     LaunchedEffect(current?.id) { showFullProfile = false }
 
     if (current == null) {
-        MoreFriendsState(language, onStartOver = { passedIds = emptySet() })
+        MoreFriendsState(language, onStartOver = {
+            passedIds = emptySet()
+            onStartOver()
+        })
         return
+    }
+
+    fun passCurrentFriend() {
+        passedIds = passedIds + current.id
+        onPass(current.id)
     }
 
     if (addingCatalogId == current.id) {
@@ -339,7 +357,7 @@ private fun SystemFriendCardDeck(
                     isAdding = addingCatalogId != null,
                     screenWidthPx = screenWidthPx,
                     cardHeight = cardHeight,
-                    onPass = { passedIds = passedIds + current.id },
+                    onPass = ::passCurrentFriend,
                     onSelect = { onSelect(current) }
                 )
             }
@@ -347,39 +365,41 @@ private fun SystemFriendCardDeck(
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            OutlinedButton(
-                onClick = { passedIds = passedIds + current.id },
+            IconButton(
+                onClick = ::passCurrentFriend,
                 enabled = addingCatalogId == null,
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                modifier = Modifier.size(48.dp)
             ) {
-                Icon(Icons.Filled.Close, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text(when { bangla -> "বাদ দিন"; hindi -> "पास करें"; else -> "Pass" })
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = localizedText(language, "Pass", "पास करें", "বাদ দিন"),
+                    tint = MaterialTheme.colorScheme.error
+                )
             }
-            OutlinedButton(
+            IconButton(
                 onClick = { showFullProfile = !showFullProfile },
                 enabled = addingCatalogId == null,
-                modifier = Modifier.heightIn(min = 48.dp)
+                modifier = Modifier.size(48.dp)
             ) {
-                Icon(Icons.Filled.Info, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text(when { bangla -> "তথ্য"; hindi -> "जानकारी"; else -> "Info" })
+                Icon(
+                    Icons.Filled.Info,
+                    contentDescription = localizedText(language, "Info", "जानकारी", "তথ্য"),
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
-            Button(
+            IconButton(
                 onClick = { onSelect(current) },
                 enabled = !systemLimitReached && addingCatalogId == null,
-                modifier = Modifier.weight(1.25f).heightIn(min = 48.dp)
+                modifier = Modifier.size(48.dp)
             ) {
-                Icon(Icons.Filled.PersonAdd, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text(when {
-                    bangla -> "যোগ করুন"
-                    hindi -> "जोड़ें"
-                    else -> "Add friend"
-                })
+                Icon(
+                    Icons.Filled.PersonAdd,
+                    contentDescription = localizedText(language, "Add friend", "दोस्त जोड़ें", "বন্ধু যোগ করুন"),
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }

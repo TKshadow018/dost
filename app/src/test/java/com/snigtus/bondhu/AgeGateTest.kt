@@ -7,11 +7,12 @@ import org.junit.Test
 
 class AgeGateTest {
     @Test
-    fun registrationAcceptsThirteenAndRefusesYoungerOrUnusableAges() {
-        assertEquals(AccountAgeResult.VALID, accountAgeResult("13"))
+    fun registrationAcceptsAdultsAndRefusesMinorsOrUnusableAges() {
+        assertEquals(AccountAgeResult.VALID, accountAgeResult("18"))
         assertEquals(AccountAgeResult.VALID, accountAgeResult(" 18 "))
         assertEquals(AccountAgeResult.VALID, accountAgeResult("120"))
-        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("12"))
+        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("17"))
+        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("13"))
         assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("1"))
         assertEquals(AccountAgeResult.EMPTY, accountAgeResult("  "))
         assertEquals(AccountAgeResult.NOT_A_WHOLE_NUMBER, accountAgeResult("13abc"))

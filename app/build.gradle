@@ -32,6 +32,11 @@ android {
     def uploadStorePassword = System.getenv("DOST_KEYSTORE_PASSWORD") ?: providers.gradleProperty("DOST_KEYSTORE_PASSWORD").orNull
     def uploadKeyPassword = System.getenv("DOST_KEY_PASSWORD") ?: providers.gradleProperty("DOST_KEY_PASSWORD").orNull
     def dostAppCredentialSecret = System.getenv("DOST_APP_CREDENTIAL_SECRET") ?: providers.gradleProperty("DOST_APP_CREDENTIAL_SECRET").orNull ?: ""
+    def dostPeopleEnabledValue = System.getenv("DOST_PEOPLE_ENABLED") ?: providers.gradleProperty("DOST_PEOPLE_ENABLED").orNull ?: "true"
+    if (!dostPeopleEnabledValue.equalsIgnoreCase("true") && !dostPeopleEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_PEOPLE_ENABLED must be either true or false.")
+    }
+    def dostPeopleEnabled = dostPeopleEnabledValue.equalsIgnoreCase("true")
     def escapedDostAppCredentialSecret = dostAppCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")
 
     signingConfigs {
@@ -52,6 +57,7 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
+        buildConfigField "boolean", "DOST_PEOPLE_ENABLED", dostPeopleEnabled.toString()
         buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseApiKey)
         buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseAppId)
         buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseProjectId)
@@ -93,9 +99,13 @@ dependencies {
     implementation libs.androidx.work.runtime.ktx
     implementation platform(libs.firebase.bom)
     implementation libs.firebase.auth
+    implementation libs.firebase.firestore
+    implementation libs.kotlinx.coroutines.play.services
     implementation libs.androidx.credentials
     implementation libs.androidx.credentials.play.services.auth
     implementation libs.google.id
+    implementation libs.play.age.signals
+    implementation libs.play.integrity
     testImplementation libs.junit
     testImplementation libs.kotlinx.coroutines.test
     // Unit tests run against the Android SDK stubs, whose org.json throws. Use the real parser in tests only.

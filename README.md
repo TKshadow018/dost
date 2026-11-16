@@ -1,8 +1,8 @@
 # Dost
 
-## User guide
+## Product documentation
 
-For an overview of the app’s features and how to use them, see the [Dost User Guide](USER-GUIDE.md).
+See the [Dost App Overview](APP_OVERVIEW_FOR_USERS.md) for a user-facing summary of current features. Product improvement and launch ideas are in [Improvement and Marketing Proposals](APP_IMPROVEMENT_AND_MARKETING_PROPOSALS.md).
 
 ## Firebase Authentication setup
 

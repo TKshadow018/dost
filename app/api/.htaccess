@@ -8,6 +8,6 @@ Options -Indexes
     Require all denied
 </Files>
 
-<FilesMatch "^(test_.*\.php|.*\.txt)$">
+<FilesMatch "^(test_.*\.php|age_eligibility_support\.php|.*\.txt)$">
     Require all denied
 </FilesMatch>

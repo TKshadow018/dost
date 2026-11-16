@@ -51,22 +51,47 @@ import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val openFriendRequests = MutableStateFlow<OpenFriendRequest?>(null)
-    private lateinit var appViewModel: DostAppViewModel
+    private var appViewModel: DostAppViewModel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) publishOpenFriend(intent)
         enableEdgeToEdge()
-        appViewModel = ViewModelProvider(this)[DostAppViewModel::class.java]
-        savedInstanceState?.let {
-            appViewModel.restoreNavigationState(it.getString(KEY_SCREEN), it.getString(KEY_SELECTED_FRIEND_ID))
+        setContent {
+            DostTheme {
+                val ageGateLanguage = remember(this@MainActivity) {
+                    when (getSharedPreferences("dost_local_data", MODE_PRIVATE).getString("language", "bn")) {
+                        "en" -> AppLanguage.ENGLISH
+                        "hi" -> AppLanguage.HINDI
+                        else -> AppLanguage.BANGLA
+                    }
+                }
+                PlayAgeSignalsGate(
+                    activity = this@MainActivity,
+                    language = ageGateLanguage
+                ) {
+                    val viewModel = remember(this@MainActivity) {
+                        ViewModelProvider(this@MainActivity)[DostAppViewModel::class.java].also {
+                            savedInstanceState?.let { state ->
+                                it.restoreNavigationState(
+                                    state.getString(KEY_SCREEN),
+                                    state.getString(KEY_SELECTED_FRIEND_ID)
+                                )
+                            }
+                            appViewModel = it
+                        }
+                    }
+                    DostApp(openFriendRequests, viewModel)
+                }
+            }
         }
-        setContent { DostTheme { DostApp(openFriendRequests, appViewModel) } }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putString(KEY_SCREEN, appViewModel.screen.value.name)
-        outState.putString(KEY_SELECTED_FRIEND_ID, appViewModel.selectedFriend.value?.id)
+        appViewModel?.let {
+            outState.putString(KEY_SCREEN, it.screen.value.name)
+            outState.putString(KEY_SELECTED_FRIEND_ID, it.selectedFriend.value?.id)
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -138,6 +163,8 @@ fun DostApp(
     var authMode by rememberSaveable { mutableStateOf(AuthMode.SIGN_IN) }
     var authRequestState by remember { mutableStateOf<AuthRequestState>(AuthRequestState.Idle) }
     var settingsNotice by remember { mutableStateOf("") }
+    var checkingPeopleEligibility by remember { mutableStateOf(false) }
+    var peopleEligibilityError by remember { mutableStateOf<String?>(null) }
     var backupPasswordMode by rememberSaveable { mutableStateOf<String?>(null) }
     var backupPassword by rememberSaveable { mutableStateOf("") }
     var backupPasswordConfirmation by rememberSaveable { mutableStateOf("") }
@@ -156,6 +183,25 @@ fun DostApp(
     var systemFriendCatalogLoading by remember { mutableStateOf(false) }
     var systemFriendCatalogError by remember { mutableStateOf<String?>(null) }
     var addingSystemFriendId by remember { mutableStateOf<String?>(null) }
+    var selectedPeopleConversation by remember { mutableStateOf<SocialConversation?>(null) }
+
+    fun withAdultEligibility(action: () -> Unit) {
+        if (checkingPeopleEligibility) return
+        scope.launch {
+            checkingPeopleEligibility = true
+            peopleEligibilityError = null
+            try {
+                authRepository.ensureAdultEligibility()
+                action()
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                peopleEligibilityError = error.message?.take(160)
+                    ?: "The age-eligibility check failed."
+            } finally {
+                checkingPeopleEligibility = false
+            }
+        }
+    }
 
     suspend fun importBackupText(backupText: String) {
         withContext(Dispatchers.IO) {
@@ -182,6 +228,8 @@ fun DostApp(
     BackHandler(
         enabled = screen in setOf(
             AppScreen.CHAT,
+            AppScreen.PEOPLE,
+            AppScreen.PEOPLE_CHAT,
             AppScreen.FRIEND_PROFILE,
             AppScreen.SYSTEM_FRIEND_PICKER,
             AppScreen.KNOWLEDGE,
@@ -192,6 +240,8 @@ fun DostApp(
     ) {
         when (screen) {
             AppScreen.CHAT -> screen = chatReturnScreen
+            AppScreen.PEOPLE_CHAT -> screen = AppScreen.PEOPLE
+            AppScreen.PEOPLE -> screen = AppScreen.HOME
             AppScreen.FRIEND_PROFILE -> screen = friendProfileReturnScreen
             AppScreen.SYSTEM_FRIEND_PICKER -> screen = AppScreen.HOME
             AppScreen.GAMES -> screen = gameReturnScreen
@@ -439,7 +489,7 @@ fun DostApp(
             }
             return@LaunchedEffect
         }
-        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
+        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
         if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
             authRepository.signOut()
@@ -771,6 +821,8 @@ fun DostApp(
                 screen = AppScreen.SYSTEM_FRIEND_PICKER
                 loadSystemFriendCatalog()
             },
+            onOpenPeople = { withAdultEligibility { screen = AppScreen.PEOPLE } },
+            peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED,
             onOpenGames = {
                 gameReturnScreen = AppScreen.HOME
                 screen = AppScreen.GAMES
@@ -920,11 +972,14 @@ fun DostApp(
             isLoading = systemFriendCatalogLoading,
             error = systemFriendCatalogError,
             addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet(),
+            passedCatalogIds = store.passedSystemFriendIds(),
             addingCatalogId = addingSystemFriendId,
             systemLimitReached = friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
             customLimitReached = friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS,
             onRefresh = ::loadSystemFriendCatalog,
             onSelect = ::addCatalogFriend,
+            onPassCatalogFriend = { store.markSystemFriendPassed(it) },
+            onStartOver = store::clearPassedSystemFriends,
             onCreateCustomFriend = {
                 addFriendWithProfile(it)
                 screen = AppScreen.HOME
@@ -935,6 +990,35 @@ fun DostApp(
             },
             onBack = { screen = AppScreen.HOME }
         )
+        AppScreen.PEOPLE -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) PeopleScreen(
+            language = language,
+            uid = authRepository.currentAccount?.uid.orEmpty(),
+            userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
+            userAge = age.ifBlank { store.userAge() },
+            userGender = gender.ifBlank { store.userGender() },
+            store = store,
+            onBack = { screen = AppScreen.HOME },
+            onOpenConversation = {
+                withAdultEligibility {
+                    selectedPeopleConversation = it
+                    screen = AppScreen.PEOPLE_CHAT
+                }
+            }
+        ) else {
+            selectedPeopleConversation = null
+            screen = AppScreen.HOME
+        }
+        AppScreen.PEOPLE_CHAT -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) selectedPeopleConversation?.let { conversation ->
+            PeopleChatScreen(
+                language = language,
+                uid = authRepository.currentAccount?.uid.orEmpty(),
+                conversation = conversation,
+                onBack = { screen = AppScreen.PEOPLE }
+            )
+        } ?: run { screen = AppScreen.PEOPLE } else {
+            selectedPeopleConversation = null
+            screen = AppScreen.HOME
+        }
         AppScreen.FRIEND_PROFILE -> if (hasLocalAccountAccess()) selectedFriend?.let { friend ->
             FriendProfileScreen(
                 friend = friend,
@@ -1066,6 +1150,46 @@ fun DostApp(
                                 password.fill('\u0000')
                             }
                         }
+                    }
+                }
+            }
+        )
+    }
+    if (checkingPeopleEligibility || peopleEligibilityError != null) {
+        val error = peopleEligibilityError
+        val title = when (language) {
+            AppLanguage.BANGLA -> if (checkingPeopleEligibility) "অ্যাক্সেস যাচাই" else "যাচাই করা যায়নি"
+            AppLanguage.HINDI -> if (checkingPeopleEligibility) "पहुंच की जांच" else "जांच पूरी नहीं हुई"
+            AppLanguage.ENGLISH -> if (checkingPeopleEligibility) "Checking access" else "Access check failed"
+        }
+        val message = when {
+            checkingPeopleEligibility -> when (language) {
+                AppLanguage.BANGLA -> "নিরাপদে Friends ব্যবহার করার জন্য Google Play-এর সাথে সংযোগ করা হচ্ছে।"
+                AppLanguage.HINDI -> "People को सुरक्षित रूप से उपयोग करने के लिए Google Play से जुड़ा जा रहा है।"
+                AppLanguage.ENGLISH -> "Connecting to Google Play to verify access to People."
+            }
+            else -> when (language) {
+                AppLanguage.BANGLA -> "ইন্টারনেট সংযোগ এবং Play Store থেকে ইনস্টল করা অ্যাপটি পরীক্ষা করে আবার চেষ্টা করুন।"
+                AppLanguage.HINDI -> "इंटरनेट कनेक्शन और Play Store से इंस्टॉल किए गए ऐप की जांच करके फिर कोशिश करें।"
+                AppLanguage.ENGLISH -> "Check your connection and make sure this app was installed from Google Play, then try again."
+            } + (error?.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: "")
+        }
+        AlertDialog(
+            onDismissRequest = {
+                if (!checkingPeopleEligibility) peopleEligibilityError = null
+            },
+            title = { Text(title) },
+            text = { Text(message) },
+            confirmButton = {
+                if (!checkingPeopleEligibility) {
+                    TextButton(onClick = { peopleEligibilityError = null }) {
+                        Text(
+                            when (language) {
+                                AppLanguage.BANGLA -> "ঠিক আছে"
+                                AppLanguage.HINDI -> "ठीक है"
+                                AppLanguage.ENGLISH -> "OK"
+                            }
+                        )
                     }
                 }
             }

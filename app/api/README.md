@@ -1,12 +1,26 @@
 # Dost AI API (Hostinger)
 
-Upload `ai.php`, `app_credential.php`, `archive_store.php`, `delete_archive.php`, `romance_safety.php`, `telemetry_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. `ai.php` loads these PHP files from the same directory; uploading `ai.php` alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
+Upload `ai.php`, `app_credential.php`, `age_eligibility.php`, `age_eligibility_support.php`, `archive_store.php`, `delete_archive.php`, `romance_safety.php`, `telemetry_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. The PHP endpoints load helper files from the same directory; uploading an endpoint alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
 
 `https://bisque-bear-900175.hostingersite.com/api/ai.php`
 
 For optional anonymous usage analytics, also upload `telemetry.php` and `telemetry_store.php`. The app sends only allowlisted event names after the user enables **Share anonymous event counts** in Settings. The allowlist covers profile opens, memory actions, failed-send retries, first messages to friends, shared-ritual saves, proactive-message pauses/disable actions, and completed automatic friend replies. The endpoint stores daily aggregate counts for 90 days; it does not receive message content, profile fields, account data, an installation id, or a client-supplied timestamp. Normal HTTP infrastructure may still see the request IP address. Upload the updated `telemetry_store.php` and republish `privacy-policy.txt` together.
 
 The server needs PHP with the cURL extension and outbound HTTPS access.
+
+## Trusted People age eligibility
+
+The app's Play Age Signals gate remains the first check. When the short-lived eligibility claim is missing or nearly expired, the app requests a Play Integrity Standard token whose request hash binds the Firebase UID, eligibility result, and a fresh random nonce. The Hostinger endpoint verifies the Firebase ID token, asks Google to decode the Integrity token, checks the package, request hash, token age, Play licensing, app recognition, and device integrity, then sets a server-side Firebase custom claim that expires after six hours. Firestore rules require this unexpired claim for People reads and writes. The exact Play Age Signals range is not sent to or stored by Dost's server.
+
+Before deploying this endpoint:
+
+1. Link the Google Cloud project to `com.snigtus.dost` in Play Console and enable the Play Integrity API. Enable Identity Toolkit API for the Firebase project as well.
+2. Create a dedicated service account and grant only `firebaseauth.users.get` and `firebaseauth.users.update` on the Firebase project. Keep its JSON key outside `public_html` and outside source control.
+3. Configure `DOST_FIREBASE_PROJECT_ID`, `DOST_FIREBASE_WEB_API_KEY`, and `DOST_FIREBASE_SERVICE_ACCOUNT_PATH` for PHP, or use the corresponding fields in server-only `config.php`. The project ID must match the service account and Firebase app. Never place the service-account JSON in `config.php`, the repository, or the web root.
+4. Upload the two age-eligibility PHP files with the endpoint, deploy the matching Firestore rules, and run `php.exe test_age_eligibility.php` plus `npm run test:rules` before release.
+5. Test using a Play-installed build and a Play license tester. A sideloaded debug build normally cannot satisfy the licensing verdict.
+
+The endpoint does not store ID tokens, Integrity tokens, or age ranges. It rate-limits requests by source IP, uses Google's Standard API replay protection, and returns a short-lived claim; the app refreshes its Firebase ID token after the claim is updated. The existing app-held HMAC used for the AI server key is not used as age proof. Do not rely on Firestore access until the API configuration and Play Console linkage are complete.
 
 ## Chat content safety
 
@@ -54,7 +68,7 @@ Requests that would spend the server key must also send `X-Dost-App-Credential`.
 
 `X-OpenRouter-Key` still selects the caller's own key. Those requests skip the credential gate because they do not spend the server key, and the key is still not written to the conversation archive or the diagnostic log. Message logging (`operation=log_message`) also does not spend the server key and does not require the credential. Per-IP limits stay in front of both paths: 30 AI requests per minute and 120 log requests per minute.
 
-Already-installed builds do not send `X-Dost-App-Credential`. After this API is deployed with the secret set, those builds cannot spend the server key until users update to a build that contains the matching secret. They can still chat if they enter their own OpenRouter key. To keep old builds on the server key during the rollout, set `DOST_ALLOW_LEGACY_SERVER_KEY=1`. That restores unauthenticated server-key spend. Turn it off once the updated app is out. The credential is an app-held HMAC secret, not Play Integrity. Someone who extracts it from the APK can still call the API. Play Integrity would need a Play Console project, a Google service account on this host, and a client attestation call.
+Already-installed builds do not send `X-Dost-App-Credential`. After this API is deployed with the secret set, those builds cannot spend the server key until users update to a build that contains the matching secret. They can still chat if they enter their own OpenRouter key. To keep old builds on the server key during the rollout, set `DOST_ALLOW_LEGACY_SERVER_KEY=1`. That restores unauthenticated server-key spend. Turn it off once the updated app is out. The credential is an app-held HMAC secret, not Play Integrity. Someone who extracts it from the APK can still call the API.
 
 With no `X-OpenRouter-Key` request header, a request that passes the credential gate uses the server key and only permits the app's listed `:free` models. If the app sends a user's own key in that HTTPS header, any syntactically valid OpenRouter `provider/model` ID is accepted and billed to that user's OpenRouter account. The endpoint does not store the custom key. Review usage and rotate the server key if it is exposed.
 
