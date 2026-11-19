@@ -4,6 +4,8 @@
 
 See the [Dost App Overview](APP_OVERVIEW_FOR_USERS.md) for a user-facing summary of current features. Product improvement and launch ideas are in [Improvement and Marketing Proposals](APP_IMPROVEMENT_AND_MARKETING_PROPOSALS.md).
 
+For end-to-end Firebase, Hostinger backend, People calling, and APK setup, see the [Setup and Build Guide](SETUP_AND_BUILD_GUIDE.md).
+
 ## Firebase Authentication setup
 
 Firebase Authentication provides email/password accounts, email verification, password reset, and Google sign-in. Account identity is stored with Firebase; profiles, friends, and conversations remain local to the device.
