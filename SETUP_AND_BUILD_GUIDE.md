@@ -9,7 +9,7 @@ This guide covers a fresh Dost setup: Firebase, the Hostinger PHP API, People ca
 - An OpenRouter account if you want to use a server-managed AI key.
 - Node.js and the Firebase CLI for deploying and testing Firestore rules.
 - A Java JDK and Android SDK installed. The project is configured for Android SDK platform 37.0 and Java 11 source compatibility; use the JDK configured for your Gradle environment.
-- A coturn-compatible TURN server for reliable People audio/video calls.
+- Cloudflare Realtime TURN, or a coturn-compatible TURN server, for reliable People audio/video calls.
 
 The Android package and Firebase Android app ID must be `com.snigtus.dost`. The app currently sends API requests to `bisque-bear-900175.hostingersite.com`. If you deploy to a different hostname, update the API URL constants in the Android clients and rebuild the APK.
 
@@ -78,8 +78,10 @@ Set these values in Hostinger's PHP environment or the server-only `config.php` 
 | Firebase Web API key | `DOST_FIREBASE_WEB_API_KEY` | Used by the server's Firebase REST requests. It is not a service-account credential. |
 | Age-eligibility service account | `DOST_FIREBASE_SERVICE_ACCOUNT_PATH` | Absolute path to a key file outside `public_html`; grant only `firebaseauth.users.get` and `firebaseauth.users.update`. |
 | People-call service account | `DOST_CALL_SERVICE_ACCOUNT_PATH` | Absolute path outside `public_html`; grant only the permissions documented in the [API guide](app/api/README.md#people-audio-and-video-calls). |
-| TURN server URLs | `DOST_TURN_URLS` | Comma-separated `turn:` / `turns:` URLs reachable by the app. |
-| TURN shared secret | `DOST_TURN_SHARED_SECRET` | Match coturn's `use-auth-secret` secret. Never include it in the app or source control. |
+| Cloudflare TURN key ID | `DOST_CLOUDFLARE_TURN_KEY_ID` | From Cloudflare dashboard → Realtime → TURN, after creating a TURN app. Preferred TURN source. |
+| Cloudflare TURN API token | `DOST_CLOUDFLARE_TURN_API_TOKEN` | Bearer token for that TURN key. Server only; never put it in the app, logs, or source control. |
+| TURN server URLs | `DOST_TURN_URLS` | Coturn fallback only, used when both Cloudflare values are empty. Comma-separated `turn:` / `turns:` URLs. |
+| TURN shared secret | `DOST_TURN_SHARED_SECRET` | Coturn fallback only. Match coturn's `use-auth-secret` secret. Never include it in the app or source control. |
 | Archive storage | `DOST_CONVERSATION_STORAGE_DIR` | Optional absolute writable path outside the web root; use it if the documented default is unavailable. |
 
 Use separate, randomly generated values for the app credential and TURN shared secret. Keep each service-account key outside the web root and source control. Do not grant broad project roles such as Owner or Editor to these service accounts.
@@ -88,7 +90,7 @@ For the complete endpoint permissions, variable fallbacks, and coturn requiremen
 
 ### Provision TURN and retention
 
-Configure coturn separately using the same `DOST_TURN_SHARED_SECRET` and `use-auth-secret`; expose the configured listener and relay ports through the server firewall. Use a valid TLS certificate for `turns:` URLs. The app can signal a call without TURN, but calls may fail on networks that block direct peer connections.
+For People calls, create a TURN app in the Cloudflare dashboard under **Realtime → TURN** and set `DOST_CLOUDFLARE_TURN_KEY_ID` and `DOST_CLOUDFLARE_TURN_API_TOKEN` to that app's key ID and API token. The API then requests one-hour ICE servers from Cloudflare. Leave both values empty to keep the coturn fallback: configure coturn separately using the same `DOST_TURN_SHARED_SECRET` and `use-auth-secret`, expose the configured listener and relay ports through the server firewall, and use a valid TLS certificate for `turns:` URLs. The app can signal a call without TURN, but calls may fail on networks that block direct peer connections.
 
 Configure a daily Hostinger cron job to run `cleanup_logs.php` with PHP CLI. Confirm it runs successfully before relying on archive-retention cleanup. Firestore TTL separately removes call signaling and ICE-candidate documents; the cron job does not replace Firestore TTL.
 
@@ -174,7 +176,7 @@ For Google Play distribution, configure Play App Signing and follow Play Console
 - [ ] TTL is enabled for `calls`, `callerCandidates`, and `calleeCandidates`.
 - [ ] Hostinger endpoints, helper files, service accounts, PHP extensions, and environment values are configured.
 - [ ] The shared app credential matches between Hostinger and the release build; no service-account or TURN secret is in the APK.
-- [ ] coturn, TLS, firewall access, and TURN URLs are verified.
+- [ ] Cloudflare Realtime TURN credentials are set, or the coturn fallback (TLS, firewall access, and TURN URLs) is verified.
 - [ ] The archive cleanup cron is configured and checked.
 - [ ] Android unit tests, Firestore emulator rules tests, and PHP tests pass.
 - [ ] Two separate devices have been used to test incoming FCM alerts in the background and audio/video calls on real networks.

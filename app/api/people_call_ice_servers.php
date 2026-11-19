@@ -16,11 +16,13 @@ if ($idToken === '') {
     dost_call_respond(401, array('error' => 'Sign-in required'));
 }
 $settings = dost_call_config();
-if ($settings === false
-    || count($settings['turn_urls']) === 0
-    || strlen($settings['turn_secret']) < 32
+$turnState = dost_call_cloudflare_turn_settings_state($settings);
+if ($settings === false || $turnState === 'incomplete'
+    || ($turnState !== 'configured' && !dost_call_coturn_configured($settings))
 ) {
-    error_log('Dost People call TURN service is not configured.');
+    error_log($turnState === 'incomplete'
+        ? 'Dost People call Cloudflare TURN settings are incomplete.'
+        : 'Dost People call TURN service is not configured.');
     dost_call_respond(503, array('error' => 'People calling is not configured'));
 }
 $authorization = dost_call_authorize(
@@ -35,18 +37,11 @@ $authorization = dost_call_authorize(
 if ($authorization['status'] !== 200) {
     dost_call_respond($authorization['status'], array('error' => $authorization['message']));
 }
-$credentials = dost_call_turn_credentials(
-    $settings['turn_urls'],
-    $settings['turn_secret'],
-    $authorization['uid'],
-    time(),
-    3600
-);
-if ($credentials === false) {
-    error_log('Dost People call TURN configuration is invalid.');
-    dost_call_respond(503, array('error' => 'People calling is not configured'));
+$issued = dost_call_issue_ice_servers($settings, $authorization['uid'], time());
+if ($issued === false) {
+    error_log($turnState === 'configured'
+        ? 'Dost People call Cloudflare TURN credential request failed.'
+        : 'Dost People call TURN configuration is invalid.');
+    dost_call_respond(503, array('error' => 'People calling is unavailable'));
 }
-dost_call_respond(200, array(
-    'ice_servers' => $credentials,
-    'expires_in' => 3600
-));
+dost_call_respond(200, $issued);
