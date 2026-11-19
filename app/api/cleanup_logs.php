@@ -8,7 +8,7 @@ if (PHP_SAPI !== 'cli') {
 require_once __DIR__ . '/archive_store.php';
 require_once __DIR__ . '/telemetry_store.php';
 
-define('DOST_RETENTION_DAYS', 3650);
+define('DOST_RETENTION_DAYS', 1095);
 
 function is_within_storage_root($path, $root)
 {

@@ -11,6 +11,8 @@ import org.json.JSONObject
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import java.security.MessageDigest
+import java.time.LocalDate
 import java.time.ZoneId
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -19,17 +21,145 @@ import javax.crypto.spec.GCMParameterSpec
 
 private const val SYSTEM_FRIEND_PASS_KEY_PREFIX = "system_friend_passed_at_"
 internal const val SYSTEM_FRIEND_PASS_DURATION_MILLIS = 7L * 24L * 60L * 60L * 1000L
+internal const val LEGACY_PROFILE_NAMESPACE = "legacy"
+private const val ACCOUNT_REGISTRY_PREFERENCES = "dost_account_registry"
+private const val ACTIVE_PROFILE_NAMESPACE = "active_profile_namespace"
+private val profileRegistryLock = Any()
+
+internal fun accountProfileNamespace(accountId: String): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(accountId.toByteArray(StandardCharsets.UTF_8))
+    return "account_" + digest.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+}
+
+internal fun profileNamespaceForAccount(
+    activeNamespace: String,
+    storedAccountIds: List<String>,
+    accountId: String,
+    mappedNamespace: String?
+): String = mappedNamespace ?: if (
+    activeNamespace == LEGACY_PROFILE_NAMESPACE &&
+    (storedAccountIds.isEmpty() || accountId in storedAccountIds)
+) {
+    LEGACY_PROFILE_NAMESPACE
+} else {
+    accountProfileNamespace(accountId)
+}
+
+internal fun activeProfileNamespace(context: Context): String =
+    context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+        .getString(ACTIVE_PROFILE_NAMESPACE, LEGACY_PROFILE_NAMESPACE)
+        ?.takeIf { it == LEGACY_PROFILE_NAMESPACE || it.matches(Regex("account_[0-9a-f]{64}")) }
+        ?: LEGACY_PROFILE_NAMESPACE
+
+internal fun activeProfilePreferences(context: Context): SharedPreferences =
+    profilePreferences(context, activeProfileNamespace(context))
+
+internal fun languageForActiveProfile(context: Context): AppLanguage {
+    val preferences = activeProfilePreferences(context)
+    return when (preferences.getString("language", "bn")) {
+        "en" -> AppLanguage.ENGLISH
+        "hi" -> AppLanguage.HINDI
+        else -> AppLanguage.BANGLA
+    }
+}
+
+private fun profilePreferences(context: Context, namespace: String): SharedPreferences =
+    ScopedSharedPreferences(
+        context.getSharedPreferences("dost_local_data", Context.MODE_PRIVATE),
+        if (namespace == LEGACY_PROFILE_NAMESPACE) "" else "$namespace."
+    )
+
+private class ScopedSharedPreferences(
+    private val delegate: SharedPreferences,
+    private val prefix: String
+) : SharedPreferences {
+    override fun getAll(): Map<String, *> = delegate.all
+        .filterKeys { it.startsWith(prefix) }
+        .mapKeys { it.key.removePrefix(prefix) }
+
+    override fun getString(key: String, defValue: String?): String? =
+        delegate.getString(scopedKey(key), defValue)
+
+    override fun getStringSet(key: String, defValues: Set<String>?): Set<String>? =
+        delegate.getStringSet(scopedKey(key), defValues)
+
+    override fun getInt(key: String, defValue: Int): Int = delegate.getInt(scopedKey(key), defValue)
+
+    override fun getLong(key: String, defValue: Long): Long = delegate.getLong(scopedKey(key), defValue)
+
+    override fun getFloat(key: String, defValue: Float): Float = delegate.getFloat(scopedKey(key), defValue)
+
+    override fun getBoolean(key: String, defValue: Boolean): Boolean = delegate.getBoolean(scopedKey(key), defValue)
+
+    override fun contains(key: String): Boolean = delegate.contains(scopedKey(key))
+
+    override fun edit(): SharedPreferences.Editor = ScopedEditor(delegate.edit(), delegate, prefix)
+
+    override fun registerOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        delegate.registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    override fun unregisterOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        delegate.unregisterOnSharedPreferenceChangeListener(listener)
+    }
+
+    private fun scopedKey(key: String): String = prefix + key
+}
+
+private class ScopedEditor(
+    private val delegate: SharedPreferences.Editor,
+    private val preferences: SharedPreferences,
+    private val prefix: String
+) : SharedPreferences.Editor {
+    override fun putString(key: String, value: String?): SharedPreferences.Editor =
+        this.also { delegate.putString(prefix + key, value) }
+
+    override fun putStringSet(key: String, values: Set<String>?): SharedPreferences.Editor =
+        this.also { delegate.putStringSet(prefix + key, values) }
+
+    override fun putInt(key: String, value: Int): SharedPreferences.Editor =
+        this.also { delegate.putInt(prefix + key, value) }
+
+    override fun putLong(key: String, value: Long): SharedPreferences.Editor =
+        this.also { delegate.putLong(prefix + key, value) }
+
+    override fun putFloat(key: String, value: Float): SharedPreferences.Editor =
+        this.also { delegate.putFloat(prefix + key, value) }
+
+    override fun putBoolean(key: String, value: Boolean): SharedPreferences.Editor =
+        this.also { delegate.putBoolean(prefix + key, value) }
+
+    override fun remove(key: String): SharedPreferences.Editor = this.also { delegate.remove(prefix + key) }
+
+    override fun clear(): SharedPreferences.Editor {
+        if (prefix.isEmpty()) return delegate.clear()
+        preferences.all.keys.filter { it.startsWith(prefix) }.forEach { delegate.remove(it) }
+        return this
+    }
+
+    override fun commit(): Boolean = delegate.commit()
+
+    override fun apply() = delegate.apply()
+}
 
 internal fun isSystemFriendPassActive(passedAtMillis: Long, nowMillis: Long): Boolean =
     passedAtMillis > 0L
         && passedAtMillis <= nowMillis
         && nowMillis - passedAtMillis < SYSTEM_FRIEND_PASS_DURATION_MILLIS
 
-class DostStore(context: Context) {
+class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     private val context = context
-    private val preferences: SharedPreferences = context.getSharedPreferences("dost_local_data", Context.MODE_PRIVATE)
-    private val messagesDirectory = File(context.filesDir, "messages").apply { mkdirs() }
-    private val chatImagesDirectory = File(context.filesDir, "chat_images").apply { mkdirs() }
+    internal val profileNamespace = requestedProfileNamespace
+        ?: activeProfileNamespace(context)
+    private val preferences = profilePreferences(context, profileNamespace)
+    private val profileFilesDirectory = if (profileNamespace == LEGACY_PROFILE_NAMESPACE) {
+        context.filesDir
+    } else {
+        File(context.filesDir, "profiles/$profileNamespace").apply { mkdirs() }
+    }
+    private val messagesDirectory = File(profileFilesDirectory, "messages").apply { mkdirs() }
+    internal val chatImagesDirectory = File(profileFilesDirectory, "chat_images").apply { mkdirs() }
+    internal val systemFriendPhotosDirectory = File(profileFilesDirectory, "system-friend-photos")
 
     init {
         preferences.edit().remove("openrouter_key").apply()
@@ -54,6 +184,33 @@ class DostStore(context: Context) {
 
     fun authenticationAccountId(): String = preferences.getString("authentication_account_id", "") ?: ""
 
+    fun activateAccount(accountId: String): Boolean {
+        if (accountId.isBlank()) return false
+        val registry = context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+        synchronized(profileRegistryLock) {
+            val activeNamespace = registry.getString(ACTIVE_PROFILE_NAMESPACE, LEGACY_PROFILE_NAMESPACE)
+                ?: LEGACY_PROFILE_NAMESPACE
+            val currentPreferences = profilePreferences(context, activeNamespace)
+            val storedIds = listOf(
+                currentPreferences.getString("authentication_account_id", "").orEmpty(),
+                currentPreferences.getString("firebase_account_id", "").orEmpty()
+            ).filter(String::isNotBlank).distinct()
+            val mappingKey = "profile_for_${accountProfileNamespace(accountId)}"
+            val mappedNamespace = registry.getString(mappingKey, null)
+            val targetNamespace = profileNamespaceForAccount(
+                activeNamespace,
+                storedIds,
+                accountId,
+                mappedNamespace
+            )
+            check(registry.edit()
+                .putString(mappingKey, targetNamespace)
+                .putString(ACTIVE_PROFILE_NAMESPACE, targetNamespace)
+                .commit()) { "Could not switch local profiles." }
+            return targetNamespace != profileNamespace
+        }
+    }
+
     fun markAuthenticationRequired() {
         preferences.edit().putBoolean("authentication_required", true).apply()
     }
@@ -61,6 +218,11 @@ class DostStore(context: Context) {
     fun bindAuthenticationAccount(accountId: String) {
         if (accountId.isBlank()) return
         preferences.edit().putString("authentication_account_id", accountId).apply()
+        val registry = context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+        registry.edit()
+            .putString("profile_for_${accountProfileNamespace(accountId)}", profileNamespace)
+            .putString(ACTIVE_PROFILE_NAMESPACE, profileNamespace)
+            .apply()
     }
 
     /** Writes love scores back as 0 when romance is locked for this user or friend. */
@@ -87,7 +249,14 @@ class DostStore(context: Context) {
     fun userGender(): String = preferences.getString("user_gender", "") ?: ""
     fun firebaseAccountId(): String = preferences.getString("firebase_account_id", "") ?: ""
     fun linkFirebaseAccount(uid: String) {
-        if (uid.isNotBlank()) preferences.edit().putString("firebase_account_id", uid).apply()
+        if (uid.isNotBlank()) {
+            preferences.edit().putString("firebase_account_id", uid).apply()
+            val registry = context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+            registry.edit()
+                .putString("profile_for_${accountProfileNamespace(uid)}", profileNamespace)
+                .putString(ACTIVE_PROFILE_NAMESPACE, profileNamespace)
+                .apply()
+        }
     }
     fun userTimeZoneId(): String = validZoneId(preferences.getString("user_time_zone", ZoneId.systemDefault().id) ?: ZoneId.systemDefault().id).id
     fun saveUserTimeZoneId(timeZoneId: String) {
@@ -237,6 +406,11 @@ class DostStore(context: Context) {
                 put("events", events)
                 put("relationshipOutcomes", JSONArray(loadRelationshipOutcomeIds(friend.id)))
                 put("relationshipFingerprints", JSONArray(loadRelationshipOutcomeFingerprints(friend.id)))
+                val dailyGain = loadRelationshipDailyGain(friend.id)
+                put("relationshipDailyGain", JSONObject().apply {
+                    put("dayKey", dailyGain.dayKey)
+                    put("points", dailyGain.points)
+                })
                 put("sharedMoments", sharedMoments)
                 put("messages", backupMessages)
                 put("currentSessionId", currentSessionId(friend.id) ?: "")
@@ -325,8 +499,9 @@ class DostStore(context: Context) {
             val item = friendItems.getJSONObject(index)
             val friendProfile = item.getJSONObject("profile")
             val friend = friendFromJson(friendProfile)
+            // Retain legacy underage profiles on import; the chat path blocks messaging without discarding history.
             require(isBackupUuid(friend.id) && friendIds.add(friend.id)
-                && friend.name.isNotBlank() && friendAgeResult(friend.age) == AccountAgeResult.VALID
+                && friend.name.isNotBlank() && profileAgeOrNull(friend.age) != null
                 && friend.gender.isNotBlank()
             ) { "The backup contains an invalid friend." }
             require(
@@ -418,6 +593,20 @@ class DostStore(context: Context) {
             require(relationshipFingerprints.all(::isBackupUuid)
                 && relationshipFingerprints.distinct().size == relationshipFingerprints.size
             ) { "The backup contains invalid relationship fingerprints." }
+            val dailyGainJson = item.optJSONObject("relationshipDailyGain")
+            require(!item.has("relationshipDailyGain") || dailyGainJson != null) {
+                "The backup contains invalid daily relationship gains."
+            }
+            val dailyGain = dailyGainJson?.let {
+                val dayKey = backupString(it, "dayKey", 10)
+                val points = it.getInt("points")
+                val validDay = dayKey.isEmpty() ||
+                    runCatching { LocalDate.parse(dayKey).toString() == dayKey }.getOrDefault(false)
+                require(validDay && points in 0..DAILY_FRIENDSHIP_GAIN_CAP
+                    && (dayKey.isNotEmpty() || points == 0)
+                ) { "The backup contains invalid daily relationship gains." }
+                RelationshipDailyGain(dayKey, points)
+            } ?: RelationshipDailyGain("", 0)
             val momentsJson = item.optJSONArray("sharedMoments") ?: JSONArray()
             require(momentsJson.length() <= MAX_SHARED_MOMENTS) { "The backup has too many shared moments." }
             val sharedMoments = List(momentsJson.length()) { momentIndex ->
@@ -490,6 +679,7 @@ class DostStore(context: Context) {
                 events,
                 relationshipOutcomes,
                 relationshipFingerprints,
+                dailyGain,
                 sharedMoments,
                 messages,
                 currentSessionId
@@ -574,6 +764,8 @@ class DostStore(context: Context) {
                 }.toString())
                 editor.putString("relationship_outcomes_$friendId", JSONArray(imported.relationshipOutcomes).toString())
                 editor.putString("relationship_fingerprints_$friendId", JSONArray(imported.relationshipFingerprints).toString())
+                editor.putString("relationship_daily_gain_day_$friendId", imported.dailyGain.dayKey)
+                    .putInt("relationship_daily_gain_points_$friendId", imported.dailyGain.points)
                 editor.putString("shared_moments_$friendId", sharedMomentsToJson(imported.sharedMoments).toString())
                 imported.currentSessionId.takeIf(String::isNotEmpty)?.let {
                     editor.putString("current_session_$friendId", it)
@@ -619,21 +811,22 @@ class DostStore(context: Context) {
 
     internal fun applyRelationshipOutcome(
         friendId: String,
-        sessionId: String,
+        outcomeId: String,
         fingerprint: String?,
-        transform: (Friend) -> Friend
+        friendshipImpact: Int,
+        transform: (Friend, Int) -> Friend
     ): RelationshipApplication? = synchronized(preferences) {
-        require(isBackupUuid(sessionId)) { "The relationship outcome session is invalid." }
+        require(isBackupUuid(outcomeId)) { "The relationship outcome message is invalid." }
         val outcomes = loadRelationshipOutcomeIds(friendId)
         val fingerprints = loadRelationshipOutcomeFingerprints(friendId)
         val friends = loadFriends()
         val index = friends.indexOfFirst { it.id == friendId }
         if (index < 0) return null
-        if (!shouldApplyRelationshipOutcome(outcomes, sessionId)) return RelationshipApplication(friends[index], false)
+        if (!shouldApplyRelationshipOutcome(outcomes, outcomeId)) return RelationshipApplication(friends[index], false)
 
         val previous = friends[index]
-        val nextOutcomes = (outcomes + sessionId).takeLast(MAX_RELATIONSHIP_OUTCOMES)
-        if (!shouldApplyRelationshipOutcome(outcomes, fingerprints, sessionId, fingerprint)) {
+        val nextOutcomes = (outcomes + outcomeId).takeLast(MAX_RELATIONSHIP_OUTCOMES)
+        if (!shouldApplyRelationshipOutcome(outcomes, fingerprints, outcomeId, fingerprint)) {
             check(
                 preferences.edit()
                     .putString("relationship_outcomes_$friendId", JSONArray(nextOutcomes).toString())
@@ -641,11 +834,19 @@ class DostStore(context: Context) {
             ) { "Could not save the relationship outcome." }
             return RelationshipApplication(previous, false)
         }
-        val updated = transform(previous)
+        val today = LocalDate.now(ZoneId.of(userTimeZoneId())).toString()
+        val storedDailyGain = loadRelationshipDailyGain(friendId)
+        val pointsGainedToday = if (storedDailyGain.dayKey == today) storedDailyGain.points else 0
+        val cappedImpact = cappedDailyFriendshipImpact(friendshipImpact, pointsGainedToday)
+        val updated = transform(previous, cappedImpact)
+        val actualGain = (updated.friendshipScore - previous.friendshipScore).coerceAtLeast(0)
+        val newDailyGain = (pointsGainedToday + actualGain).coerceAtMost(DAILY_FRIENDSHIP_GAIN_CAP)
         friends[index] = updated
         val editor = preferences.edit()
             .putString("friends", friendsToJson(friends).toString())
             .putString("relationship_outcomes_$friendId", JSONArray(nextOutcomes).toString())
+            .putString("relationship_daily_gain_day_$friendId", today)
+            .putInt("relationship_daily_gain_points_$friendId", newDailyGain)
         if (fingerprint != null) {
             val nextFingerprints = (fingerprints + fingerprint).takeLast(MAX_RELATIONSHIP_FINGERPRINTS)
             editor.putString("relationship_fingerprints_$friendId", JSONArray(nextFingerprints).toString())
@@ -654,7 +855,7 @@ class DostStore(context: Context) {
         val nextStage = friendshipStageIndex(updated.friendshipScore)
         if (nextStage > previousStage) {
             val moment = SharedMoment(
-                id = stableIdempotencyKey("relationship-stage:$friendId:$sessionId:$nextStage"),
+                id = stableIdempotencyKey("relationship-stage:$friendId:$outcomeId:$nextStage"),
                 title = "Relationship stage",
                 detail = "A conversation helped your friendship reach a new stage.",
                 createdAtMillis = System.currentTimeMillis(),
@@ -677,6 +878,12 @@ class DostStore(context: Context) {
         val json = JSONArray(preferences.getString("relationship_fingerprints_$friendId", "[]"))
         List(json.length()) { index -> json.getString(index) }
     }.getOrDefault(emptyList())
+
+    private fun loadRelationshipDailyGain(friendId: String): RelationshipDailyGain = RelationshipDailyGain(
+        dayKey = preferences.getString("relationship_daily_gain_day_$friendId", "").orEmpty(),
+        points = preferences.getInt("relationship_daily_gain_points_$friendId", 0)
+            .coerceIn(0, DAILY_FRIENDSHIP_GAIN_CAP)
+    )
 
     fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
         preferences.edit().putString("friends", friendsToJson(friends).toString()).apply()
@@ -879,6 +1086,8 @@ class DostStore(context: Context) {
             .remove("session_summaries_${friend.id}")
             .remove("relationship_outcomes_${friend.id}")
             .remove("relationship_fingerprints_${friend.id}")
+            .remove("relationship_daily_gain_day_${friend.id}")
+            .remove("relationship_daily_gain_points_${friend.id}")
             .remove("shared_moments_${friend.id}")
             .remove("unread_${friend.id}")
             .remove("current_session_${friend.id}")
@@ -892,14 +1101,13 @@ class DostStore(context: Context) {
 
     private fun deleteChatImage(path: String) {
         runCatching {
-            val directory = File(context.filesDir, "chat_images").canonicalFile
             val image = File(path).canonicalFile
-            if (image.parentFile == directory && image.isFile) image.delete()
+            if (image.parentFile == chatImagesDirectory.canonicalFile && image.isFile) image.delete()
         }
     }
 
     private fun deleteFriendPhotos(friend: Friend) {
-        val directory = File(context.filesDir, "system-friend-photos")
+        val directory = systemFriendPhotosDirectory
         val canonicalDirectory = runCatching { directory.canonicalFile }.getOrNull() ?: return
         val photoUri = Uri.parse(friend.photoUri)
         if (photoUri.scheme == "file") {
@@ -1080,6 +1288,7 @@ class DostStore(context: Context) {
                 .putLong("last_proactive_global_sent", nowMillis)
                 .apply()
         }
+
     }
 
     fun loadPlannedEvents(friendId: String): List<PlannedEvent> = runCatching {
@@ -1326,10 +1535,13 @@ class DostStore(context: Context) {
         val events: List<PlannedEvent>,
         val relationshipOutcomes: List<String>,
         val relationshipFingerprints: List<String>,
+        val dailyGain: RelationshipDailyGain,
         val sharedMoments: List<SharedMoment>,
         val messages: List<ImportedBackupMessage>,
         val currentSessionId: String
     )
+
+    private data class RelationshipDailyGain(val dayKey: String, val points: Int)
 
     private data class ImportedBackupMessage(var message: ChatMessage, val imageBytes: ByteArray?)
 

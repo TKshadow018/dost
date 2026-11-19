@@ -2,6 +2,12 @@
 
 package com.snigtus.dost
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -28,12 +34,14 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
@@ -69,6 +77,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
@@ -117,6 +126,18 @@ internal fun PeopleScreen(
     var blockRequestConfirmation by remember { mutableStateOf<SocialContactRequest?>(null) }
     var reportRequest by remember { mutableStateOf<SocialContactRequest?>(null) }
     var requestReportReason by rememberSaveable { mutableStateOf("") }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val warning = socialLabel(
+            language,
+            "Enable notifications to receive incoming call alerts.",
+            "ইনকামিং কলের সতর্কতা পেতে নোটিফিকেশন চালু করুন।",
+            "इनकमिंग कॉल अलर्ट पाने के लिए नोटिफिकेशन चालू करें।"
+        )
+        if (!granted) notice = warning
+        else if (notice == warning) notice = ""
+    }
     val isPublic = ownProfile?.isPublic == true
     val currentProfile = ownProfile ?: newPublicProfile(
         uid = uid,
@@ -150,6 +171,34 @@ internal fun PeopleScreen(
             fatalError = error.message ?: socialLabel(language, "Could not load your profile.", "আপনার প্রোফাইল লোড করা যায়নি।", "आपकी प्रोफ़ाइल लोड नहीं हो सकी।")
         } finally {
             loadingProfile = false
+        }
+    }
+
+    LaunchedEffect(uid) {
+        if (uid.isBlank()) return@LaunchedEffect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        try {
+            repository.messagingToken(uid)
+            if (!ReplyNotifier.canNotify(context)) {
+                notice = socialLabel(
+                    language,
+                    "Enable notifications to receive incoming call alerts.",
+                    "ইনকামিং কলের সতর্কতা পেতে নোটিফিকেশন চালু করুন।",
+                    "इनकमिंग कॉल अलर्ट पाने के लिए नोटिफिकेशन चालू करें।"
+                )
+            }
+        } catch (error: Exception) {
+            notice = error.message ?: socialLabel(
+                language,
+                "Could not enable incoming call alerts on this device.",
+                "এই ডিভাইসে ইনকামিং কলের সতর্কতা চালু করা যায়নি।",
+                "इस डिवाइस पर इनकमिंग कॉल अलर्ट चालू नहीं हो सके।"
+            )
         }
     }
 
@@ -634,9 +683,9 @@ private fun PeopleProfileEditor(
             Text(
                 socialLabel(
                     language,
-                    "Discovery separates under-18 profiles from adult profiles. A profile becomes visible only after you publish it. You can hide or delete it at any time.",
-                    "১৮ বছরের কম বয়সীদের প্রোফাইল প্রাপ্তবয়স্কদের থেকে আলাদা দেখানো হয়। প্রকাশ করলে তবেই প্রোফাইল দেখা যাবে। যেকোনো সময় লুকাতে বা মুছতে পারবেন।",
-                    "18 वर्ष से कम उम्र वालों की प्रोफ़ाइल वयस्कों से अलग रहती है। प्रकाशित करने पर ही प्रोफ़ाइल दिखेगी। आप इसे कभी भी छिपा या हटा सकते हैं।"
+                    "Discovery shows adult age groups only. A profile becomes visible only after you publish it. You can hide or delete it at any time.",
+                    "ডিসকভারিতে শুধু প্রাপ্তবয়স্কদের বয়সের গোষ্ঠী দেখানো হয়। প্রকাশ করলে তবেই প্রোফাইল দেখা যাবে। যেকোনো সময় লুকাতে বা মুছতে পারবেন।",
+                    "डिस्कवरी में केवल वयस्क आयु-वर्ग दिखते हैं। प्रकाशित करने पर ही प्रोफ़ाइल दिखेगी। आप इसे कभी भी छिपा या हटा सकते हैं।"
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -975,6 +1024,40 @@ internal fun PeopleChatScreen(
                 },
                 navigationIcon = { DostBackButton(language, onBack) },
                 actions = {
+                    IconButton(onClick = {
+                        context.startActivity(
+                            Intent(context, PeopleCallActivity::class.java).apply {
+                                action = PeopleCallActivity.ACTION_START_OUTGOING
+                                putExtra(PeopleCallActivity.EXTRA_CHAT_ID, conversation.id)
+                                putExtra(PeopleCallActivity.EXTRA_CALLER_UID, uid)
+                                putExtra(PeopleCallActivity.EXTRA_CALLEE_UID, conversation.peer.uid)
+                                putExtra(PeopleCallActivity.EXTRA_PEER_NAME, conversation.peer.displayName)
+                                putExtra(PeopleCallActivity.EXTRA_MEDIA_TYPE, "audio")
+                            }
+                        )
+                    }) {
+                        Icon(
+                            Icons.Filled.Call,
+                            contentDescription = socialLabel(language, "Start audio call", "অডিও কল শুরু করুন", "ऑडियो कॉल शुरू करें")
+                        )
+                    }
+                    IconButton(onClick = {
+                        context.startActivity(
+                            Intent(context, PeopleCallActivity::class.java).apply {
+                                action = PeopleCallActivity.ACTION_START_OUTGOING
+                                putExtra(PeopleCallActivity.EXTRA_CHAT_ID, conversation.id)
+                                putExtra(PeopleCallActivity.EXTRA_CALLER_UID, uid)
+                                putExtra(PeopleCallActivity.EXTRA_CALLEE_UID, conversation.peer.uid)
+                                putExtra(PeopleCallActivity.EXTRA_PEER_NAME, conversation.peer.displayName)
+                                putExtra(PeopleCallActivity.EXTRA_MEDIA_TYPE, "video")
+                            }
+                        )
+                    }) {
+                        Icon(
+                            Icons.Filled.Videocam,
+                            contentDescription = socialLabel(language, "Start video call", "ভিডিও কল শুরু করুন", "वीडियो कॉल शुरू करें")
+                        )
+                    }
                     Box {
                         IconButton(onClick = { showMenu = true }) {
                             Icon(

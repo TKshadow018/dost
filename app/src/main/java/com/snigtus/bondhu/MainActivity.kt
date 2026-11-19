@@ -40,6 +40,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
+import androidx.core.app.NotificationManagerCompat
+import androidx.work.WorkManager
 import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -55,16 +57,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val reloadProfile = intent.getBooleanExtra(EXTRA_RELOAD_PROFILE, false)
+        intent.removeExtra(EXTRA_RELOAD_PROFILE)
         if (savedInstanceState == null) publishOpenFriend(intent)
         enableEdgeToEdge()
         setContent {
             DostTheme {
                 val ageGateLanguage = remember(this@MainActivity) {
-                    when (getSharedPreferences("dost_local_data", MODE_PRIVATE).getString("language", "bn")) {
-                        "en" -> AppLanguage.ENGLISH
-                        "hi" -> AppLanguage.HINDI
-                        else -> AppLanguage.BANGLA
-                    }
+                    languageForActiveProfile(this@MainActivity)
                 }
                 PlayAgeSignalsGate(
                     activity = this@MainActivity,
@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val viewModel = remember(this@MainActivity) {
                         ViewModelProvider(this@MainActivity)[DostAppViewModel::class.java].also {
-                            savedInstanceState?.let { state ->
+                            savedInstanceState?.takeUnless { reloadProfile }?.let { state ->
                                 it.restoreNavigationState(
                                     state.getString(KEY_SCREEN),
                                     state.getString(KEY_SELECTED_FRIEND_ID)
@@ -107,6 +107,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun publishOpenFriend(intent: Intent?) {
+        val requestedProfile = intent?.getStringExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE)
+            ?: LEGACY_PROFILE_NAMESPACE
+        if (requestedProfile != activeProfileNamespace(this)) return
         val friendId = intent?.getStringExtra(ChatLaunch.EXTRA_FRIEND_ID)?.takeIf { it.isNotBlank() } ?: return
         openFriendRequests.value = OpenFriendRequest(friendId, System.nanoTime())
     }
@@ -114,6 +117,7 @@ class MainActivity : ComponentActivity() {
 
 private const val KEY_SCREEN = "screen"
 private const val KEY_SELECTED_FRIEND_ID = "selected_friend_id"
+private const val EXTRA_RELOAD_PROFILE = "reload_profile"
 
 private fun Context.activityOrNull(): Activity? {
     var current: Context? = this
@@ -125,6 +129,16 @@ private fun Context.activityOrNull(): Activity? {
         current = base
     }
     return null
+}
+
+private fun restartForActiveProfile(context: Context): Boolean {
+    val activity = context.activityOrNull() as? MainActivity ?: return false
+    WorkManager.getInstance(context).cancelAllWork()
+    NotificationManagerCompat.from(context).cancelAll()
+    activity.viewModelStore.clear()
+    activity.intent.putExtra(EXTRA_RELOAD_PROFILE, true)
+    activity.recreate()
+    return true
 }
 
 @Composable
@@ -341,6 +355,13 @@ fun DostApp(
     }
 
     fun completeAuthentication(account: AuthAccount) {
+        if (store.activateAccount(account.uid)) {
+            if (!restartForActiveProfile(context)) {
+                authRepository.signOut()
+                authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+            }
+            return
+        }
         if (!canBindLocalProfile(account.uid)) {
             authRepository.signOut()
             authMode = AuthMode.SIGN_IN
@@ -492,8 +513,16 @@ fun DostApp(
         if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
         if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
-            authRepository.signOut()
-            authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+            if (store.activateAccount(currentAccountId)) {
+                if (!restartForActiveProfile(context)) {
+                    authRepository.signOut()
+                    authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                }
+            } else {
+                authRepository.signOut()
+                authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+            }
+            return@LaunchedEffect
         }
         selectedFriend = null
         screen = AppScreen.AUTH
@@ -715,7 +744,7 @@ fun DostApp(
                 screen = AppScreen.SPLASH
             }
         )
-        AppScreen.SPLASH -> DostSplashScreen(language, chatLanguage) {
+        AppScreen.SPLASH -> DostSplashScreen(language, chatLanguage, onFinished = finishSplash@{
             var currentAccount = authRepository.currentAccount
             if (currentAccount?.needsEmailVerification == true) {
                 email = currentAccount.email
@@ -731,10 +760,21 @@ fun DostApp(
             } else {
                 if (currentAccount != null) {
                     if (!canBindLocalProfile(currentAccount.uid)) {
-                        store.markAuthenticationRequired()
-                        authRepository.signOut()
-                        currentAccount = null
-                        authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                        if (store.activateAccount(currentAccount.uid)) {
+                            if (!restartForActiveProfile(context)) {
+                                store.markAuthenticationRequired()
+                                authRepository.signOut()
+                                currentAccount = null
+                                authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                            } else {
+                                return@finishSplash
+                            }
+                        } else {
+                            store.markAuthenticationRequired()
+                            authRepository.signOut()
+                            currentAccount = null
+                            authRequestState = AuthRequestState.Error(authenticationAccountMismatchText(language))
+                        }
                     } else {
                         store.bindAuthenticationAccount(currentAccount.uid)
                         store.linkFirebaseAccount(currentAccount.uid)
@@ -760,7 +800,7 @@ fun DostApp(
                     screen = destination
                 }
             }
-        }
+        })
         AppScreen.AUTH -> AuthScreen(
             language = language,
             initialEmail = email,
@@ -856,6 +896,7 @@ fun DostApp(
             friends = friends,
             userTimeZoneId = userTimeZoneId,
             signedInEmail = authRepository.currentAccount?.email,
+            installationId = store.installationId(),
             openRouterApiKey = openRouterApiKey,
             aiModel = aiModel,
             anonymousTelemetryEnabled = anonymousTelemetryEnabled,
@@ -946,6 +987,15 @@ fun DostApp(
                 authMode = AuthMode.SIGN_IN
                 authRequestState = AuthRequestState.Idle
                 screen = AppScreen.AUTH
+            },
+            onCopyInstallationId = {
+                val clipboard = checkNotNull(context.getSystemService(android.content.ClipboardManager::class.java)) {
+                    "Clipboard is unavailable."
+                }
+                clipboard.setPrimaryClip(
+                    android.content.ClipData.newPlainText("Dost installation ID", store.installationId())
+                )
+                settingsNotice = "Installation ID copied."
             },
             onExportLocalData = {
                 backupPassword = ""

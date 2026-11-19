@@ -61,6 +61,24 @@ function dost_app_credential_status($presented, $installationId, $now, $config)
     return '';
 }
 
+function dost_required_app_credential_decision($presented, $installationId, $now, $config)
+{
+    $status = dost_app_credential_status($presented, $installationId, $now, $config);
+    if ($status === '') {
+        return null;
+    }
+    if ($status === 'not_configured') {
+        return array(
+            'status' => 503,
+            'error' => 'Archive service is not configured on the server'
+        );
+    }
+    return array(
+        'status' => 401,
+        'error' => 'App credential required'
+    );
+}
+
 function dost_server_key_decision($usesClientKey, $presented, $installationId, $now, $config)
 {
     if ($usesClientKey || dost_legacy_server_key_allowed()) {

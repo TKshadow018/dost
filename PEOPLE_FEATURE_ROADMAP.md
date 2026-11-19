@@ -6,7 +6,7 @@ Extend Dost from AI companion chats into a safe, useful real-person messaging an
 
 Use familiar interaction patterns from mainstream messaging and dating products as inspiration, but build Dost's own visual design, terminology, safety model, and feature set rather than copying another app's branding or exact interface.
 
-Voice and video calling, VoIP, voice notes, and audio-message services are explicitly out of scope. The real-person experience will remain text-first, with image sharing as the planned media feature.
+One-to-one live audio and video calling are available as separate WebRTC media modes; text chat remains separate from call media. Voice notes and audio-message services remain out of scope.
 
 ## 2. Current baseline
 
@@ -17,10 +17,11 @@ The app already has a first, minimal real-person experience:
 - The People screen discovers published profiles and presents a swipe deck.
 - Selecting a profile opens an existing chat, starts a chat immediately when the recipient allows everyone, sends a contact request when required, or is refused when the recipient has disabled new chats.
 - Chat text is stored in Firestore and displayed live while the chat screen is open.
+- One-to-one audio and video calls use WebRTC media with Firestore signaling, FCM incoming-call alerts, and short-lived TURN credentials from the Hostinger API. The Android implementation still requires service deployment, TURN provisioning, Firestore TTL configuration, and device testing before release.
 - Users can block or report a person. Reports are restricted to Firebase project administrators and have a manual 72-hour review target, a support-email appeal path, and emergency-services guidance; there is no in-app moderation dashboard or automated report notification.
 - Play Age Signals is checked before any app screen is initialized; the app proceeds only when a shared age range starts at 18 or older. Signup also requires a self-reported age of 18 or older. Missing, minor, verification-required, and failed signals block the whole app.
 - Firestore profile rules accept adult age bands and the `adult` cohort only, deny reads of legacy under-18 People profiles and chats, and require an unexpired server-issued eligibility claim. Before opening People, the app binds the Firebase UID and eligibility result to a Play Integrity Standard token; the Hostinger API validates it and refreshes the claim for six hours.
-- Real-person chats currently support text only. There are no FCM message notifications, read receipts, typing indicators, online status, group conversations, media messages, or in-app social-chat deletion. Voice/video services are not planned.
+- Real-person text chats do not have message push notifications, read receipts, typing indicators, online status, group conversations, media messages, or in-app social-chat deletion. FCM is used only for incoming call alerts. Voice notes are not planned.
 - Current Firestore collections, rules, and indexes are described in [FIRESTORE_SETUP.md](./FIRESTORE_SETUP.md), [firestore.rules](./firestore.rules), and [firestore.indexes.json](./firestore.indexes.json).
 - Current data practices are described in [the privacy policy](./app/api/privacy-policy.txt).
 
@@ -28,7 +29,7 @@ The app already has a first, minimal real-person experience:
 
 1. **Separate AI and human conversations.** Keep separate models, screens, storage paths, notifications, exports, retention, and privacy disclosures.
 2. **Privacy by default.** A profile is private until published. Never publish email, exact age, exact location, Firebase UID, or contact details. Ask separately before uploading each photo or sharing optional profile fields.
-3. **Age safety before growth.** The user selected adult-only distribution because matchmaking is a core feature. Configure Play Console's Restrict Minor Access for the entire app. The client fails closed on Play Age Signals and Firestore requires a short-lived claim set after Play Integrity validation, but Age Signals is beta and is not independent age verification in every region; do not describe these controls as proof of age.
+3. **Age safety before growth.** The user selected adult-only distribution because matchmaking is a core feature. Configure Play Console's Restrict Minor Access for the entire app. The client requires a shared adult Play Age Signal or offers a local self-attestation when sharing is unavailable; minor and verification-required statuses still block access. Firestore requires a short-lived claim set after Play Integrity validation, but Age Signals is beta and neither control independently proves age in every region; do not describe them as proof of age.
 4. **Control unwanted contact.** Profile preferences can now allow everyone, require requests, or disable new chats; requests support accept, ignore, block, and report. Trusted account-level rate limits and report-response operations are still required before increasing discovery traffic.
 5. **Explicit retention and deletion.** Every new data type needs a stated purpose, retention period, user deletion behavior, and administrative cleanup path.
 6. **Secure server-authoritative actions.** Clients must not be trusted to assert moderation state, age eligibility, message delivery, or privileged group roles.
@@ -197,6 +198,6 @@ Any collection/schema change should include matching Firestore rules, indexes, e
 5. Improve profile/discovery and add mutual-match controls.
 6. Add groups only after roles and moderation tooling.
 7. Add statuses only after audience and media-retention controls.
-This order prioritizes a trustworthy text-first conversation experience over a large feature checklist. Voice/video services remain out of scope. The current AI companion features remain Dost's differentiator and should continue to receive dedicated product and reliability work alongside People.
+This order prioritizes a trustworthy conversation experience over a large feature checklist. Audio and video calling are separate, optional one-to-one features; voice notes remain out of scope. The current AI companion features remain Dost's differentiator and should continue to receive dedicated product and reliability work alongside People.
 
 Before a Play release, configure Restrict Minor Access in Play Console and test Age Signals with a Play-installed build or registered license tester. The app gate and self-reported signup age do not replace this setting or trusted server-side age assurance.

@@ -70,8 +70,8 @@ function validate_system_friend_profile($profile)
 
     if (isset($profile['age'])) {
         $age = filter_var($profile['age'], FILTER_VALIDATE_INT);
-        if ($age === false || $age < 13 || $age > 120) {
-            $errors[] = 'age must be an integer from 13 through 120.';
+        if ($age === false || $age < 18 || $age > 120) {
+            $errors[] = 'age must be an integer from 18 through 120.';
         }
     }
 

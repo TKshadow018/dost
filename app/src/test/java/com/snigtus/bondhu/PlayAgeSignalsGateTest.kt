@@ -16,4 +16,14 @@ class PlayAgeSignalsGateTest {
         assertFalse(adultAgeSignalAllowsAccess(true, 17, 18))
         assertFalse(adultAgeSignalAllowsAccess(true, 21, 18))
     }
+
+    @Test
+    fun selfAttestationIsAvailableOnlyWhenNoPlaySignalCanBeUsed() {
+        assertTrue(canSelfAttestAdultAge(PlayAgeAccess.NotShared))
+        assertTrue(canSelfAttestAdultAge(PlayAgeAccess.Unavailable("unavailable")))
+        assertFalse(canSelfAttestAdultAge(PlayAgeAccess.Checking))
+        assertFalse(canSelfAttestAdultAge(PlayAgeAccess.Allowed))
+        assertFalse(canSelfAttestAdultAge(PlayAgeAccess.Underage))
+        assertFalse(canSelfAttestAdultAge(PlayAgeAccess.VerificationRequired))
+    }
 }

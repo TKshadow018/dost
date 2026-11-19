@@ -19,10 +19,11 @@ internal class SystemFriendClient {
             val profile = profiles.getJSONObject(index)
             val id = profile.getString("id").takeIf(String::isNotBlank)
                 ?: throw IOException("A system friend profile has no ID")
+            val age = adultAge(profile)
             SystemFriendListing(
                 id = id,
                 name = requiredText(profile, "name"),
-                age = requiredText(profile, "age"),
+                age = age,
                 gender = requiredText(profile, "gender"),
                 category = requiredText(profile, "category"),
                 description = requiredText(profile, "description"),
@@ -39,7 +40,7 @@ internal class SystemFriendClient {
         val profile = getJson(query).getJSONObject("profile")
         val id = profile.getString("id").takeIf(String::isNotBlank)
             ?: throw IOException("A system friend profile has no ID")
-        val age = requiredText(profile, "age")
+        val age = adultAge(profile)
         Friend(
             id = UUID.randomUUID().toString(),
             name = requiredText(profile, "name"),
@@ -98,6 +99,10 @@ internal class SystemFriendClient {
     private fun requiredText(profile: JSONObject, key: String): String =
         profile.optString(key).trim().takeIf(String::isNotBlank)
             ?: throw IOException("A system friend profile is missing $key")
+
+    private fun adultAge(profile: JSONObject): String =
+        requiredText(profile, "age").takeIf { friendAgeResult(it) == AccountAgeResult.VALID }
+            ?: throw IOException("A system friend profile must be for an adult.")
 
     private fun photoUrl(path: String): String =
         path.takeIf(String::isNotBlank)?.let { URL(URL(API_URL), it).toExternalForm() }.orEmpty()

@@ -85,15 +85,15 @@ internal fun proactiveStateAfterFinish(
     return if (current in setOf(ProactiveDeliveryState.COMPLETED, ProactiveDeliveryState.CANCELLED)) current else requested
 }
 
-internal fun shouldApplyRelationshipOutcome(outcomeSessionIds: Collection<String>, sessionId: String): Boolean =
-    sessionId.isNotBlank() && sessionId !in outcomeSessionIds
+internal fun shouldApplyRelationshipOutcome(outcomeIds: Collection<String>, outcomeId: String): Boolean =
+    outcomeId.isNotBlank() && outcomeId !in outcomeIds
 
 internal fun shouldApplyRelationshipOutcome(
-    outcomeSessionIds: Collection<String>,
+    outcomeIds: Collection<String>,
     outcomeFingerprints: Collection<String>,
-    sessionId: String,
+    outcomeId: String,
     fingerprint: String?
-): Boolean = shouldApplyRelationshipOutcome(outcomeSessionIds, sessionId)
+): Boolean = shouldApplyRelationshipOutcome(outcomeIds, outcomeId)
     && (fingerprint == null || fingerprint !in outcomeFingerprints)
 
 internal fun relationshipOutcomeFingerprint(userMessage: String): String? {
@@ -418,6 +418,8 @@ data class StructuredUserProfile(
 
 const val MAX_STORED_USER_MEMORIES = 1000
 const val MAX_PROFILE_FACTS = 20
+const val MAX_CORE_PROFILE_FACTS = 6
+const val MAX_CORE_PROFILE_CONTEXT_CHARACTERS = 720
 const val MAX_RETRIEVED_USER_MEMORIES = 6
 const val MAX_RETRIEVED_SESSION_SUMMARIES = 3
 
@@ -433,6 +435,19 @@ fun structuredProfileFromMemories(name: String, memories: List<UserMemory>): Str
 
     return StructuredUserProfile(name.trim(), facts(peopleCategories), facts(preferenceCategories))
 }
+
+fun coreUserProfileMemories(profile: StructuredUserProfile): List<UserMemory> =
+    (profile.people.takeLast(MAX_CORE_PROFILE_FACTS / 2).map { UserMemory("people", it) } +
+        profile.preferences.takeLast(MAX_CORE_PROFILE_FACTS / 2).map { UserMemory("preferences", it) })
+        .filter { it.fact.isNotBlank() }
+        .distinctBy { it.fact.trim().lowercase() }
+        .take(MAX_CORE_PROFILE_FACTS)
+
+fun coreUserProfileContext(profile: StructuredUserProfile): String =
+    boundedPromptContext(
+        coreUserProfileMemories(profile).map { "- [${it.category}] ${it.fact}" },
+        MAX_CORE_PROFILE_CONTEXT_CHARACTERS
+    )
 
 fun retrieveRelevantUserMemories(
     query: String,
@@ -665,6 +680,16 @@ data class RelationshipScores(val friendship: Int, val love: Int)
 
 data class RelationshipUpdate(val friendId: String, val friendshipScore: Int, val loveScore: Int)
 
+internal const val DAILY_FRIENDSHIP_GAIN_CAP = 15
+
+internal fun cappedDailyFriendshipImpact(friendshipImpact: Int, pointsGainedToday: Int): Int {
+    val impact = friendshipImpact.coerceIn(-1, 2)
+    if (impact <= 0) return impact
+    val remaining = (DAILY_FRIENDSHIP_GAIN_CAP - pointsGainedToday.coerceIn(0, DAILY_FRIENDSHIP_GAIN_CAP))
+        .coerceAtLeast(0)
+    return impact.coerceAtMost(remaining)
+}
+
 /** Applies one reply's clamped delta (−1..2) to the scores currently stored for the friend. */
 fun applyRelationshipDelta(friendshipScore: Int, loveScore: Int, friendshipImpact: Int, loveImpact: Int): RelationshipScores {
     val friendship = (friendshipScore + friendshipImpact.coerceIn(-1, 2)).coerceIn(0, 100)
@@ -742,9 +767,10 @@ fun accountAgeResult(age: String): AccountAgeResult {
     return AccountAgeResult.VALID
 }
 
-/** A friend may be under 18. The age still has to be a whole number from 1 to [MAX_PROFILE_AGE]. */
+/** New friend profiles must be adults; legacy underage profiles remain readable but cannot be messaged. */
 fun friendAgeResult(age: String): AccountAgeResult {
-    profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)
+    val years = profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)
+    if (years < MINIMUM_ACCOUNT_AGE) return AccountAgeResult.UNDER_MINIMUM
     return AccountAgeResult.VALID
 }
 

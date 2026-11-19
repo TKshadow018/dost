@@ -38,10 +38,18 @@ object ReplyNotifier {
             ContextCompat.checkSelfPermission(context, POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !postNotificationsGranted) return
         ensureChannel(context)
+        val profileNamespace = activeProfileNamespace(context)
+        val notificationId = "$profileNamespace:${friend.id}".hashCode()
         val intent = Intent(context, MainActivity::class.java)
             .putExtra(ChatLaunch.EXTRA_FRIEND_ID, friend.id)
+            .putExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE, profileNamespace)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val pending = PendingIntent.getActivity(context, friend.id.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val pending = PendingIntent.getActivity(
+            context,
+            notificationId,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val snoozeLabel = when (language) {
             AppLanguage.BANGLA -> "২৪ ঘণ্টা বিরতি"
             AppLanguage.HINDI -> "24 घंटे स्थगित"
@@ -60,19 +68,20 @@ object ReplyNotifier {
             .setAutoCancel(true)
             .setContentIntent(pending)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .addAction(0, snoozeLabel, actionIntent(context, friend.id, ACTION_SNOOZE))
-            .addAction(0, pauseLabel, actionIntent(context, friend.id, ACTION_PAUSE))
+            .addAction(0, snoozeLabel, actionIntent(context, friend.id, profileNamespace, ACTION_SNOOZE))
+            .addAction(0, pauseLabel, actionIntent(context, friend.id, profileNamespace, ACTION_PAUSE))
             .build()
         if (postNotificationsGranted || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            notifications.notify(friend.id.hashCode(), notification)
+            notifications.notify(notificationId, notification)
         }
     }
 
-    private fun actionIntent(context: Context, friendId: String, action: String): PendingIntent {
+    private fun actionIntent(context: Context, friendId: String, profileNamespace: String, action: String): PendingIntent {
         val intent = Intent(context, ProactiveNotificationReceiver::class.java)
             .setAction(action)
             .putExtra("friend_id", friendId)
-        val requestCode = friendId.hashCode() * 31 + action.hashCode()
+            .putExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE, profileNamespace)
+        val requestCode = "$profileNamespace:$friendId:$action".hashCode()
         return PendingIntent.getBroadcast(
             context,
             requestCode,
@@ -83,6 +92,9 @@ object ReplyNotifier {
 
     class ProactiveNotificationReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            val requestedProfile = intent.getStringExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE)
+                ?: LEGACY_PROFILE_NAMESPACE
+            if (requestedProfile != activeProfileNamespace(context)) return
             val friendId = intent.getStringExtra("friend_id")?.takeIf(String::isNotBlank) ?: return
             val until = when (intent.action) {
                 "com.snigtus.dost.action.SNOOZE_PROACTIVE" -> System.currentTimeMillis() + 24 * 60 * 60 * 1000L

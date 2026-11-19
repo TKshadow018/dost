@@ -41,6 +41,9 @@ internal sealed interface PlayAgeAccess {
 internal fun adultAgeSignalAllowsAccess(shared: Boolean, ageLower: Int?, ageUpper: Int?): Boolean =
     shared && ageLower != null && ageLower >= ROMANCE_MINIMUM_AGE && (ageUpper == null || ageUpper >= ageLower)
 
+internal fun canSelfAttestAdultAge(access: PlayAgeAccess): Boolean =
+    access == PlayAgeAccess.NotShared || access is PlayAgeAccess.Unavailable
+
 internal class PlayAgeSignalsEligibility {
     suspend fun check(activity: Activity): PlayAgeAccess {
         val manager = AgeSignalsManagerFactory.create(activity.applicationContext)
@@ -73,12 +76,13 @@ internal fun PlayAgeSignalsGate(
     content: @Composable () -> Unit
 ) {
     val eligibility = remember(activity) { PlayAgeSignalsEligibility() }
+    val preferences = remember(activity) { activeProfilePreferences(activity) }
     var attempt by remember { mutableIntStateOf(0) }
     var access by remember { mutableStateOf<PlayAgeAccess>(PlayAgeAccess.Checking) }
 
     LaunchedEffect(attempt, activity) {
         access = PlayAgeAccess.Checking
-        access = try {
+        val result = try {
             eligibility.check(activity)
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
@@ -88,24 +92,37 @@ internal fun PlayAgeSignalsGate(
                     ?: "Google Play age signals are unavailable."
             )
         }
+        if (result == PlayAgeAccess.Underage) {
+            preferences.edit().remove(ADULT_SELF_ATTESTATION_KEY).apply()
+        }
+        access = result
     }
 
-    if (access == PlayAgeAccess.Allowed) {
+    val selfAttested = canSelfAttestAdultAge(access)
+        && preferences.getBoolean(ADULT_SELF_ATTESTATION_KEY, false)
+    if (access == PlayAgeAccess.Allowed || selfAttested) {
         content()
     } else {
         PlayAgeSignalsScreen(
             language = language,
             access = access,
-            onRetry = { attempt++ }
+            onRetry = { attempt++ },
+            onConfirmAdult = {
+                preferences.edit().putBoolean(ADULT_SELF_ATTESTATION_KEY, true).apply()
+                access = PlayAgeAccess.Allowed
+            }
         )
     }
 }
+
+private const val ADULT_SELF_ATTESTATION_KEY = "adult_self_attestation"
 
 @Composable
 private fun PlayAgeSignalsScreen(
     language: AppLanguage,
     access: PlayAgeAccess,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onConfirmAdult: () -> Unit
 ) {
     val checking = access == PlayAgeAccess.Checking
     val title = when (language) {
@@ -126,9 +143,9 @@ private fun PlayAgeSignalsScreen(
             AppLanguage.HINDI -> "दोस्त केवल 18 वर्ष या उससे अधिक आयु वालों के लिए है।"
         }
         PlayAgeAccess.NotShared -> when (language) {
-            AppLanguage.ENGLISH -> "Google Play did not share an age range. Dost cannot use a self-entered age as a substitute."
-            AppLanguage.BANGLA -> "Google Play বয়সের সীমা শেয়ার করেনি। নিজের দেওয়া বয়স এর বিকল্প হতে পারে না।"
-            AppLanguage.HINDI -> "Google Play ने आयु सीमा साझा नहीं की। स्वयं दर्ज की गई उम्र इसका विकल्प नहीं है।"
+            AppLanguage.ENGLISH -> "Google Play did not share an age range. You can continue by confirming that you are 18 or older."
+            AppLanguage.BANGLA -> "Google Play বয়সের সীমা শেয়ার করেনি। ১৮ বছর বা তার বেশি বয়স নিশ্চিত করে এগিয়ে যেতে পারেন।"
+            AppLanguage.HINDI -> "Google Play ने आयु सीमा साझा नहीं की। आप पुष्टि कर सकते हैं कि आपकी उम्र 18 वर्ष या उससे अधिक है।"
         }
         PlayAgeAccess.VerificationRequired -> when (language) {
             AppLanguage.ENGLISH -> "Complete the required age steps in Google Play, return here, and try again."
@@ -136,15 +153,20 @@ private fun PlayAgeSignalsScreen(
             AppLanguage.HINDI -> "Google Play में आवश्यक आयु प्रक्रिया पूरी करें, फिर यहाँ लौटकर दोबारा कोशिश करें।"
         }
         is PlayAgeAccess.Unavailable -> when (language) {
-            AppLanguage.ENGLISH -> "Dost could not get an age signal from Google Play. Try again. Details: ${access.detail}"
-            AppLanguage.BANGLA -> "Google Play থেকে বয়সের তথ্য পাওয়া যায়নি। আবার চেষ্টা করুন। বিবরণ: ${access.detail}"
-            AppLanguage.HINDI -> "Google Play से आयु संकेत नहीं मिला। फिर कोशिश करें। विवरण: ${access.detail}"
+            AppLanguage.ENGLISH -> "Dost could not get an age range from Google Play. Retry, or continue by confirming that you are 18 or older. Details: ${access.detail}"
+            AppLanguage.BANGLA -> "Google Play থেকে বয়সের সীমা পাওয়া যায়নি। আবার চেষ্টা করুন অথবা ১৮ বছর বা তার বেশি বয়স নিশ্চিত করে এগিয়ে যান। বিবরণ: ${access.detail}"
+            AppLanguage.HINDI -> "Google Play से आयु सीमा नहीं मिली। फिर कोशिश करें या पुष्टि करें कि आपकी उम्र 18 वर्ष या उससे अधिक है। विवरण: ${access.detail}"
         }
     }
     val retryLabel = when (language) {
         AppLanguage.ENGLISH -> "Try again"
         AppLanguage.BANGLA -> "আবার চেষ্টা করুন"
         AppLanguage.HINDI -> "फिर कोशिश करें"
+    }
+    val confirmAdultLabel = when (language) {
+        AppLanguage.ENGLISH -> "I am 18 or older"
+        AppLanguage.BANGLA -> "আমার বয়স ১৮ বছর বা তার বেশি"
+        AppLanguage.HINDI -> "मेरी उम्र 18 वर्ष या उससे अधिक है"
     }
 
     Surface(color = MaterialTheme.colorScheme.background) {
@@ -163,6 +185,10 @@ private fun PlayAgeSignalsScreen(
             if (!checking) {
                 Spacer(Modifier.height(24.dp))
                 Button(onClick = onRetry) { Text(retryLabel) }
+                if (canSelfAttestAdultAge(access)) {
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = onConfirmAdult) { Text(confirmAdultLabel) }
+                }
             }
         }
     }

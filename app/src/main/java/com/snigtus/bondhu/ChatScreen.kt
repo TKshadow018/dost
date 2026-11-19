@@ -106,7 +106,8 @@ internal fun ChatScreen(
             if (searchQuery.isBlank()) conversation else conversation.filter { it.content.contains(searchQuery, ignoreCase = true) }
         }
     }
-    val profileBlocked = friend.profilePending
+    val friendAgeBlocked = friendAgeResult(friend.age) != AccountAgeResult.VALID
+    val profileBlocked = friend.profilePending || friendAgeBlocked
     val busyUntil = friend.replyAvailableAt(currentTime)
     LaunchedEffect(friend.id) {
         while (true) {
@@ -412,7 +413,23 @@ internal fun ChatScreen(
                     }
                 } else if (sending) item { ThinkingBubble(friendName = friend.name, language = language) }
             }
-            if (profileBlocked) {
+            if (friendAgeBlocked) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Text(
+                        when {
+                            bangla -> "এই সংরক্ষিত বন্ধুর প্রোফাইল ১৮+ নিয়ম পূরণ করে না। পুরোনো চ্যাট দেখা যাবে, তবে বার্তা পাঠানো বন্ধ। বন্ধুটি সরাতে বন্ধু পরিচালনা করুন।"
+                            hindi -> "यह सहेजी गई मित्र प्रोफ़ाइल 18+ नियम पूरा नहीं करती। पुरानी चैट पढ़ सकते हैं, लेकिन संदेश भेजना बंद है। इसे हटाने के लिए दोस्तों को प्रबंधित करें।"
+                            else -> "This saved friend profile does not meet the 18+ requirement. You can still read its chat history, but messaging is disabled. Manage friends to remove it."
+                        },
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+            if (friend.profilePending) {
                 ProfileCreationNotice(language, profileGenerating, profileError, onRetryProfile, onUseBasicProfile)
             }
             Surface(
@@ -1269,7 +1286,7 @@ private fun storeChatImage(context: Context, uri: Uri): String {
     }
     bitmap.recycle()
     require(compressed.size <= 300_000) { "Image is too large" }
-    val directory = File(context.filesDir, "chat_images").apply { mkdirs() }
+    val directory = DostStore(context).chatImagesDirectory
     val destination = File(directory, "${java.util.UUID.randomUUID()}.jpg")
     destination.writeBytes(compressed)
     return destination.absolutePath

@@ -105,7 +105,7 @@ if (filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN) !== true && 
     dost_cred_fail('allow_url_fopen is required for the local HTTP check.');
 }
 
-function dost_cred_post($url, $headers)
+function dost_cred_post($url, $headers, $body = '{"model":"openrouter/free","messages":[{"role":"user","content":"hi"}]}')
 {
     $headerLines = "Content-Type: application/json\r\n";
     foreach ($headers as $name => $value) {
@@ -115,15 +115,16 @@ function dost_cred_post($url, $headers)
         'http' => array(
             'method' => 'POST',
             'header' => $headerLines,
-            'content' => '{"model":"openrouter/free","messages":[{"role":"user","content":"hi"}]}',
+            'content' => $body,
             'ignore_errors' => true,
             'timeout' => 10
         )
     ));
     $body = @file_get_contents($url, false, $context);
     $status = 0;
-    if (isset($http_response_header) && is_array($http_response_header)) {
-        foreach ($http_response_header as $header) {
+    $responseHeaders = http_get_last_response_headers();
+    if (is_array($responseHeaders)) {
+        foreach ($responseHeaders as $header) {
             if (preg_match('/^HTTP\/\S+\s+(\d{3})\b/', $header, $matches) === 1) {
                 $status = (int) $matches[1];
             }
@@ -134,11 +135,13 @@ function dost_cred_post($url, $headers)
 
 function dost_cred_start_server($port, &$process)
 {
+    $nullDevice = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
     $process = proc_open(
-        array('php', '-S', '127.0.0.1:' . $port, '-t', __DIR__),
-        array(array('pipe', 'r'), array('file', '/dev/null', 'w'), array('file', '/dev/null', 'w')),
+        array(PHP_BINARY, '-S', '127.0.0.1:' . $port, '-t', __DIR__),
+        array(array('pipe', 'r'), array('file', $nullDevice, 'w'), array('file', $nullDevice, 'w')),
         $pipes,
-        __DIR__
+        __DIR__,
+        getenv()
     );
     if (!is_resource($process)) {
         return false;
@@ -202,7 +205,6 @@ list($allowedStatus, $allowedBody) = dost_cred_post($url, array(
     'X-Dost-App-Credential' => $liveToken,
     'X-Dost-Install-ID' => $install
 ));
-dost_cred_stop_server($server);
 $diagnostic = $storage . '/ai-errors.jsonl';
 $diagnosticText = is_file($diagnostic) ? file_get_contents($diagnostic) : '';
 if ($allowedStatus === 401 || strpos($diagnosticText, 'missing_api_key') === false) {
@@ -217,6 +219,59 @@ if (strpos($diagnosticText, $secret) !== false || strpos($diagnosticText, $vecto
 if (strpos($allowedBody, $secret) !== false || strpos($allowedBody, $userKey) !== false) {
     dost_cred_fail('The HTTP body echoed a secret.');
 }
+
+$logBody = json_encode(array(
+    'operation' => 'log_message',
+    'user_name' => 'Test user',
+    'friend_id' => '22222222-2222-4222-8222-222222222222',
+    'friend_name' => 'Test friend',
+    'session_id' => '33333333-3333-4333-8333-333333333333',
+    'message_id' => '44444444-4444-4444-8444-444444444444',
+    'role' => 'user',
+    'content' => 'test archive event',
+    'timestamp_ms' => time() * 1000,
+    'model' => 'openrouter/free'
+), JSON_UNESCAPED_SLASHES);
+list($unauthenticatedLogStatus, $unauthenticatedLogBody) = dost_cred_post($url, array(
+    'X-Dost-Install-ID' => $install
+), $logBody);
+if ($unauthenticatedLogStatus !== 401) {
+    dost_cred_stop_server($server);
+    dost_cred_fail('Unauthenticated conversation logging was not rejected. HTTP ' . $unauthenticatedLogStatus
+        . ' response=' . $unauthenticatedLogBody . ' headers=' . json_encode(http_get_last_response_headers()));
+}
+$logCredential = 'v1.' . $now . '.' . hash_hmac('sha256', "v1\n{$now}\n{$install}", $secret);
+list($authenticatedLogStatus) = dost_cred_post($url, array(
+    'X-Dost-App-Credential' => $logCredential,
+    'X-Dost-Install-ID' => $install
+), $logBody);
+if ($authenticatedLogStatus !== 200) {
+    dost_cred_stop_server($server);
+    dost_cred_fail('A valid credential could not write a conversation log. HTTP ' . $authenticatedLogStatus);
+}
+list($unauthenticatedDeleteStatus) = dost_cred_post('http://127.0.0.1:' . $port . '/delete_archive.php', array(
+    'X-Dost-Install-ID' => $install
+), '{}');
+if ($unauthenticatedDeleteStatus !== 401) {
+    dost_cred_stop_server($server);
+    dost_cred_fail('Unauthenticated archive deletion was not rejected. HTTP ' . $unauthenticatedDeleteStatus);
+}
+list($authenticatedDeleteStatus, $authenticatedDeleteBody) = dost_cred_post(
+    'http://127.0.0.1:' . $port . '/delete_archive.php',
+    array(
+        'X-Dost-App-Credential' => $logCredential,
+        'X-Dost-Install-ID' => $install
+    ),
+    '{}'
+);
+if ($authenticatedDeleteStatus !== 200
+    || !is_array(json_decode($authenticatedDeleteBody, true))
+    || json_decode($authenticatedDeleteBody, true)['deleted_sessions'] !== 1
+) {
+    dost_cred_stop_server($server);
+    dost_cred_fail('A valid credential could not delete the conversation archive. HTTP ' . $authenticatedDeleteStatus . ' ' . $authenticatedDeleteBody);
+}
+dost_cred_stop_server($server);
 
 dost_cred_unset('DOST_APP_CREDENTIAL_SECRET');
 @unlink($diagnostic);

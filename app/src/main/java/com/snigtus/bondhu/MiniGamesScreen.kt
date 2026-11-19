@@ -4,6 +4,7 @@ package com.snigtus.dost
 
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -526,10 +527,18 @@ private fun WrestlingWebViewScreen(language: AppLanguage, onBack: () -> Unit) {
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                    settings.safeBrowsingEnabled = true
+                    settings.javaScriptCanOpenWindowsAutomatically = false
+                    settings.setSupportMultipleWindows(false)
+                    settings.setGeolocationEnabled(false)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                            return request.isForMainFrame &&
-                                (request.url.scheme != "https" || request.url.host != "epicfurywrestling.web.app")
+                            return !isAllowedWrestlingGameNavigation(
+                                request.url.scheme,
+                                request.url.host,
+                                request.url.port
+                            )
                         }
                     }
                     webView = this
@@ -540,6 +549,11 @@ private fun WrestlingWebViewScreen(language: AppLanguage, onBack: () -> Unit) {
         )
     }
 }
+
+internal fun isAllowedWrestlingGameNavigation(scheme: String?, host: String?, port: Int): Boolean =
+    scheme?.equals("https", ignoreCase = true) == true &&
+        host?.equals("epicfurywrestling.web.app", ignoreCase = true) == true &&
+        (port == -1 || port == 443)
 
 private fun gameText(language: AppLanguage, english: String, bangla: String, hindi: String): String = when (language) {
     AppLanguage.ENGLISH -> english

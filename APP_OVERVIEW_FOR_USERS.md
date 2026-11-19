@@ -37,16 +37,16 @@ The Games page has nine games that run in the app: Guess the Number, Rock Paper 
 
 ### Meet people, where available
 
-In builds with the People service configured, eligible adults can publish an optional profile, browse other published profiles, and start a one-to-one text chat. Chats update live while users are connected, and the inbox tracks unread messages. Blocking and reporting are available.
+In builds with the People service configured, eligible adults can publish an optional profile, browse other published profiles, and start a one-to-one text chat or live audio or video call. Chats update live while users are connected, and the inbox tracks unread messages. Incoming calls can alert you while Dost is in the background when notifications are enabled.
 
-Selecting a profile currently starts a direct chat; a mutual match or accepted message request is not required first. People chat is text-only: voice and video calls, voice notes, and image messages are not included.
+Selecting a profile currently starts a direct chat; a mutual match or accepted message request is not required first. Audio calls require microphone access; video calls also require camera access. Calls need an internet connection and the supporting Hostinger and self-hosted TURN services to be configured. Dost does not record call audio or video. Voice notes and image messages are not included.
 
 ## Privacy and account notes
 
 - AI messages are sent to Dost's API and the selected AI provider to produce a reply. See the [privacy policy](./app/api/privacy-policy.txt) for details.
-- Real-person chats are stored in Firebase and can be read by both participants. They are not end-to-end encrypted, and the app does not currently provide in-app deletion of those messages.
+- Real-person chats and call signaling are stored in Firebase and can be read by the participants and project administrators. Chat messages are not end-to-end encrypted. WebRTC encrypts call media in transit; Dost does not record it. The app does not currently provide in-app deletion of chat messages.
 - The People service requires adult eligibility and may not be available in every build until its supporting services are configured.
 - An optional passphrase-encrypted backup can move local AI-chat data to another device. Keep the passphrase safe; it cannot be recovered.
-- Some features require sign-in and an internet connection. Human-chat push notifications and sender-facing read receipts are not currently available.
+- Some features require sign-in and an internet connection. FCM is used for incoming call alerts; ordinary human-chat message notifications and sender-facing read receipts are not currently available.
 
 For details about data handling, read the [Dost privacy policy](./app/api/privacy-policy.txt). Feature availability can vary by app build and service configuration.

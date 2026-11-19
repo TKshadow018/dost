@@ -85,6 +85,26 @@ function user(uid, claims = {}) {
   }).firestore();
 }
 
+function callOffer({
+  callerUid = "alice",
+  calleeUid = "bob",
+  mediaType = "audio",
+  ringExpiresAt = new Date(Date.now() + 60_000),
+  expiresAt = new Date(Date.now() + 3_000_000),
+} = {}) {
+  return {
+    callerUid,
+    calleeUid,
+    mediaType,
+    status: "ringing",
+    offer: { type: "offer", sdp: "v=0\r\naudio-only-offer" },
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    ringExpiresAt,
+    expiresAt,
+  };
+}
+
 async function seedProfile(uid, fields = {}) {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await setDoc(doc(context.firestore(), `publicProfiles/${uid}`), {
@@ -227,6 +247,118 @@ test("only chat participants can read a conversation", async () => {
   await assertSucceeds(getDoc(doc(user("alice"), "peopleChats/alice-bob")));
   await assertSucceeds(getDoc(doc(user("bob"), "peopleChats/alice-bob")));
   await assertFails(getDoc(doc(user("mallory"), "peopleChats/alice-bob")));
+});
+
+test("audio and video calls are limited to adult chat participants and valid state changes", async () => {
+  await seedChat();
+  const alice = user("alice");
+  const bob = user("bob");
+  const callRef = doc(alice, "peopleChats/alice-bob/calls/call-1");
+
+  await assertSucceeds(setDoc(callRef, callOffer()));
+  await assertSucceeds(setDoc(
+    doc(alice, "peopleChats/alice-bob/calls/video-call"),
+    callOffer({ mediaType: "video" }),
+  ));
+  await assertFails(setDoc(
+    doc(alice, "peopleChats/alice-bob/calls/unsupported-call"),
+    callOffer({ mediaType: "screen" }),
+  ));
+  const legacyAudioCall = callOffer();
+  delete legacyAudioCall.mediaType;
+  await assertSucceeds(setDoc(
+    doc(alice, "peopleChats/alice-bob/calls/legacy-audio-call"),
+    legacyAudioCall,
+  ));
+  await assertFails(updateDoc(doc(alice, "peopleChats/alice-bob/calls/video-call"), {
+    mediaType: "audio",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(bob, "peopleChats/alice-bob/calls/call-1")));
+  await assertFails(getDoc(doc(user("mallory"), "peopleChats/alice-bob/calls/call-1")));
+  await assertFails(
+    setDoc(doc(user("mallory"), "peopleChats/alice-bob/calls/forged"), callOffer({
+      callerUid: "mallory",
+      calleeUid: "bob",
+    })),
+  );
+  await assertFails(
+    setDoc(doc(alice, "peopleChats/alice-bob/calls/expired"), callOffer({
+      ringExpiresAt: new Date(Date.now() - 1_000),
+    })),
+  );
+
+  await assertFails(updateDoc(callRef, {
+    status: "accepted",
+    answer: { type: "answer", sdp: "v=0\r\naudio-answer" },
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(bob, "peopleChats/alice-bob/calls/call-1"), {
+    status: "accepted",
+    answer: { type: "answer", sdp: "v=0\r\naudio-answer" },
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(callRef, {
+    status: "ended",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(doc(bob, "peopleChats/alice-bob/calls/call-1"), {
+    status: "ringing",
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("call ICE candidates are participant-scoped and immutable", async () => {
+  await seedChat();
+  const alice = user("alice");
+  const bob = user("bob");
+  const expiresAt = new Date(Date.now() + 3_000_000);
+  const callRef = doc(alice, "peopleChats/alice-bob/calls/call-2");
+  await assertSucceeds(setDoc(callRef, callOffer({ expiresAt })));
+  const callerCandidate = doc(alice, "peopleChats/alice-bob/calls/call-2/callerCandidates/candidate-1");
+  const candidate = {
+    sdp: "candidate:1 1 UDP 1 192.0.2.1 5000 typ host",
+    sdpMid: "0",
+    sdpMLineIndex: 0,
+    createdAt: serverTimestamp(),
+    expiresAt,
+  };
+  await assertSucceeds(setDoc(callerCandidate, candidate));
+  await assertFails(setDoc(
+    doc(bob, "peopleChats/alice-bob/calls/call-2/callerCandidates/forged"),
+    candidate,
+  ));
+  await assertSucceeds(setDoc(
+    doc(bob, "peopleChats/alice-bob/calls/call-2/calleeCandidates/candidate-2"),
+    candidate,
+  ));
+  await assertFails(updateDoc(callerCandidate, { sdp: "changed" }));
+});
+
+test("blocking a chat participant prevents call signaling", async () => {
+  await seedChat();
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "peopleBlocks/bob/blockedUsers/alice"), {
+      createdAt: new Date(),
+    });
+  });
+  await assertFails(setDoc(
+    doc(user("alice"), "peopleChats/alice-bob/calls/blocked-call"),
+    callOffer(),
+  ));
+});
+
+test("call push tokens are private and writable only by their owner", async () => {
+  const tokenRef = doc(user("alice"), "peopleCallTokens/alice/devices/device-1");
+  await assertSucceeds(setDoc(tokenRef, {
+    token: "fcm-registration-token".padEnd(64, "x"),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(user("bob"), "peopleCallTokens/alice/devices/device-1")));
+  await assertFails(setDoc(doc(user("bob"), "peopleCallTokens/alice/devices/device-2"), {
+    token: "fcm-registration-token".padEnd(64, "y"),
+    updatedAt: serverTimestamp(),
+  }));
 });
 
 test("creating a chat requires two adult public profiles and exact snapshots", async () => {

@@ -75,7 +75,7 @@ internal object ConversationWorkScheduler {
     }
 
     fun cancelCheckIn(context: Context, friendId: String) {
-        WorkManager.getInstance(context).cancelUniqueWork("check_in_$friendId")
+        WorkManager.getInstance(context).cancelUniqueWork(workName(context, "check_in_$friendId"))
         val store = DostStore(context)
         store.loadProactiveMessages(friendId)
             .filter {
@@ -87,8 +87,8 @@ internal object ConversationWorkScheduler {
 
     fun cancelProactiveForFriend(context: Context, friendId: String) {
         val workManager = WorkManager.getInstance(context)
-        workManager.cancelUniqueWork("morning_$friendId")
-        workManager.cancelUniqueWork("check_in_$friendId")
+        workManager.cancelUniqueWork(workName(context, "morning_$friendId"))
+        workManager.cancelUniqueWork(workName(context, "check_in_$friendId"))
         val store = DostStore(context)
         store.loadProactiveMessages(friendId)
             .filter {
@@ -100,10 +100,10 @@ internal object ConversationWorkScheduler {
 
     fun cancelAllForFriend(context: Context, friendId: String) {
         val workManager = WorkManager.getInstance(context)
-        workManager.cancelUniqueWork("reply_$friendId")
-        workManager.cancelUniqueWork("check_in_$friendId")
-        workManager.cancelUniqueWork("session_end_$friendId")
-        workManager.cancelUniqueWork("morning_$friendId")
+        workManager.cancelUniqueWork(workName(context, "reply_$friendId"))
+        workManager.cancelUniqueWork(workName(context, "check_in_$friendId"))
+        workManager.cancelUniqueWork(workName(context, "session_end_$friendId"))
+        workManager.cancelUniqueWork(workName(context, "morning_$friendId"))
         val store = DostStore(context)
         store.loadProactiveMessages(friendId)
             .filter { it.state in setOf(ProactiveDeliveryState.SCHEDULED, ProactiveDeliveryState.SENDING) }
@@ -111,7 +111,7 @@ internal object ConversationWorkScheduler {
         store.loadPlannedEvents(friendId)
             .filter { it.state == PlannedEventState.UPCOMING }
             .forEach { event ->
-                workManager.cancelUniqueWork("reminder_${event.id}")
+                workManager.cancelUniqueWork(workName(context, "reminder_${event.id}"))
                 store.updatePlannedEvent(friendId, event.id) { it.copy(state = PlannedEventState.DISMISSED) }
             }
     }
@@ -119,7 +119,7 @@ internal object ConversationWorkScheduler {
     fun scheduleMorningGreeting(context: Context, friend: Friend, language: AppLanguage) {
         val store = DostStore(context)
         if (!store.proactiveEnabled() || store.isProactivePaused(friend.id)) {
-            WorkManager.getInstance(context).cancelUniqueWork("morning_${friend.id}")
+            WorkManager.getInstance(context).cancelUniqueWork(workName(context, "morning_${friend.id}"))
             return
         }
         cancelPendingTrigger(store, friend.id, ProactiveTrigger.MORNING_GREETING)
@@ -193,7 +193,7 @@ internal object ConversationWorkScheduler {
     }
 
     fun cancelUserReminder(context: Context, eventId: String) {
-        WorkManager.getInstance(context).cancelUniqueWork("reminder_$eventId")
+        WorkManager.getInstance(context).cancelUniqueWork(workName(context, "reminder_$eventId"))
         val store = DostStore(context)
         store.loadProactiveMessages().filter {
             it.eventId == eventId &&
@@ -206,12 +206,23 @@ internal object ConversationWorkScheduler {
     }
 
     fun scheduleMessageLog(context: Context, friendId: String, messageId: String) {
+        val profileNamespace = activeProfileNamespace(context)
         val request = OneTimeWorkRequestBuilder<ConversationLogWorker>()
-            .setInputData(workDataOf("friend_id" to friendId, "message_id" to messageId))
+            .setInputData(
+                workDataOf(
+                    "friend_id" to friendId,
+                    "message_id" to messageId,
+                    "profile_namespace" to profileNamespace
+                )
+            )
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("conversation_log_$messageId", ExistingWorkPolicy.KEEP, request)
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            workName(context, "conversation_log_$messageId"),
+            ExistingWorkPolicy.KEEP,
+            request
+        )
     }
 
     private fun enqueue(
@@ -233,7 +244,8 @@ internal object ConversationWorkScheduler {
             "session_id" to sessionId,
             "expected_user_timestamp" to expectedUserTimestamp,
             "send_immediately" to sendImmediately,
-            "proactive_message_id" to proactiveMessageId
+            "proactive_message_id" to proactiveMessageId,
+            "profile_namespace" to activeProfileNamespace(context)
         ).let { base ->
             if (language == null) base else androidx.work.Data.Builder().putAll(base).putString("language", language.name).build()
         }
@@ -246,8 +258,11 @@ internal object ConversationWorkScheduler {
             .setInitialDelay(delayMillis.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(uniqueName, policy, request)
+        WorkManager.getInstance(context).enqueueUniqueWork(workName(context, uniqueName), policy, request)
     }
+
+    private fun workName(context: Context, name: String): String =
+        "${activeProfileNamespace(context)}_$name"
 
     private fun cancelPendingTrigger(store: DostStore, friendId: String, trigger: ProactiveTrigger) {
         store.loadProactiveMessages(friendId)
@@ -262,6 +277,8 @@ internal object ConversationWorkScheduler {
 
 internal class ConversationTaskWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
+        val profileNamespace = inputData.getString("profile_namespace") ?: LEGACY_PROFILE_NAMESPACE
+        if (profileNamespace != activeProfileNamespace(applicationContext)) return Result.success()
         val friendId = inputData.getString("friend_id") ?: return Result.failure()
         val sessionId = inputData.getString("session_id") ?: return Result.failure()
         val task = inputData.getString("task") ?: return Result.failure()
@@ -367,6 +384,8 @@ internal class ConversationTaskWorker(context: Context, parameters: WorkerParame
 
 internal class ConversationLogWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
+        val profileNamespace = inputData.getString("profile_namespace") ?: LEGACY_PROFILE_NAMESPACE
+        if (profileNamespace != activeProfileNamespace(applicationContext)) return Result.success()
         val friendId = inputData.getString("friend_id") ?: return Result.failure()
         val messageId = inputData.getString("message_id") ?: return Result.failure()
         val store = DostStore(applicationContext)

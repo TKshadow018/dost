@@ -4,6 +4,7 @@ data class OpenFriendRequest(val friendId: String, val nonce: Long)
 
 object ChatLaunch {
     const val EXTRA_FRIEND_ID = "com.snigtus.dost.extra.FRIEND_ID"
+    const val EXTRA_PROFILE_NAMESPACE = "com.snigtus.dost.extra.PROFILE_NAMESPACE"
 
     /**
      * Returns the friend id to show on the chat screen.

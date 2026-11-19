@@ -134,8 +134,28 @@ if (!is_array($request) || json_last_error() !== JSON_ERROR_NONE) {
 
 $operation = isset($request['operation']) && is_string($request['operation']) ? $request['operation'] : 'completion';
 enforce_rate_limit($operation === 'log_message' ? 'logs' : 'ai', $operation === 'log_message' ? 120 : 30);
+$config = array();
+$configPath = __DIR__ . '/config.php';
+if (is_file($configPath)) {
+    $loadedConfig = require $configPath;
+    if (is_array($loadedConfig)) {
+        $config = $loadedConfig;
+    }
+}
 if ($operation === 'log_message') {
     $installationId = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) ? $_SERVER['HTTP_X_DOST_INSTALL_ID'] : '';
+    $credentialPresented = isset($_SERVER['HTTP_X_DOST_APP_CREDENTIAL']) && is_string($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+        ? trim($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+        : '';
+    $credentialDecision = dost_required_app_credential_decision(
+        $credentialPresented,
+        $installationId,
+        time(),
+        $config
+    );
+    if ($credentialDecision !== null) {
+        respond($credentialDecision['status'], array('error' => $credentialDecision['error']));
+    }
     $userName = isset($request['user_name']) && is_string($request['user_name']) ? $request['user_name'] : '';
     $friendName = isset($request['friend_name']) && is_string($request['friend_name']) ? $request['friend_name'] : '';
     $clientIp = isset($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
@@ -165,14 +185,6 @@ if ($operation === 'log_message') {
     respond(200, array('saved' => true));
 }
 
-$config = array();
-$configPath = __DIR__ . '/config.php';
-if (is_file($configPath)) {
-    $loadedConfig = require $configPath;
-    if (is_array($loadedConfig)) {
-        $config = $loadedConfig;
-    }
-}
 $clientApiKey = isset($_SERVER['HTTP_X_OPENROUTER_KEY']) && is_string($_SERVER['HTTP_X_OPENROUTER_KEY'])
     ? trim($_SERVER['HTTP_X_OPENROUTER_KEY'])
     : '';

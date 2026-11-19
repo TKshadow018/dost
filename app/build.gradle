@@ -18,6 +18,19 @@ if (file("google-services.json").exists()) {
     apply plugin: 'com.google.gms.google-services'
 }
 
+def validateReleaseFirebaseAuthConfig = tasks.register("validateReleaseFirebaseAuthConfig") {
+    doLast {
+        if ([firebaseApiKey, firebaseAppId, firebaseProjectId, firebaseSenderId].any { it.toString().isBlank() }) {
+            throw new GradleException(
+                "Release builds require app/google-services.json with Firebase configuration for com.snigtus.dost."
+            )
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseFirebaseAuthConfig)
+}
+
 android {
     namespace 'com.snigtus.dost'
     // Integer 37 makes AGP 9.1.0 look up the unpublished hash "android-37".
@@ -100,6 +113,8 @@ dependencies {
     implementation platform(libs.firebase.bom)
     implementation libs.firebase.auth
     implementation libs.firebase.firestore
+    implementation libs.firebase.messaging
+    implementation libs.webrtc.android
     implementation libs.kotlinx.coroutines.play.services
     implementation libs.androidx.credentials
     implementation libs.androidx.credentials.play.services.auth

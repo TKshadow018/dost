@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -91,6 +92,7 @@ internal fun SystemFriendPickerScreen(
     val hindi = language == AppLanguage.HINDI
     val availableCatalog = availableSystemFriendDeck(catalog, addedCatalogIds)
     var showCreateFriend by remember { mutableStateOf(false) }
+    var pendingSwipeSelection by remember { mutableStateOf<SystemFriendListing?>(null) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -116,9 +118,9 @@ internal fun SystemFriendPickerScreen(
         ) {
             Text(
                 when {
-                    bangla -> "পছন্দ হলে ডানে, না হলে বামে সরান"
-                    hindi -> "पसंद आए तो दाएं, नहीं तो बाएं स्वाइप करें"
-                    else -> "Swipe right to meet, left to pass"
+                    bangla -> "যোগ করতে ডানে সরান (নিশ্চিত করুন), এড়াতে বামে"
+                    hindi -> "जोड़ने के लिए दाएँ स्वाइप करें (पुष्टि करें), छोड़ने के लिए बाएँ"
+                    else -> "Swipe right to add (confirm next), or left to pass"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -169,6 +171,7 @@ internal fun SystemFriendPickerScreen(
                     systemLimitReached = systemLimitReached,
                     initialPassedIds = passedCatalogIds,
                     onSelect = onSelect,
+                    onSwipeSelect = { pendingSwipeSelection = it },
                     onPass = onPassCatalogFriend,
                     onStartOver = onStartOver,
                     modifier = Modifier.weight(1f).fillMaxWidth()
@@ -196,6 +199,38 @@ internal fun SystemFriendPickerScreen(
                     onCreateCustomFriend(friend)
                 }
             )
+            pendingSwipeSelection?.let { listing ->
+                AlertDialog(
+                    onDismissRequest = { pendingSwipeSelection = null },
+                    title = {
+                        Text(when {
+                            bangla -> "${listing.name}-কে যোগ করবেন?"
+                            hindi -> "क्या ${listing.name} को जोड़ें?"
+                            else -> "Add ${listing.name}?"
+                        })
+                    },
+                    text = {
+                        Text(when {
+                            bangla -> "এই বন্ধুটিকে আপনার তালিকায় যোগ করবেন? পরে সরাতে পারবেন।"
+                            hindi -> "इस दोस्त को अपनी सूची में जोड़ें? आप इसे बाद में हटा सकते हैं।"
+                            else -> "Add this friend to your list? You can remove them later."
+                        })
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingSwipeSelection = null
+                            onSelect(listing)
+                        }) {
+                            Text(when { bangla -> "যোগ করুন"; hindi -> "जोड़ें"; else -> "Add friend" })
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingSwipeSelection = null }) {
+                            Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" })
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -292,6 +327,7 @@ private fun SystemFriendCardDeck(
     systemLimitReached: Boolean,
     initialPassedIds: Set<String>,
     onSelect: (SystemFriendListing) -> Unit,
+    onSwipeSelect: (SystemFriendListing) -> Unit,
     onPass: (String) -> Unit,
     onStartOver: () -> Unit,
     modifier: Modifier = Modifier
@@ -358,7 +394,7 @@ private fun SystemFriendCardDeck(
                     screenWidthPx = screenWidthPx,
                     cardHeight = cardHeight,
                     onPass = ::passCurrentFriend,
-                    onSelect = { onSelect(current) }
+                    onSelect = { onSwipeSelect(current) }
                 )
             }
         }

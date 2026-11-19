@@ -305,6 +305,120 @@ service cloud.firestore {
     }
 
     match /peopleChats/{chatId} {
+      function callDocumentPath(callId) {
+        return /databases/$(database)/documents/peopleChats/$(chatId)/calls/$(callId);
+      }
+
+      function validCallParticipant(callData) {
+        let chat = get(/databases/$(database)/documents/peopleChats/$(chatId)).data;
+        return ageEligible()
+          && chat.ageCohort == 'adult'
+          && chat.members is list
+          && chat.members.size() == 2
+          && isMember(chat)
+          && callData.callerUid is string
+          && callData.calleeUid is string
+          && callData.callerUid != callData.calleeUid
+          && callData.callerUid in chat.members
+          && callData.calleeUid in chat.members
+          && request.auth.uid in [callData.callerUid, callData.calleeUid]
+          && neitherBlocked(callData.callerUid, callData.calleeUid);
+      }
+
+      function validCallDescription(description, expectedType) {
+        return description is map
+          && description.keys().hasAll(['type', 'sdp'])
+          && description.keys().hasOnly(['type', 'sdp'])
+          && description.type == expectedType
+          && description.sdp is string
+          && description.sdp.size() > 0
+          && description.sdp.size() <= 65536;
+      }
+
+      function validCallCreate(callId) {
+        let data = request.resource.data;
+        let members = get(/databases/$(database)/documents/peopleChats/$(chatId)).data.members;
+        return data.keys().hasAll([
+            'callerUid', 'calleeUid', 'status', 'offer',
+            'createdAt', 'updatedAt', 'ringExpiresAt', 'expiresAt'
+          ])
+          && data.keys().hasOnly([
+            'callerUid', 'calleeUid', 'mediaType', 'status', 'offer',
+            'createdAt', 'updatedAt', 'ringExpiresAt', 'expiresAt'
+          ])
+          && (!data.keys().hasAny(['mediaType']) || data.mediaType in ['audio', 'video'])
+          && callId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.callerUid == request.auth.uid
+          && data.calleeUid == otherMember(members)
+          && data.status == 'ringing'
+          && validCallDescription(data.offer, 'offer')
+          && data.createdAt == request.time
+          && data.updatedAt == request.time
+          && data.ringExpiresAt is timestamp
+          && data.ringExpiresAt > request.time
+          && data.ringExpiresAt <= request.time + duration.value(120, 's')
+          && data.expiresAt is timestamp
+          && data.expiresAt > data.ringExpiresAt
+          && data.expiresAt <= request.time + duration.value(3600, 's')
+          && validCallParticipant(data);
+      }
+
+      function validCallUpdate() {
+        let oldData = resource.data;
+        let newData = request.resource.data;
+        let changed = newData.diff(oldData).affectedKeys();
+        let accepting = newData.status == 'accepted'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.calleeUid
+          && changed.hasAll(['status', 'answer', 'updatedAt'])
+          && validCallDescription(newData.answer, 'answer');
+        let rejecting = newData.status == 'rejected'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.calleeUid
+          && changed.hasOnly(['status', 'updatedAt']);
+        let cancelling = newData.status == 'cancelled'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.callerUid
+          && changed.hasOnly(['status', 'updatedAt']);
+        let missing = newData.status == 'missed'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.calleeUid
+          && request.time >= oldData.ringExpiresAt
+          && changed.hasOnly(['status', 'updatedAt']);
+        let ending = newData.status == 'ended'
+          && oldData.status == 'accepted'
+          && changed.hasOnly(['status', 'updatedAt']);
+        return validCallParticipant(oldData)
+          && changed.hasOnly(['status', 'answer', 'updatedAt'])
+          && newData.callerUid == oldData.callerUid
+          && newData.calleeUid == oldData.calleeUid
+          && newData.offer == oldData.offer
+          && newData.createdAt == oldData.createdAt
+          && newData.ringExpiresAt == oldData.ringExpiresAt
+          && newData.expiresAt == oldData.expiresAt
+          && newData.updatedAt == request.time
+          && (accepting || rejecting || cancelling || missing || ending);
+      }
+
+      function validCallCandidate(candidate, callData, side) {
+        return candidate.keys().hasAll([
+            'sdp', 'sdpMid', 'sdpMLineIndex', 'createdAt', 'expiresAt'
+          ])
+          && candidate.keys().hasOnly([
+            'sdp', 'sdpMid', 'sdpMLineIndex', 'createdAt', 'expiresAt'
+          ])
+          && candidate.sdp is string
+          && candidate.sdp.size() > 0
+          && candidate.sdp.size() <= 4096
+          && (candidate.sdpMid == null || candidate.sdpMid is string)
+          && candidate.sdpMLineIndex is int
+          && candidate.sdpMLineIndex >= 0
+          && candidate.sdpMLineIndex <= 65535
+          && candidate.createdAt == request.time
+          && candidate.expiresAt == callData.expiresAt
+          && request.auth.uid == (side == 'caller' ? callData.callerUid : callData.calleeUid);
+      }
+
       allow create: if validNewChat(chatId);
       allow get, list: if ageEligible() && isAdultChat(resource.data) && isMember(resource.data);
       allow update: if ageEligible() && isAdultChat(resource.data) && isMember(resource.data)
@@ -342,6 +456,43 @@ service cloud.firestore {
           && getAfter(parentChatPath()).data.lastMessage == request.resource.data.text
           && getAfter(parentChatPath()).data.lastMessageSenderUid == request.auth.uid;
       }
+
+      match /calls/{callId} {
+        allow create: if validCallCreate(callId);
+        allow get, list: if validCallParticipant(resource.data)
+          && resource.data.expiresAt is timestamp
+          && resource.data.expiresAt > request.time;
+        allow update: if validCallUpdate();
+        allow delete: if false;
+
+        match /callerCandidates/{candidateId} {
+          function parentCall() {
+            return get(callDocumentPath(callId)).data;
+          }
+
+          allow get, list: if validCallParticipant(parentCall())
+            && parentCall().expiresAt > request.time;
+          allow create: if validCallParticipant(parentCall())
+            && parentCall().status in ['ringing', 'accepted']
+            && parentCall().expiresAt > request.time
+            && validCallCandidate(request.resource.data, parentCall(), 'caller');
+          allow update, delete: if false;
+        }
+
+        match /calleeCandidates/{candidateId} {
+          function parentCall() {
+            return get(callDocumentPath(callId)).data;
+          }
+
+          allow get, list: if validCallParticipant(parentCall())
+            && parentCall().expiresAt > request.time;
+          allow create: if validCallParticipant(parentCall())
+            && parentCall().status in ['ringing', 'accepted']
+            && parentCall().expiresAt > request.time
+            && validCallCandidate(request.resource.data, parentCall(), 'callee');
+          allow update, delete: if false;
+        }
+      }
     }
 
     match /peopleContactRequests/{recipientUid}/incoming/{senderUid} {
@@ -371,6 +522,19 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['createdAt'])
         && request.resource.data.createdAt == request.time;
       allow delete: if signedIn() && request.auth.uid == ownerUid;
+    }
+
+    match /peopleCallTokens/{uid}/devices/{deviceId} {
+      allow get, list: if false;
+      allow create, update: if ageEligible()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasAll(['token', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 32
+        && request.resource.data.token.size() <= 4096
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && request.auth.uid == uid;
     }
 
     match /peopleReports/{reportId} {

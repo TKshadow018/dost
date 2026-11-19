@@ -8,8 +8,8 @@ People is enabled by default. To disable discovery and human chat for a build wi
 
 ## Enable and deploy
 
-1. In Google Play Console, configure **Restrict Minor Access** for the entire app before publishing. Real-person matchmaking is a core app function, so the Play-distributed app is adult-only. The app also calls the Play Age Signals API before initializing any app screens and denies access unless Google Play shares an age range whose lower bound is at least 18.
-2. The Age Signals API is beta and its result is not independent proof of age in every region. A missing signal, a minor range, a required-but-incomplete verification, or an API error all block access; the app never falls back to the signup age. Play Console's restriction is a required release setting, not something this repository can configure.
+1. In Google Play Console, configure **Restrict Minor Access** for the entire app before publishing. Real-person matchmaking is a core app function, so the Play-distributed app is adult-only. The app calls the Play Age Signals API before initializing any app screens; if a shared range is unavailable, it may continue only after an explicit local 18+ self-attestation. A minor range or verification-required status blocks access.
+2. The Age Signals API is beta and its result is not independent proof of age in every region. If a signal is not shared or the API is unavailable, the app offers a local self-attestation that the user is 18 or older; this is not independently verified. A minor range or required-but-incomplete verification still blocks access. Play Console's restriction is a required release setting, not something this repository can configure.
 3. Use a Play-installed build to test Age Signals. Sideloaded builds generally return `APP_NOT_OWNED` unless the Google account is registered as a Play license tester.
 4. Link the same Google Cloud project to `com.snigtus.dost` in Play Console and enable the Play Integrity API and Identity Toolkit API. Configure a service account with only `firebaseauth.users.get` and `firebaseauth.users.update`; keep its JSON key outside the web root and source control. Configure the Hostinger PHP environment variables listed in [the API setup guide](./app/api/README.md).
 5. Upload `age_eligibility.php` and `age_eligibility_support.php` with the rest of the API, then test the attestation endpoint from a Play-installed build and a Play license tester. Firestore People access will fail closed until the server can issue an unexpired eligibility claim.
@@ -22,7 +22,7 @@ People is enabled by default. To disable discovery and human chat for a build wi
    ```
 
 8. Confirm Firebase Authentication is enabled for the sign-in methods configured for Dost. Firestore access requires a signed-in Firebase account with the server-issued claim.
-9. Test adult access, a minor age range, declined age sharing, verification-required status, and API failure before enabling the feature for users.
+9. Test adult access, a minor age range, declined age sharing with self-attestation, declined sharing without self-attestation, verification-required status, and API failure with and without self-attestation before enabling the feature for users.
 
 Do not open Firestore to unauthenticated clients. The application will surface permission or configuration errors if the database or rules are not deployed.
 
@@ -34,6 +34,21 @@ Do not open Firestore to unauthenticated clients. The application will surface p
 - Blocking prevents new messages in that conversation and hides that person from the blocker's discovery and inbox. Reports contain the reporter and target Firebase UIDs, conversation or pending-request reference, reason, and timestamp. Only Firebase project administrators can review reports in Firebase Console; ordinary app clients cannot read them.
 - Accepting a request also creates a chat-specific approval record keyed to the conversation ID. Firestore rules use it to authorize the chat; only the approving recipient can create it, and clients cannot edit or delete it.
 - Hiding or deleting a profile removes it from discovery, but existing conversation snapshots and messages remain available to conversation participants. There is no in-app deletion control for social chat history, contact requests, approval records, or submitted reports; project administrators manage retention and deletion.
+- Audio/video call signaling is stored at `peopleChats/{chatId}/calls/{callId}` and in its `callerCandidates` and `calleeCandidates` subcollections. New call documents contain `mediaType: "audio"` or `"video"`; documents without the field are treated as legacy audio calls. Rules restrict call and candidate access to the matching participants and allowed state transitions, and do not allow the media type to change after creation. `peopleCallTokens/{uid}/devices/{tokenId}` stores private FCM device tokens for incoming-call alerts.
+
+## Call expiry
+
+Every call and ICE-candidate document includes an `expiresAt` timestamp. The client sets it to 55 minutes after call creation, which is also the maximum call duration. Configure Firestore TTL for all three collection groups before enabling calling; TTL deletion is asynchronous and may occur after the timestamp, while Firestore rules stop authorizing expired calls.
+
+From an authenticated Google Cloud CLI session, replace `PROJECT_ID` and enable TTL:
+
+```text
+gcloud firestore fields ttls update expiresAt --collection-group=calls --enable-ttl --project=PROJECT_ID
+gcloud firestore fields ttls update expiresAt --collection-group=callerCandidates --enable-ttl --project=PROJECT_ID
+gcloud firestore fields ttls update expiresAt --collection-group=calleeCandidates --enable-ttl --project=PROJECT_ID
+```
+
+Verify all three policies are enabled in the Firestore TTL page or with `gcloud firestore fields ttls list --project=PROJECT_ID`. Call-token documents are not covered by these TTL policies; the FCM sender removes tokens when Firebase reports them as unregistered.
 
 The Firestore rules restrict profile fields to adult cohorts, participant access, message sizes, contact-request creation and acceptance, accepted-contact approval records, blocking, report creation, and an unexpired server-issued age-eligibility claim. Existing profile documents without a contact preference retain the previous everyone-can-start behavior until the owner saves a new preference. Any change to the client data model or claim format must be accompanied by matching rule updates and rule testing.
 
@@ -48,7 +63,7 @@ The Firestore rules restrict profile fields to adult cohorts, participant access
 
 ## Run Firestore rules tests
 
-The emulator tests use the demo project ID `demo-dost` and never connect to or write to the production Firebase project. Install Node.js and the Firebase CLI, then from the repository root install the test-only dependencies and run:
+The emulator tests use the demo project ID `demo-dost` and never connect to or write to the production Firebase project. They cover audio/video media types, legacy audio calls, call participant access, media-type immutability, allowed call-status transitions, ICE-candidate direction, block enforcement, and private notification-token writes in addition to profiles, chats, contact requests, and reports. Install Node.js and the Firebase CLI, then from the repository root install the test-only dependencies and run:
 
 ```text
 cd tests/firestore

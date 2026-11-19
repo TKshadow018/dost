@@ -374,7 +374,15 @@ class FloatingChatService : Service() {
 
     private fun buildNotification(): Notification {
         val intent = Intent(this, MainActivity::class.java)
-        val pending = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            .putExtra(ChatLaunch.EXTRA_FRIEND_ID, friend.id)
+            .putExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE, store.profileNamespace)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val pending = PendingIntent.getActivity(
+            this,
+            "${store.profileNamespace}:${friend.id}".hashCode(),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID).setContentTitle(LocalizedText.FLOATING_CHAT_TITLE.resolve(store.language())).setContentText(LocalizedText.CHAT_WITH_FRIEND.resolve(store.language(), friend.name)).setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pending).setOngoing(true).build()
         } else {

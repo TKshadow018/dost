@@ -34,6 +34,12 @@ if (count(validate_system_friend_profile($validFixture)) !== 0) {
     fwrite(STDERR, "FAIL: A valid catalog fixture was rejected.\n");
     exit(1);
 }
+$underageFixture = $validFixture;
+$underageFixture['age'] = '17';
+if (count(validate_system_friend_profile($underageFixture)) === 0) {
+    fwrite(STDERR, "FAIL: An under-18 catalog profile was accepted.\n");
+    exit(1);
+}
 $invalidFixture = $validFixture;
 $invalidFixture['schemaVersion'] = 2;
 $invalidFixture['busyStartHour'] = 24;
@@ -83,6 +89,10 @@ $profileFiles = glob(__DIR__ . DIRECTORY_SEPARATOR . 'system_friends' . DIRECTOR
 $profilesById = array();
 foreach ($profileFiles as $profileFile) {
     $profile = json_decode(file_get_contents($profileFile), true);
+    if (!is_array($profile) || !isset($profile['age']) || (int) $profile['age'] < 18) {
+        fwrite(STDERR, 'FAIL: Catalog profile must be an adult: ' . basename($profileFile) . PHP_EOL);
+        exit(1);
+    }
     $profilesById[basename($profileFile, '.json')] = $profile;
     $distribution['total']++;
     if (isset($distribution[$profile['gender']])) {

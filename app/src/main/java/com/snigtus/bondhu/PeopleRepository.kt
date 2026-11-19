@@ -8,8 +8,12 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.Timestamp
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.tasks.await
 import java.security.MessageDigest
+import java.util.Date
+import java.util.UUID
 
 internal data class PeopleProfileDraft(
     val country: String = "",
@@ -67,6 +71,33 @@ internal data class SocialChatMessage(
     val createdAtMillis: Long
 )
 
+internal data class PeopleCallDescription(
+    val type: String,
+    val sdp: String
+)
+
+internal data class PeopleCallRecord(
+    val id: String,
+    val chatId: String,
+    val callerUid: String,
+    val calleeUid: String,
+    val mediaType: String,
+    val status: String,
+    val offer: PeopleCallDescription,
+    val answer: PeopleCallDescription?,
+    val ringExpiresAtMillis: Long,
+    val expiresAtMillis: Long
+)
+
+internal val PEOPLE_CALL_MEDIA_TYPES = setOf("audio", "video")
+
+internal data class PeopleCallCandidate(
+    val id: String,
+    val sdp: String,
+    val sdpMid: String?,
+    val sdpMLineIndex: Int
+)
+
 internal fun socialAgeCohort(age: String): String? {
     val years = age.toIntOrNull() ?: return null
     if (years !in MINIMUM_ACCOUNT_AGE..MAX_PROFILE_AGE) return null
@@ -95,6 +126,7 @@ internal fun socialConversationId(firstUid: String, secondUid: String): String {
 internal class PeopleRepository(context: Context) {
     private val app = FirebaseApp.getApps(context.applicationContext).firstOrNull()
     private val firestore = app?.let(FirebaseFirestore::getInstance)
+    private val callApiClient = PeopleCallApiClient(context.applicationContext, app)
 
     private fun database(): FirebaseFirestore =
         firestore ?: throw IllegalStateException("Firebase is not configured for this app.")
@@ -414,6 +446,187 @@ internal class PeopleRepository(context: Context) {
             }
     }
 
+    suspend fun getConversation(uid: String, conversationId: String): SocialConversation? {
+        requireSignedIn(uid)
+        val snapshot = database().collection(CHATS).document(conversationId).get().await()
+        return if (snapshot.exists()) snapshot.toSocialConversation(uid) else null
+    }
+
+    suspend fun registerCallToken(uid: String, token: String) {
+        requireSignedIn(uid)
+        require(token.length in 32..4096) { "Firebase returned an invalid call notification token." }
+        val tokenId = MessageDigest.getInstance("SHA-256")
+            .digest(token.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        database().collection(CALL_TOKENS).document(uid)
+            .collection(CALL_TOKEN_DEVICES).document(tokenId)
+            .set(mapOf("token" to token, "updatedAt" to FieldValue.serverTimestamp()))
+            .await()
+    }
+
+    suspend fun removeCallToken(uid: String, token: String) {
+        requireSignedIn(uid)
+        val tokenId = MessageDigest.getInstance("SHA-256")
+            .digest(token.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        database().collection(CALL_TOKENS).document(uid)
+            .collection(CALL_TOKEN_DEVICES).document(tokenId)
+            .delete()
+            .await()
+    }
+
+    suspend fun messagingToken(uid: String): String {
+        requireSignedIn(uid)
+        val firebaseApp = app ?: throw IllegalStateException("Firebase is not configured for People calls.")
+        return FirebaseMessaging.getInstance().token.await()
+            .also { registerCallToken(uid, it) }
+    }
+
+    suspend fun createCall(
+        uid: String,
+        chatId: String,
+        peerUid: String,
+        mediaType: String,
+        offerSdp: String,
+        ringExpiresAtMillis: Long,
+        expiresAtMillis: Long
+    ): String {
+        requireSignedIn(uid)
+        require(peerUid.isNotBlank() && peerUid != uid)
+        require(mediaType in PEOPLE_CALL_MEDIA_TYPES) { "This call type is not supported." }
+        require(offerSdp.isNotBlank() && offerSdp.length <= MAX_CALL_SDP_LENGTH)
+        require(ringExpiresAtMillis > System.currentTimeMillis() && expiresAtMillis > ringExpiresAtMillis)
+        val call = database().collection(CHATS).document(chatId)
+            .collection(CALLS).document(UUID.randomUUID().toString())
+        call.set(mapOf(
+            "callerUid" to uid,
+            "calleeUid" to peerUid,
+            "mediaType" to mediaType,
+            "status" to "ringing",
+            "offer" to mapOf("type" to "offer", "sdp" to offerSdp),
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+            "ringExpiresAt" to Timestamp(Date(ringExpiresAtMillis)),
+            "expiresAt" to Timestamp(Date(expiresAtMillis))
+        )).await()
+        return call.id
+    }
+
+    suspend fun getCall(uid: String, chatId: String, callId: String): PeopleCallRecord? {
+        requireSignedIn(uid)
+        val snapshot = callReference(chatId, callId).get().await()
+        return if (snapshot.exists()) snapshot.toPeopleCallRecord(chatId) else null
+    }
+
+    fun listenCall(
+        uid: String,
+        chatId: String,
+        callId: String,
+        onChange: (PeopleCallRecord?) -> Unit,
+        onError: (Exception) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return callReference(chatId, callId).addSnapshotListener { snapshot, listenerError ->
+            if (listenerError != null) {
+                onError(listenerError)
+                return@addSnapshotListener
+            }
+            try {
+                onChange(snapshot?.takeIf { it.exists() }?.toPeopleCallRecord(chatId))
+            } catch (exception: Exception) {
+                onError(exception)
+            }
+        }
+    }
+
+    fun listenCallCandidates(
+        uid: String,
+        chatId: String,
+        callId: String,
+        remoteIsCallee: Boolean,
+        onChange: (List<PeopleCallCandidate>) -> Unit,
+        onError: (Exception) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        val collection = if (remoteIsCallee) CALLEE_CANDIDATES else CALLER_CANDIDATES
+        return callReference(chatId, callId).collection(collection)
+            .orderBy("createdAt", Query.Direction.ASCENDING)
+            .addSnapshotListener { snapshot, listenerError ->
+                if (listenerError != null) {
+                    onError(listenerError)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) {
+                    onError(IllegalStateException("Could not load call connection data."))
+                    return@addSnapshotListener
+                }
+                try {
+                    onChange(snapshot.documents.map { document ->
+                        PeopleCallCandidate(
+                            id = document.id,
+                            sdp = document.getString("sdp")
+                                ?: error("A call candidate is missing its SDP."),
+                            sdpMid = document.getString("sdpMid"),
+                            sdpMLineIndex = document.getLong("sdpMLineIndex")?.toInt()
+                                ?: error("A call candidate is missing its media line.")
+                        )
+                    })
+                } catch (exception: Exception) {
+                    onError(exception)
+                }
+            }
+    }
+
+    suspend fun addCallCandidate(
+        uid: String,
+        chatId: String,
+        callId: String,
+        localIsCaller: Boolean,
+        candidate: PeopleCallCandidate,
+        expiresAtMillis: Long
+    ) {
+        requireSignedIn(uid)
+        require(candidate.sdp.isNotBlank() && candidate.sdp.length <= MAX_CALL_CANDIDATE_LENGTH)
+        val collection = if (localIsCaller) CALLER_CANDIDATES else CALLEE_CANDIDATES
+        callReference(chatId, callId).collection(collection).document()
+            .set(mapOf(
+                "sdp" to candidate.sdp,
+                "sdpMid" to candidate.sdpMid,
+                "sdpMLineIndex" to candidate.sdpMLineIndex,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "expiresAt" to Timestamp(Date(expiresAtMillis))
+            )).await()
+    }
+
+    suspend fun answerCall(uid: String, chatId: String, callId: String, answerSdp: String) {
+        requireSignedIn(uid)
+        require(answerSdp.isNotBlank() && answerSdp.length <= MAX_CALL_SDP_LENGTH)
+        callReference(chatId, callId).update(mapOf(
+            "status" to "accepted",
+            "answer" to mapOf("type" to "answer", "sdp" to answerSdp),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )).await()
+    }
+
+    suspend fun updateCallStatus(uid: String, chatId: String, callId: String, status: String) {
+        requireSignedIn(uid)
+        require(status in setOf("rejected", "cancelled", "missed", "ended"))
+        callReference(chatId, callId).update(mapOf(
+            "status" to status,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )).await()
+    }
+
+    suspend fun notifyIncomingCall(uid: String, chatId: String, callId: String) {
+        requireSignedIn(uid)
+        callApiClient.notifyIncomingCall(uid, chatId, callId)
+    }
+
+    suspend fun callIceServers(uid: String, chatId: String, callId: String): List<PeopleIceServer> {
+        requireSignedIn(uid)
+        return callApiClient.iceServers(uid, chatId, callId)
+    }
+
     suspend fun sendMessage(uid: String, conversationId: String, text: String) {
         requireSignedIn(uid)
         val trimmed = text.trim()
@@ -496,6 +709,36 @@ internal class PeopleRepository(context: Context) {
         require(profile.country.isNotBlank() && profile.country.length <= 80)
         require(profile.bio.length <= 500 && profile.interests.length <= 300)
         require(profile.contactPolicy in PeopleContactPolicy.values())
+    }
+
+    private fun callReference(chatId: String, callId: String) =
+        database().collection(CHATS).document(chatId).collection(CALLS).document(callId)
+
+    private fun DocumentSnapshot.toPeopleCallRecord(chatId: String): PeopleCallRecord {
+        fun description(key: String, required: Boolean): PeopleCallDescription? {
+            val fields = get(key) as? Map<*, *> ?: if (required) error("A call is missing its $key.") else return null
+            if (!required && fields.isEmpty()) return null
+            return PeopleCallDescription(
+                type = fields["type"] as? String ?: error("A call has an invalid $key type."),
+                sdp = fields["sdp"] as? String ?: error("A call is missing its $key SDP.")
+            )
+        }
+        return PeopleCallRecord(
+            id = id,
+            chatId = chatId,
+            callerUid = getString("callerUid") ?: error("A call is missing its caller."),
+            calleeUid = getString("calleeUid") ?: error("A call is missing its recipient."),
+            mediaType = (getString("mediaType") ?: "audio").also {
+                require(it in PEOPLE_CALL_MEDIA_TYPES) { "A call has an unsupported media type." }
+            },
+            status = getString("status") ?: error("A call is missing its status."),
+            offer = description("offer", true)!!,
+            answer = description("answer", false),
+            ringExpiresAtMillis = getTimestamp("ringExpiresAt")?.toDate()?.time
+                ?: error("A call is missing its ring expiry."),
+            expiresAtMillis = getTimestamp("expiresAt")?.toDate()?.time
+                ?: error("A call is missing its expiry.")
+        )
     }
 
     private fun PublicPersonProfile.toFirestoreMap(): Map<String, Any> = mapOf(
@@ -621,10 +864,17 @@ internal class PeopleRepository(context: Context) {
         const val CONTACT_REQUESTS = "peopleContactRequests"
         const val INCOMING_REQUESTS = "incoming"
         const val CONTACT_APPROVALS = "peopleContactApprovals"
+        const val CALLS = "calls"
+        const val CALLER_CANDIDATES = "callerCandidates"
+        const val CALLEE_CANDIDATES = "calleeCandidates"
+        const val CALL_TOKENS = "peopleCallTokens"
+        const val CALL_TOKEN_DEVICES = "devices"
         const val MAX_DISCOVERED_PEOPLE = 100
         const val MAX_CONVERSATIONS = 100
         const val MAX_CHAT_MESSAGES = 500
         const val MAX_CONTACT_REQUESTS = 100
         const val MAX_SOCIAL_MESSAGE_LENGTH = 2_000
+        const val MAX_CALL_SDP_LENGTH = 65_536
+        const val MAX_CALL_CANDIDATE_LENGTH = 4_096
     }
 }

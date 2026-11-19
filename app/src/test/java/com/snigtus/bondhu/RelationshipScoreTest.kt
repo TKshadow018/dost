@@ -24,23 +24,52 @@ class RelationshipScoreTest {
     }
 
     @Test
-    fun oneScoreOutcomePerConversationSessionPreventsRepeatedTurnFarming() {
+    fun eachDistinctUserMessageCanScoreOnlyOnce() {
         val openingFriendship = 20
         var storedFriendship = openingFriendship
         var storedLove = 0
         val outcomes = mutableSetOf<String>()
-        val replies = listOf("session-1" to 2, "session-1" to 2, "session-2" to 1, "session-3" to -1, "session-3" to 2)
-        replies.forEach { (sessionId, impact) ->
-            if (shouldApplyRelationshipOutcome(outcomes, sessionId)) {
+        val replies = listOf("turn-1" to 2, "turn-1" to 2, "turn-2" to 1, "turn-3" to -1, "turn-4" to 2)
+        replies.forEach { (turnId, impact) ->
+            if (shouldApplyRelationshipOutcome(outcomes, turnId)) {
                 val next = applyRelationshipDelta(storedFriendship, storedLove, impact, 0)
                 storedFriendship = next.friendship
                 storedLove = next.love
-                outcomes += sessionId
+                outcomes += turnId
             }
         }
         assertEquals(20, openingFriendship)
-        assertEquals(22, storedFriendship)
+        assertEquals(24, storedFriendship)
         assertEquals(0, storedLove)
+    }
+
+    @Test
+    fun dailyFriendshipCapLimitsPositivePointsButDoesNotLimitLosses() {
+        assertEquals(2, cappedDailyFriendshipImpact(2, 13))
+        assertEquals(1, cappedDailyFriendshipImpact(2, 14))
+        assertEquals(0, cappedDailyFriendshipImpact(2, 15))
+        assertEquals(-1, cappedDailyFriendshipImpact(-1, 15))
+
+        var score = 20
+        var gainedToday = 13
+        val lastAllowed = applyRelationshipDelta(
+            score,
+            0,
+            cappedDailyFriendshipImpact(2, gainedToday),
+            0
+        )
+        score = lastAllowed.friendship
+        gainedToday += score - 20
+        assertEquals(22, score)
+        assertEquals(15, gainedToday)
+        val afterCap = applyRelationshipDelta(
+            score,
+            0,
+            cappedDailyFriendshipImpact(2, gainedToday),
+            0
+        )
+        assertEquals(score, afterCap.friendship)
+        assertEquals(21, applyRelationshipDelta(score, 0, cappedDailyFriendshipImpact(-1, gainedToday), 0).friendship)
     }
 
     @Test
@@ -111,10 +140,10 @@ class RelationshipScoreTest {
     }
 
     @Test
-    fun relationshipOutcomeIsAppliedOnlyOncePerSessionId() {
-        assertTrue(shouldApplyRelationshipOutcome(emptySet(), "session-1"))
-        assertTrue(shouldApplyRelationshipOutcome(setOf("session-1"), "session-2"))
-        org.junit.Assert.assertFalse(shouldApplyRelationshipOutcome(setOf("session-1"), "session-1"))
+    fun relationshipOutcomeIsAppliedOnlyOncePerMessageId() {
+        assertTrue(shouldApplyRelationshipOutcome(emptySet(), "message-1"))
+        assertTrue(shouldApplyRelationshipOutcome(setOf("message-1"), "message-2"))
+        org.junit.Assert.assertFalse(shouldApplyRelationshipOutcome(setOf("message-1"), "message-1"))
         org.junit.Assert.assertFalse(shouldApplyRelationshipOutcome(emptySet(), ""))
     }
 

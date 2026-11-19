@@ -85,4 +85,39 @@ class AuthenticationFlowTest {
             )
         )
     }
+
+    @Test
+    fun firstAccountKeepsAnExistingUnboundLocalProfile() {
+        assertEquals(
+            LEGACY_PROFILE_NAMESPACE,
+            profileNamespaceForAccount(LEGACY_PROFILE_NAMESPACE, emptyList(), "first-uid", null)
+        )
+    }
+
+    @Test
+    fun switchingAccountsSelectsSeparateLocalProfilesAndReturningRestoresTheMappedOne() {
+        val firstNamespace = profileNamespaceForAccount(
+            LEGACY_PROFILE_NAMESPACE,
+            emptyList(),
+            "first-uid",
+            null
+        )
+        val secondNamespace = profileNamespaceForAccount(
+            firstNamespace,
+            listOf("first-uid"),
+            "second-uid",
+            null
+        )
+
+        assertEquals(LEGACY_PROFILE_NAMESPACE, firstNamespace)
+        assertEquals(accountProfileNamespace("second-uid"), secondNamespace)
+        assertEquals(
+            firstNamespace,
+            profileNamespaceForAccount(secondNamespace, listOf("second-uid"), "first-uid", firstNamespace)
+        )
+        assertEquals(
+            secondNamespace,
+            profileNamespaceForAccount(firstNamespace, listOf("first-uid"), "second-uid", secondNamespace)
+        )
+    }
 }

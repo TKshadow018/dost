@@ -435,6 +435,7 @@ internal fun SettingsScreen(
     friends: List<Friend>,
     userTimeZoneId: String,
     signedInEmail: String?,
+    installationId: String,
     openRouterApiKey: String,
     aiModel: String,
     anonymousTelemetryEnabled: Boolean,
@@ -458,6 +459,7 @@ internal fun SettingsScreen(
     onAiSettingsSave: (String, String) -> Unit,
     onKnowledge: () -> Unit,
     onSignOut: () -> Unit,
+    onCopyInstallationId: () -> Unit,
     onExportLocalData: () -> Unit,
     onImportLocalData: () -> Unit,
     onDeleteServerArchive: () -> Unit
@@ -750,6 +752,10 @@ internal fun SettingsScreen(
             item {
                 SettingsSection("Local data") {
                     Text("Move your profile, friends, routines, reminders, memories, summaries, and chat history with a passphrase-encrypted backup. Your API key and installation id are not included. Keep the passphrase separate; it cannot be recovered.", style = MaterialTheme.typography.bodySmall)
+                    Text("Installation ID for deletion and support requests: $installationId", style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = onCopyInstallationId, modifier = Modifier.fillMaxWidth()) {
+                        Text("Copy installation ID")
+                    }
                     Text("The installation id is not transferred. Delete the old phone's server archive from that phone before moving to a new one.", style = MaterialTheme.typography.bodySmall)
                     Text("Importing replaces the current profile, friends, memories, summaries, and chat history. Older unencrypted JSON backups can still be imported.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     OutlinedButton(onClick = onExportLocalData, modifier = Modifier.fillMaxWidth()) { Text("Export encrypted backup") }

@@ -43,6 +43,7 @@ object ConversationManager {
     @Volatile private var activeFriendId: String? = null
     private lateinit var appContext: Context
     private lateinit var store: DostStore
+    @Volatile private var activeProfileNamespace: String? = null
 
     val messages: StateFlow<Map<String, List<ChatMessage>>> = messageState.asStateFlow()
     val unread: StateFlow<Map<String, Int>> = unreadState.asStateFlow()
@@ -51,9 +52,24 @@ object ConversationManager {
     val relationshipUpdates: StateFlow<Map<String, RelationshipUpdate>> = relationshipState.asStateFlow()
 
     fun initialize(context: Context) {
-        if (!::appContext.isInitialized) {
-            appContext = context.applicationContext
-            store = DostStore(appContext)
+        val applicationContext = context.applicationContext
+        val nextStore = DostStore(applicationContext)
+        synchronized(dataImportGuard) {
+            if (activeProfileNamespace == nextStore.profileNamespace) return
+            if (activeProfileNamespace != null) {
+                dataImportGeneration++
+                (messageState.value.keys + store.loadFriends().map { it.id }).forEach(outboundQueue::clear)
+                jobs.clear()
+                messageState.value = emptyMap()
+                unreadState.value = emptyMap()
+                sendingState.value = emptySet()
+                waitingForScheduleState.value = emptySet()
+                relationshipState.value = emptyMap()
+                activeFriendId = null
+            }
+            appContext = applicationContext
+            store = nextStore
+            activeProfileNamespace = nextStore.profileNamespace
             val friends = store.loadFriends()
             unreadState.value = store.unreadCounts(friends.map { it.id })
             friends.forEach { friend ->
@@ -84,6 +100,9 @@ object ConversationManager {
             refreshProactiveWork()
         }
     }
+
+    private fun isAdultFriend(friend: Friend): Boolean =
+        friendAgeResult(friend.age) == AccountAgeResult.VALID
 
     fun messagesFor(friendId: String): List<ChatMessage> = messageState.value[friendId] ?: store.loadMessages(friendId)
 
@@ -123,7 +142,7 @@ object ConversationManager {
 
     fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "", sendImmediately: Boolean = false) {
         if (text.isBlank() && imagePath.isBlank()) return
-        if (friend.profilePending) return
+        if (friend.profilePending || !isAdultFriend(friend)) return
         val requestGeneration = dataImportGeneration
         lateinit var selectedModel: String
         val messageContent = text.ifBlank { "Shared an image" }
@@ -251,6 +270,7 @@ object ConversationManager {
     }
 
     fun refreshBusyReply(friend: Friend) {
+        if (!isAdultFriend(friend)) return
         if (store.hasScheduledReply(friend.id)) {
             val sessionId = store.currentSessionId(friend.id)
             if (sessionId != null) ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language())
@@ -266,6 +286,7 @@ object ConversationManager {
     fun resumeFriendProactive(friendId: String) {
         store.resumeProactive(friendId)
         store.loadFriends().firstOrNull { it.id == friendId }?.let {
+            if (!isAdultFriend(it)) return@let
             ConversationWorkScheduler.scheduleMorningGreeting(appContext, it, store.language())
             refreshScheduledFollowUp(it)
         }
@@ -274,6 +295,13 @@ object ConversationManager {
     fun refreshProactiveWork() {
         if (!::store.isInitialized || !::appContext.isInitialized) return
         store.loadFriends().forEach { friend ->
+            if (!isAdultFriend(friend)) {
+                ConversationWorkScheduler.cancelProactiveForFriend(appContext, friend.id)
+                store.setScheduledReply(friend.id, false)
+                waitingForScheduleState.update { it - friend.id }
+                sendingState.update { it - friend.id }
+                return@forEach
+            }
             if (store.proactiveEnabled() && !store.isProactivePaused(friend.id)) {
                 ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, store.language())
                 refreshScheduledFollowUp(friend)
@@ -287,7 +315,7 @@ object ConversationManager {
     }
 
     private fun refreshScheduledFollowUp(friend: Friend) {
-        if (!store.proactiveEnabled() || store.isProactivePaused(friend.id)) return
+        if (!isAdultFriend(friend) || !store.proactiveEnabled() || store.isProactivePaused(friend.id)) return
         val followUp = store.loadProactiveMessages(friend.id)
             .filter {
                 it.trigger == ProactiveTrigger.FOLLOW_UP &&
@@ -308,6 +336,7 @@ object ConversationManager {
     }
 
     private fun scheduleInactivityQuestion(friend: Friend, language: AppLanguage, sessionId: String, delayMillis: Long = store.automaticFollowUpMinutes() * 60_000L) {
+        if (!isAdultFriend(friend)) return
         val latestUserMessage = messagesFor(friend.id).lastOrNull { it.sessionId == sessionId && it.role == "user" } ?: return
         ConversationWorkScheduler.scheduleCheckIn(appContext, friend, sessionId, language, delayMillis, latestUserMessage.timestampMillis)
     }
@@ -442,6 +471,7 @@ object ConversationManager {
     }
 
     private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null, ephemeralInstruction: String = ""): AiReply {
+        check(isAdultFriend(friend)) { "Messaging is disabled for friend profiles under 18." }
         val client = OpenRouterClient()
         val selectedModel = store.aiModel()
         val apiKey = store.openRouterApiKey()
@@ -479,6 +509,7 @@ object ConversationManager {
 
     fun replyScheduledMessageNow(friendId: String) {
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return
+        if (!isAdultFriend(friend)) return
         val sessionId = store.currentSessionId(friendId) ?: return
         if (!store.hasScheduledReply(friendId)) return
         ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language(), sendImmediately = true)
@@ -498,6 +529,12 @@ object ConversationManager {
         if (proactiveMessage != null && messagesFor(friendId).any { it.messageId == proactiveMessage.idempotencyKey }) return true
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: run {
             store.setScheduledReply(friendId, false)
+            return true
+        }
+        if (!isAdultFriend(friend)) {
+            store.setScheduledReply(friendId, false)
+            waitingForScheduleState.update { it - friendId }
+            sendingState.update { it - friendId }
             return true
         }
         if (store.currentSessionId(friendId) != sessionId) {
@@ -593,7 +630,14 @@ object ConversationManager {
         val latestMessage = sessionMessages.maxBy { it.timestampMillis }
         val remaining = SESSION_INACTIVITY_MILLIS - (System.currentTimeMillis() - latestMessage.timestampMillis)
         if (remaining > 0L) return false
-        val friendName = store.loadFriends().firstOrNull { it.id == friendId }?.name ?: return true
+        val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
+        if (!isAdultFriend(friend)) {
+            withCurrentImportGeneration(requestGeneration) {
+                if (store.currentSessionId(friendId) == sessionId) store.saveCurrentSessionId(friendId, null)
+            }
+            return true
+        }
+        val friendName = friend.name
         val summaryInput = messagesForPrompt(sessionMessages)
         if (summaryInput.isEmpty()) {
             withCurrentImportGeneration(requestGeneration) {
@@ -621,10 +665,15 @@ object ConversationManager {
     private fun updateFriendship(friendId: String, sessionId: String, friendshipImpact: Int, loveImpact: Int) {
         val latestUserMessage = messagesFor(friendId).lastOrNull {
             it.sessionId == sessionId && it.role == "user"
-        }?.content.orEmpty()
-        val fingerprint = relationshipOutcomeFingerprint(latestUserMessage)
-        val application = store.applyRelationshipOutcome(friendId, sessionId, fingerprint) { current ->
-            current.withRelationshipDelta(friendshipImpact, loveImpact, store.userAge())
+        } ?: return
+        val fingerprint = relationshipOutcomeFingerprint(latestUserMessage.content)
+        val application = store.applyRelationshipOutcome(
+            friendId,
+            latestUserMessage.messageId,
+            fingerprint,
+            friendshipImpact
+        ) { current, cappedFriendshipImpact ->
+            current.withRelationshipDelta(cappedFriendshipImpact, loveImpact, store.userAge())
         } ?: return
         val updated = application.friend
         if (!application.applied) return
@@ -652,6 +701,7 @@ object ConversationManager {
         val proactiveMessage = proactiveMessageId?.takeIf { it.isNotBlank() }?.let(store::proactiveMessage)
         if (proactiveMessage != null && messagesFor(friendId).any { it.messageId == proactiveMessage.idempotencyKey }) return true
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
+        if (!isAdultFriend(friend)) return true
         if (!store.proactiveEnabled() || store.isProactivePaused(friendId)) return true
         if (!store.canSendProactive(friendId)) {
             ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, language)
@@ -706,6 +756,7 @@ object ConversationManager {
             return true
         }
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
+        if (!isAdultFriend(friend)) return true
         if (!jobs.add(friendId)) return false
         sendingState.update { it + friendId }
         try {
@@ -775,6 +826,15 @@ object ConversationManager {
                 outboundQueue.clear(friendId)
                 jobs.remove(friendId)
                 sendingState.update { it - friendId }
+            }
+            return
+        }
+        if (!isAdultFriend(friend)) {
+            synchronized(dataImportGuard) {
+                outboundQueue.clear(friendId)
+                jobs.remove(friendId)
+                sendingState.update { it - friendId }
+                waitingForScheduleState.update { it - friendId }
             }
             return
         }

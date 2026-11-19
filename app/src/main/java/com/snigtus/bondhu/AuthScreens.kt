@@ -238,6 +238,16 @@ fun AuthScreen(
                             ),
                             color = DostAuthMuted
                         )
+                        Text(
+                            authLabel(
+                                language,
+                                "প্রতিটি অ্যাকাউন্টের জন্য এই ডিভাইসে আলাদা লোকাল প্রোফাইল থাকে। অ্যাকাউন্ট বদলালে চ্যাট, বন্ধু বা স্মৃতি স্থানান্তর বা সিঙ্ক হয় না; আগের ডেটা দেখতে সেই অ্যাকাউন্টে ফিরে সাইন ইন করুন। Settings থেকে এনক্রিপ্ট করা ব্যাকআপ রপ্তানি বা আমদানি করুন।",
+                                "हर खाते की इस डिवाइस पर अलग स्थानीय प्रोफ़ाइल होती है। खाते बदलने से चैट, दोस्त या यादें स्थानांतरित या सिंक नहीं होतीं; पुराना डेटा देखने के लिए उसी खाते में फिर साइन इन करें। Settings से एन्क्रिप्टेड बैकअप export या import करें।",
+                                "Each account has a separate local profile on this device. Switching accounts does not move or sync chats, friends, or memories; sign back in to an account to use its data. Use Settings to export or import an encrypted backup."
+                            ),
+                            color = DostAuthMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (mode == AuthMode.SIGN_IN) {
                                 Button(onClick = { onModeChange(AuthMode.SIGN_IN); localError = null; dismissRequestMessage = true }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = DostTeal, contentColor = Color.White)) {
@@ -516,9 +526,9 @@ fun accountAgeError(age: String, language: AppLanguage): String? = when (account
 fun friendAgeError(age: String, language: AppLanguage): String? {
     if (age.isBlank() || friendAgeResult(age) == AccountAgeResult.VALID) return null
     return when (language) {
-        AppLanguage.BANGLA -> "বন্ধুর বয়স ১ থেকে ১২০-এর মধ্যে একটি পুরো সংখ্যা লিখুন।"
-        AppLanguage.HINDI -> "दोस्त की उम्र 1 से 120 के बीच एक पूरी संख्या लिखें।"
-        AppLanguage.ENGLISH -> "Enter the friend's age as a whole number from 1 to 120."
+        AppLanguage.BANGLA -> "বন্ধুর বয়স ১৮ থেকে ১২০-এর মধ্যে একটি পুরো সংখ্যা লিখুন।"
+        AppLanguage.HINDI -> "दोस्त की उम्र 18 से 120 के बीच एक पूरी संख्या लिखें।"
+        AppLanguage.ENGLISH -> "Enter the friend's age as a whole number from 18 to 120."
     }
 }
 
