@@ -137,8 +137,8 @@ if (dost_path_is_inside($private, $web)) {
 
 define('DOST_CLEANUP_LIBRARY_ONLY', true);
 require_once __DIR__ . '/cleanup_logs.php';
-if (!defined('DOST_RETENTION_DAYS') || DOST_RETENTION_DAYS !== 3650) {
-    dost_test_fail('Retention is no longer 3,650 days.');
+if (!defined('DOST_RETENTION_DAYS') || DOST_RETENTION_DAYS !== 1095) {
+    dost_test_fail('Retention is no longer 1,095 days.');
 }
 
 $freshDir = $private . '/Fresh_203.0.113.9/Mina/' . $sessionId;
@@ -153,7 +153,7 @@ $expiredFile = $expiredDir . '/2000-01-01_00-00-00.jsonl';
 file_put_contents($freshFile, "{\"installation_id\":\"fresh\"}\n");
 file_put_contents($expiredFile, "{\"installation_id\":\"expired\"}\n");
 touch($freshFile, time() - 86400);
-touch($expiredFile, time() - (3651 * 86400));
+touch($expiredFile, time() - ((DOST_RETENTION_DAYS + 1) * 86400));
 $indexDirectory = $private . '/_by_install';
 if (!is_dir($indexDirectory) && !mkdir($indexDirectory, 0700, true)) {
     dost_test_fail('Could not create an install index.');
@@ -171,7 +171,7 @@ if (!mkdir($legacyDir, 0700, true)) {
 }
 $legacyFile = $legacyDir . '/2001-01-01_00-00-00.jsonl';
 file_put_contents($legacyFile, "{\"message_id\":\"legacy\"}\n");
-touch($legacyFile, time() - (3651 * 86400));
+touch($legacyFile, time() - ((DOST_RETENTION_DAYS + 1) * 86400));
 file_put_contents($web . '/log/.htaccess', "Require all denied\n");
 
 $primaryCleanup = run_conversation_archive_cleanup($private, true);
@@ -187,8 +187,8 @@ if (!is_file($freshFile) || !is_file($jsonlFiles[0])) {
 }
 $heartbeatPath = $private . '/.cleanup-heartbeat.json';
 $heartbeat = is_file($heartbeatPath) ? json_decode(file_get_contents($heartbeatPath), true) : null;
-if (!is_array($heartbeat) || !isset($heartbeat['retention_days']) || $heartbeat['retention_days'] !== 3650) {
-    dost_test_fail('Cleanup heartbeat does not record 3,650-day retention.');
+if (!is_array($heartbeat) || !isset($heartbeat['retention_days']) || $heartbeat['retention_days'] !== 1095) {
+    dost_test_fail('Cleanup heartbeat does not record 1,095-day retention.');
 }
 if (is_file($web . '/log/.cleanup-heartbeat.json')) {
     dost_test_fail('Cleanup wrote the heartbeat into the web root.');

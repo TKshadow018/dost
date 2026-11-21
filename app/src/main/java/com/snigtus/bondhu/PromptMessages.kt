@@ -6,14 +6,17 @@ private const val TRUNCATION_MARKER = "\n[truncated]"
 
 /**
  * History that may be sent to the model or folded into a session summary.
- * Error bubbles stay in the chat UI and are left out of both. Keep the newest
- * complete messages that fit within the prompt history budget.
+ * Notices are shown separately from the chat and are left out of both. Keep
+ * the newest complete messages that fit within the prompt history budget.
  */
+internal fun isChatNotice(message: ChatMessage): Boolean =
+    message.category in setOf(ERROR_MESSAGE_CATEGORY, "system") || message.role !in setOf("user", "assistant")
+
 internal fun messagesForPrompt(messages: List<ChatMessage>): List<ChatMessage> {
     val included = mutableListOf<ChatMessage>()
     var characterCount = 0
     for (message in messages.asReversed()) {
-        if (message.category == ERROR_MESSAGE_CATEGORY) continue
+        if (isChatNotice(message)) continue
         val remainingCharacters = MAX_PROMPT_HISTORY_CHARACTERS - characterCount
         if (message.content.length > remainingCharacters) {
             if (included.isEmpty() && remainingCharacters > TRUNCATION_MARKER.length) {

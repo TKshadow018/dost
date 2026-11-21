@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,17 +76,17 @@ fun SignInScreen(
             Spacer(Modifier.size(12.dp))
             Image(
                 painter = painterResource(R.drawable.logo1),
-                contentDescription = translated(language, "Dost", "দোস্ত", "दोस्त"),
+                contentDescription = localizedAuthText(language, "Dost", "দোস্ত", "दोस्त"),
                 modifier = Modifier.size(108.dp).clip(CircleShape)
             )
             Text(
-                text = translated(language, "A little closer, every day.", "প্রতিদিন একটু কাছে।", "हर दिन, थोड़ा और करीब।"),
+                text = localizedAuthText(language, "A little closer, every day.", "প্রতিদিন একটু কাছে।", "हर दिन, थोड़ा और करीब।"),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 18.dp)
             )
             Text(
-                text = translated(language, "A warm space for the conversations that matter.", "গুরুত্বপূর্ণ কথাগুলোর জন্য একটি আপন জায়গা।", "ज़रूरी बातों के लिए एक अपनापन भरी जगह।"),
+                text = localizedAuthText(language, "A warm space for the conversations that matter.", "গুরুত্বপূর্ণ কথাগুলোর জন্য একটি আপন জায়গা।", "ज़रूरी बातों के लिए एक अपनापन भरी जगह।"),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp, bottom = 22.dp)
@@ -101,12 +102,12 @@ fun SignInScreen(
                 ) {
                     if (verifying) {
                         Text(
-                            translated(language, "Check your inbox", "আপনার ইনবক্স দেখুন", "अपना इनबॉक्स देखें"),
+                            localizedAuthText(language, "Check your inbox", "আপনার ইনবক্স দেখুন", "अपना इनबॉक्स देखें"),
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            translated(
+                            localizedAuthText(
                                 language,
                                 "We sent a verification link to $verifiedEmail. Verify your email before continuing.",
                                 "$verifiedEmail ঠিকানায় একটি যাচাইকরণ লিংক পাঠানো হয়েছে। এগিয়ে যাওয়ার আগে ইমেইল যাচাই করুন।",
@@ -123,19 +124,19 @@ fun SignInScreen(
                             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
                         ) {
                             if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            else Text(translated(language, "I've verified my email", "ইমেইল যাচাই করেছি", "मैंने ईमेल सत्यापित किया"))
+                            else Text(localizedAuthText(language, "I've verified my email", "ইমেইল যাচাই করেছি", "मैंने ईमेल सत्यापित किया"))
                         }
                         OutlinedButton(
                             onClick = onResendVerification,
                             enabled = !loading,
                             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
-                        ) { Text(translated(language, "Resend verification email", "যাচাইকরণ ইমেইল আবার পাঠান", "सत्यापन ईमेल फिर भेजें")) }
+                        ) { Text(localizedAuthText(language, "Resend verification email", "যাচাইকরণ ইমেইল আবার পাঠান", "सत्यापन ईमेल फिर भेजें")) }
                     } else {
                         Text(
                             text = if (creatingAccount) {
-                                translated(language, "Create your account", "আপনার অ্যাকাউন্ট তৈরি করুন", "अपना खाता बनाएँ")
+                                localizedAuthText(language, "Create your account", "আপনার অ্যাকাউন্ট তৈরি করুন", "अपना खाता बनाएँ")
                             } else {
-                                translated(language, "Welcome back", "আবার স্বাগতম", "वापस स्वागत है")
+                                localizedAuthText(language, "Welcome back", "আবার স্বাগতম", "वापस स्वागत है")
                             },
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.SemiBold
@@ -143,7 +144,7 @@ fun SignInScreen(
                         OutlinedTextField(
                             value = email,
                             onValueChange = { email = it; validationError = null },
-                            label = { Text(translated(language, "Email", "ইমেইল", "ईमेल")) },
+                            label = { Text(localizedAuthText(language, "Email", "ইমেইল", "ईमेल")) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
@@ -152,7 +153,7 @@ fun SignInScreen(
                         OutlinedTextField(
                             value = password,
                             onValueChange = { password = it; validationError = null },
-                            label = { Text(translated(language, "Password", "পাসওয়ার্ড", "पासवर्ड")) },
+                            label = { Text(localizedAuthText(language, "Password", "পাসওয়ার্ড", "पासवर्ड")) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -164,7 +165,7 @@ fun SignInScreen(
                                     enabled = !loading
                                 ) {
                                     Text(
-                                        text = if (passwordVisible) translated(language, "Hide", "লুকান", "छिपाएँ") else translated(language, "Show", "দেখান", "दिखाएँ"),
+                                        text = if (passwordVisible) localizedAuthText(language, "Hide", "লুকান", "छिपाएँ") else localizedAuthText(language, "Show", "দেখান", "दिखाएँ"),
                                     )
                                 }
                             }
@@ -185,8 +186,8 @@ fun SignInScreen(
                         ) {
                             if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                             else Text(
-                                if (creatingAccount) translated(language, "Create account", "অ্যাকাউন্ট তৈরি করুন", "खाता बनाएँ")
-                                else translated(language, "Sign in", "সাইন ইন", "साइन इन")
+                                if (creatingAccount) localizedAuthText(language, "Create account", "অ্যাকাউন্ট তৈরি করুন", "खाता बनाएँ")
+                                else localizedAuthText(language, "Sign in", "সাইন ইন", "साइन इन")
                             )
                         }
                         if (!creatingAccount) {
@@ -197,12 +198,12 @@ fun SignInScreen(
                                 },
                                 enabled = !loading,
                                 modifier = Modifier.align(Alignment.End).defaultMinSize(minHeight = 48.dp)
-                            ) { Text(translated(language, "Forgot password?", "পাসওয়ার্ড ভুলে গেছেন?", "पासवर्ड भूल गए?")) }
+                            ) { Text(localizedAuthText(language, "Forgot password?", "পাসওয়ার্ড ভুলে গেছেন?", "पासवर्ड भूल गए?")) }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             HorizontalDivider(Modifier.weight(1f))
                             Text(
-                                translated(language, "  or  ", "  অথবা  ", "  या  "),
+                                localizedAuthText(language, "  or  ", "  অথবা  ", "  या  "),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -213,7 +214,7 @@ fun SignInScreen(
                             enabled = !loading,
                             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
                         ) {
-                            Text(translated(language, "Continue with Google", "Google দিয়ে চালিয়ে যান", "Google से जारी रखें"))
+                            Text(localizedAuthText(language, "Continue with Google", "Google দিয়ে চালিয়ে যান", "Google से जारी रखें"))
                         }
                         TextButton(
                             onClick = {
@@ -225,9 +226,9 @@ fun SignInScreen(
                         ) {
                             Text(
                                 if (creatingAccount) {
-                                    translated(language, "Already have an account? Sign in", "আগে থেকেই অ্যাকাউন্ট আছে? সাইন ইন করুন", "पहले से खाता है? साइन इन करें")
+                                    localizedAuthText(language, "Already have an account? Sign in", "আগে থেকেই অ্যাকাউন্ট আছে? সাইন ইন করুন", "पहले से खाता है? साइन इन करें")
                                 } else {
-                                    translated(language, "New to Dost? Create an account", "দোস্তে নতুন? অ্যাকাউন্ট তৈরি করুন", "Dost पर नए हैं? खाता बनाएँ")
+                                    localizedAuthText(language, "New to Dost? Create an account", "দোস্তে নতুন? অ্যাকাউন্ট তৈরি করুন", "Dost पर नए हैं? खाता बनाएँ")
                                 }
                             )
                         }
@@ -244,6 +245,8 @@ fun SignInScreen(
                         enabled = option != language,
                         modifier = Modifier.defaultMinSize(minHeight = 48.dp)
                     ) {
+                        LanguageFlagIcon(option, Modifier.size(width = 20.dp, height = 13.dp))
+                        Spacer(Modifier.width(4.dp))
                         Text(
                             when (option) {
                                 AppLanguage.ENGLISH -> "English"
@@ -265,7 +268,7 @@ fun SignInScreen(
 }
 
 private fun authValidationText(error: AuthValidationError, language: AppLanguage): String = when (error) {
-    AuthValidationError.INVALID_EMAIL -> translated(language, "Enter a valid email address.", "সঠিক ইমেইল ঠিকানা লিখুন।", "सही ईमेल पता लिखें।")
-    AuthValidationError.PASSWORD_REQUIRED -> translated(language, "Enter your password.", "আপনার পাসওয়ার্ড লিখুন।", "अपना पासवर्ड लिखें।")
-    AuthValidationError.PASSWORD_TOO_SHORT -> translated(language, "Use at least 6 characters for your password.", "পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।", "पासवर्ड कम से कम 6 अक्षरों का होना चाहिए।")
+    AuthValidationError.INVALID_EMAIL -> localizedAuthText(language, "Enter a valid email address.", "সঠিক ইমেইল ঠিকানা লিখুন।", "सही ईमेल पता लिखें।")
+    AuthValidationError.PASSWORD_REQUIRED -> localizedAuthText(language, "Enter your password.", "আপনার পাসওয়ার্ড লিখুন।", "अपना पासवर्ड लिखें।")
+    AuthValidationError.PASSWORD_TOO_SHORT -> localizedAuthText(language, "Use at least 6 characters for your password.", "পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।", "पासवर्ड कम से कम 6 अक्षरों का होना चाहिए।")
 }

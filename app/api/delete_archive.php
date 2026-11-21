@@ -1,5 +1,6 @@
 <?php
 
+require_once __DIR__ . '/app_credential.php';
 require_once __DIR__ . '/archive_store.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -17,6 +18,29 @@ $installationId = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) && is_string($_SERVE
 if (!valid_uuid($installationId)) {
     http_response_code(400);
     echo json_encode(array('error' => 'A valid installation id is required'));
+    exit;
+}
+
+$config = array();
+$configPath = __DIR__ . '/config.php';
+if (is_file($configPath)) {
+    $loadedConfig = require $configPath;
+    if (is_array($loadedConfig)) {
+        $config = $loadedConfig;
+    }
+}
+$credentialPresented = isset($_SERVER['HTTP_X_DOST_APP_CREDENTIAL']) && is_string($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+    ? trim($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+    : '';
+$credentialDecision = dost_required_app_credential_decision(
+    $credentialPresented,
+    $installationId,
+    time(),
+    $config
+);
+if ($credentialDecision !== null) {
+    http_response_code($credentialDecision['status']);
+    echo json_encode(array('error' => $credentialDecision['error']));
     exit;
 }
 

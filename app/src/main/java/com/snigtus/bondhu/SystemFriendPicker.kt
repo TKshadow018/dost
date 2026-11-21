@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.snigtus.dost
 
 import androidx.compose.animation.core.Animatable
@@ -9,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,19 +23,29 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,136 +54,262 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 @Composable
-internal fun SystemFriendPickerDialog(
+internal fun SystemFriendPickerScreen(
     language: AppLanguage,
     catalog: List<SystemFriendListing>,
     isLoading: Boolean,
-    error: String?,
+    catalogError: String?,
+    addError: String?,
     addedCatalogIds: Set<String>,
+    passedCatalogIds: Set<String>,
     addingCatalogId: String?,
     systemLimitReached: Boolean,
+    customLimitReached: Boolean,
     onRefresh: () -> Unit,
     onSelect: (SystemFriendListing) -> Unit,
+    onPassCatalogFriend: (String) -> Unit,
+    onStartOver: () -> Unit,
+    onCreateCustomFriend: (Friend) -> Unit,
+    onOpenPremium: () -> Unit,
     onManageFriends: () -> Unit,
-    onDismiss: () -> Unit
+    onBack: () -> Unit
 ) {
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     val availableCatalog = availableSystemFriendDeck(catalog, addedCatalogIds)
-    val maxHeight = (LocalConfiguration.current.screenHeightDp - 32).coerceAtLeast(420).dp
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val filteredCatalog = filterSystemFriendCatalog(availableCatalog, searchQuery)
+    var showCreateFriend by remember { mutableStateOf(false) }
+    var pendingSwipeSelection by remember { mutableStateOf<SystemFriendListing?>(null) }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp).heightIn(max = maxHeight),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(when { bangla -> "AI বন্ধু"; hindi -> "AI दोस्त"; else -> "AI friends" }) },
+                actions = {
+                    TextButton(
+                        onClick = {
+                            if (customLimitReached) onOpenPremium() else showCreateFriend = true
+                        }
+                    ) {
+                        Text(when {
+                            customLimitReached && bangla -> "প্রিমিয়াম"
+                            customLimitReached && hindi -> "प्रीमियम"
+                            customLimitReached -> "Premium"
+                            bangla -> "নিজের বন্ধু তৈরি করুন"
+                            hindi -> "अपना दोस्त बनाएँ"
+                            else -> "Create your own friend"
+                        }, maxLines = 1)
+                    }
+                },
+                navigationIcon = { DostBackButton(language, onBack) }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            Text(
+                when {
+                    bangla -> "যোগ করতে ডানে সরান (নিশ্চিত করুন), এড়াতে বামে"
+                    hindi -> "जोड़ने के लिए दाएँ स्वाइप करें (पुष्टि करें), छोड़ने के लिए बाएँ"
+                    else -> "Swipe right to add (confirm next), or left to pass"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer
             ) {
-                Row(
+                Text(
+                    when {
+                        bangla -> "এগুলো কাল্পনিক AI চরিত্র, বাস্তব মানুষ নয়। AI-এর উত্তর ভুল হতে পারে।"
+                        hindi -> "ये काल्पनिक AI पात्र हैं, असली लोग नहीं। AI के जवाब गलत हो सकते हैं।"
+                        else -> "These are fictional AI characters, not real people. AI replies may be inaccurate."
+                    },
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                enabled = addingCatalogId == null,
+                singleLine = true,
+                label = {
+                    Text(when {
+                        bangla -> "নাম, আগ্রহ বা কথোপকথনের ধরন খুঁজুন"
+                        hindi -> "नाम, रुचि या बातचीत की शैली खोजें"
+                        else -> "Search name, interests, or conversation style"
+                    })
+                },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotBlank()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = localizedText(language, "Clear search", "खोज साफ़ करें", "সার্চ মুছুন")
+                            )
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (systemLimitReached) {
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            when { bangla -> "সিস্টেম বন্ধু"; hindi -> "सिस्टम दोस्त"; else -> "Meet a friend" },
-                            style = MaterialTheme.typography.headlineSmall
-                        )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Text(
                             when {
-                                bangla -> "পছন্দ হলে ডানে, না হলে বামে সরান"
-                                hindi -> "पसंद आए तो दाएं, नहीं तो बाएं स्वाइप करें"
-                                else -> "Swipe right to meet, left to pass"
+                                bangla -> "বিনামূল্যের ক্যাটালগ বন্ধু সীমায় পৌঁছেছেন। সীমাহীন AI বন্ধুর জন্য প্রিমিয়াম নিন।"
+                                hindi -> "मुफ़्त कैटलॉग दोस्त सीमा पूरी हो गई है। असीमित AI दोस्तों के लिए प्रीमियम लें।"
+                                else -> "You’ve reached the free catalog-friend limit. Get Premium for unlimited AI friends."
                             },
+                            modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text(when { bangla -> "বন্ধ করুন"; hindi -> "बंद करें"; else -> "Close" })
-                    }
-                }
-
-                if (systemLimitReached) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                when {
-                                    bangla -> "আপনার সব সিস্টেম বন্ধু যোগ করা হয়েছে। নতুন কাউকে জায়গা দিতে বন্ধু পরিচালনা করুন।"
-                                    hindi -> "आपके सभी सिस्टम दोस्त जुड़ चुके हैं। किसी नए दोस्त के लिए जगह बनाने हेतु दोस्तों को प्रबंधित करें।"
-                                    else -> "You’ve met all your system friends. Manage friends to make room for someone new."
-                                },
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                            TextButton(onClick = onManageFriends) {
-                                Text(when { bangla -> "পরিচালনা"; hindi -> "प्रबंधित करें"; else -> "Manage" })
-                            }
+                        TextButton(onClick = onOpenPremium) {
+                            Text(when { bangla -> "প্রিমিয়াম"; hindi -> "प्रीमियम"; else -> "Premium" })
                         }
                     }
                 }
+            }
 
-                when {
-                    isLoading && catalog.isEmpty() -> LoadingSystemFriends(language)
-                    catalog.isEmpty() && error == null -> MoreFriendsState(language)
-                    availableCatalog.isEmpty() && error == null && addingCatalogId == null -> MoreFriendsState(language)
-                    availableCatalog.isNotEmpty() -> SystemFriendCardDeck(
-                        catalog = availableCatalog,
-                        language = language,
-                        addingCatalogId = addingCatalogId,
-                        systemLimitReached = systemLimitReached,
-                        onSelect = onSelect
+            if (isLoading && catalog.isNotEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(
+                        when {
+                            bangla -> "AI বন্ধুদের তালিকা হালনাগাদ হচ্ছে…"
+                            hindi -> "AI दोस्तों की सूची रीफ़्रेश हो रही है…"
+                            else -> "Refreshing the AI friend list…"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    addingCatalogId != null -> Row(
-                        modifier = Modifier.fillMaxWidth().height(360.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
+                }
+            }
+            if (catalogError != null && catalog.isNotEmpty()) {
+                CatalogRefreshFailedNotice(language, isLoading, onRefresh)
+            }
+
+            when {
+                isLoading && catalog.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    LoadingSystemFriends(language)
+                }
+                catalog.isEmpty() && catalogError != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    CatalogUnavailableState(language, isLoading, onRefresh)
+                }
+                catalog.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    MoreFriendsState(language, onRetry = onRefresh)
+                }
+                availableCatalog.isEmpty() && addingCatalogId == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    MoreFriendsState(language, onManageFriends = onManageFriends)
+                }
+                searchQuery.isNotBlank() && filteredCatalog.isEmpty() -> Box(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    NoSystemFriendMatches(language) { searchQuery = "" }
+                }
+                availableCatalog.isNotEmpty() -> SystemFriendCardDeck(
+                    catalog = filteredCatalog,
+                    language = language,
+                    addingCatalogId = addingCatalogId,
+                    systemLimitReached = systemLimitReached,
+                    initialPassedIds = passedCatalogIds,
+                    onSelect = onSelect,
+                    onSwipeSelect = { pendingSwipeSelection = it },
+                    onPass = onPassCatalogFriend,
+                    onStartOver = onStartOver,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+                addingCatalogId != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                         CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(12.dp))
                         Text(when { bangla -> "বন্ধুকে যোগ করা হচ্ছে…"; hindi -> "दोस्त जोड़ा जा रहा है…"; else -> "Adding your friend…" })
                     }
                 }
+            }
 
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                if (error != null && catalog.isEmpty()) {
-                    TextButton(onClick = onRefresh, enabled = !isLoading, modifier = Modifier.align(Alignment.End)) {
-                        Text(when { bangla -> "আবার চেষ্টা করুন"; hindi -> "फिर कोशिश करें"; else -> "Try again" })
-                    }
+            addError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
+            if (showCreateFriend) AddFriendDialog(
+                language = language,
+                onDismiss = { showCreateFriend = false },
+                onAdd = { friend ->
+                    showCreateFriend = false
+                    onCreateCustomFriend(friend)
                 }
+            )
+            pendingSwipeSelection?.let { listing ->
+                AlertDialog(
+                    onDismissRequest = { pendingSwipeSelection = null },
+                    title = {
+                        Text(when {
+                            bangla -> "${listing.name}-কে যোগ করবেন?"
+                            hindi -> "क्या ${listing.name} को जोड़ें?"
+                            else -> "Add ${listing.name}?"
+                        })
+                    },
+                    text = {
+                        Text(when {
+                            bangla -> "এই বন্ধুটিকে আপনার তালিকায় যোগ করবেন? পরে সরাতে পারবেন।"
+                            hindi -> "इस दोस्त को अपनी सूची में जोड़ें? आप इसे बाद में हटा सकते हैं।"
+                            else -> "Add this friend to your list? You can remove them later."
+                        })
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingSwipeSelection = null
+                            onSelect(listing)
+                        }) {
+                            Text(when { bangla -> "যোগ করুন"; hindi -> "जोड़ें"; else -> "Add friend" })
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingSwipeSelection = null }) {
+                            Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" })
+                        }
+                    }
+                )
             }
         }
     }
@@ -179,7 +318,7 @@ internal fun SystemFriendPickerDialog(
 @Composable
 private fun LoadingSystemFriends(language: AppLanguage) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(360.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
@@ -194,21 +333,186 @@ private fun LoadingSystemFriends(language: AppLanguage) {
 }
 
 @Composable
-private fun MoreFriendsState(language: AppLanguage) {
+private fun CatalogUnavailableState(language: AppLanguage, isLoading: Boolean, onRetry: () -> Unit) {
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
     Column(
-        modifier = Modifier.fillMaxWidth().height(360.dp),
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            when {
+                bangla -> "AI বন্ধুদের তালিকা পাওয়া যাচ্ছে না"
+                hindi -> "AI दोस्तों की सूची उपलब्ध नहीं है"
+                else -> "AI friend catalog unavailable"
+            },
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            when {
+                bangla -> "আবার চেষ্টা করুন, অথবা ফিরে যান। এতে আপনার বর্তমান বন্ধুদের কোনো পরিবর্তন হবে না।"
+                hindi -> "फिर कोशिश करें या वापस जाएँ। इससे आपके मौजूदा दोस्तों में कोई बदलाव नहीं होगा।"
+                else -> "Try again or go back. Your existing friends won't be changed."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedButton(onClick = onRetry, enabled = !isLoading) {
+            Text(when {
+                bangla -> "আবার চেষ্টা করুন"
+                hindi -> "फिर कोशिश करें"
+                else -> "Try again"
+            })
+        }
+    }
+}
+
+@Composable
+private fun CatalogRefreshFailedNotice(language: AppLanguage, isLoading: Boolean, onRetry: () -> Unit) {
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.errorContainer
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                when {
+                    bangla -> "তালিকা হালনাগাদ করা যায়নি"
+                    hindi -> "सूची रीफ़्रेश नहीं हो सकी"
+                    else -> "Couldn't refresh the list"
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        bangla -> "আগের লোড করা তালিকা দেখানো হচ্ছে; এটি পুরোনো হতে পারে।"
+                        hindi -> "पहले लोड की गई सूची दिख रही है; यह पुरानी हो सकती है।"
+                        else -> "Showing the previously loaded list; it may be out of date."
+                    },
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                TextButton(onClick = onRetry, enabled = !isLoading) {
+                    Text(when {
+                        bangla -> "আবার চেষ্টা"
+                        hindi -> "फिर कोशिश"
+                        else -> "Retry"
+                    })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoreFriendsState(
+    language: AppLanguage,
+    onRetry: (() -> Unit)? = null,
+    onManageFriends: (() -> Unit)? = null,
+    onStartOver: (() -> Unit)? = null
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).padding(vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("✦", style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.primary)
+        Icon(
+            painter = painterResource(R.drawable.ic_auto_awesome),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(36.dp)
+        )
         Text(
             when (language) {
-                AppLanguage.BANGLA -> "আরও বন্ধু শিগগিরই আসছে"
-                AppLanguage.HINDI -> "और दोस्त जल्द आ रहे हैं"
-                AppLanguage.ENGLISH -> "More friends coming soon"
+                AppLanguage.BANGLA -> if (onStartOver != null) "সব বন্ধুকে দেখে ফেলেছেন" else "এখন কোনো AI বন্ধু উপলভ্য নেই"
+                AppLanguage.HINDI -> if (onStartOver != null) "आप सभी दोस्तों को देख चुके हैं" else "अभी कोई AI दोस्त उपलब्ध नहीं है"
+                AppLanguage.ENGLISH -> if (onStartOver != null) "You’ve seen all the friends" else "No AI friends are available right now"
             },
             style = MaterialTheme.typography.titleLarge
         )
+        Text(
+            when (language) {
+                AppLanguage.BANGLA -> if (onStartOver != null) "আবার শুরু করুন, অথবা বন্ধু পরিচালনা করে জায়গা খালি করুন।" else "তালিকাটি আবার চেষ্টা করুন, অথবা ফিরে যান।"
+                AppLanguage.HINDI -> if (onStartOver != null) "फिर से शुरू करें या दोस्तों को प्रबंधित करके जगह बनाएँ।" else "सूची फिर से देखें या वापस जाएँ।"
+                AppLanguage.ENGLISH -> if (onStartOver != null) "Start over or manage friends to make room." else "Retry the list or go back."
+            },
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            onStartOver?.let { onClick ->
+                OutlinedButton(onClick = onClick) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "আবার শুরু"
+                        AppLanguage.HINDI -> "फिर शुरू करें"
+                        AppLanguage.ENGLISH -> "Start over"
+                    })
+                }
+            }
+            onRetry?.let { onClick ->
+                OutlinedButton(onClick = onClick) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "আবার চেষ্টা করুন"
+                        AppLanguage.HINDI -> "फिर कोशिश करें"
+                        AppLanguage.ENGLISH -> "Try again"
+                    })
+                }
+            }
+            onManageFriends?.let { onClick ->
+                Button(onClick = onClick) {
+                    Text(when (language) {
+                        AppLanguage.BANGLA -> "বন্ধু পরিচালনা"
+                        AppLanguage.HINDI -> "दोस्त प्रबंधित करें"
+                        AppLanguage.ENGLISH -> "Manage friends"
+                    })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoSystemFriendMatches(language: AppLanguage, onClearSearch: () -> Unit) {
+    val bangla = language == AppLanguage.BANGLA
+    val hindi = language == AppLanguage.HINDI
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            when {
+                bangla -> "কোনো AI বন্ধু মেলেনি"
+                hindi -> "कोई AI दोस्त मेल नहीं खाता"
+                else -> "No AI friends match"
+            },
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            when {
+                bangla -> "অন্য নাম, আগ্রহ বা কথোপকথনের ধরন খুঁজুন।"
+                hindi -> "दूसरा नाम, रुचि या बातचीत की शैली खोजें।"
+                else -> "Try a different name, interest, or conversation style."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        TextButton(onClick = onClearSearch) {
+            Text(when {
+                bangla -> "সার্চ মুছুন"
+                hindi -> "खोज साफ़ करें"
+                else -> "Clear search"
+            })
+        }
     }
 }
 
@@ -218,11 +522,16 @@ private fun SystemFriendCardDeck(
     language: AppLanguage,
     addingCatalogId: String?,
     systemLimitReached: Boolean,
-    onSelect: (SystemFriendListing) -> Unit
+    initialPassedIds: Set<String>,
+    onSelect: (SystemFriendListing) -> Unit,
+    onSwipeSelect: (SystemFriendListing) -> Unit,
+    onPass: (String) -> Unit,
+    onStartOver: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    var passedIds by remember { mutableStateOf(emptySet<String>()) }
+    var passedIds by remember(catalog, initialPassedIds) { mutableStateOf(initialPassedIds) }
     var showFullProfile by remember { mutableStateOf(false) }
-    val remaining = catalog.filterNot { it.id in passedIds }
+    val remaining = availableSystemFriendDeck(catalog, emptySet(), passedIds)
     val current = remaining.firstOrNull()
     val next = remaining.getOrNull(1)
     val bangla = language == AppLanguage.BANGLA
@@ -231,85 +540,100 @@ private fun SystemFriendCardDeck(
     LaunchedEffect(current?.id) { showFullProfile = false }
 
     if (current == null) {
-        MoreFriendsState(language)
+        MoreFriendsState(language, onStartOver = {
+            passedIds = emptySet()
+            onStartOver()
+        })
         return
     }
 
+    fun passCurrentFriend() {
+        passedIds = passedIds + current.id
+        onPass(current.id)
+    }
+
     if (addingCatalogId == current.id) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(360.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(12.dp))
-            Text(when { bangla -> "বন্ধুকে যোগ করা হচ্ছে…"; hindi -> "दोस्त जोड़ा जा रहा है…"; else -> "Adding your friend…" })
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(when { bangla -> "বন্ধুকে যোগ করা হচ্ছে…"; hindi -> "दोस्त जोड़ा जा रहा है…"; else -> "Adding your friend…" })
+            }
         }
         return
     }
 
     val screenWidthPx = with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
-    val cardHeight = (LocalConfiguration.current.screenHeightDp * 0.49f).coerceIn(300f, 390f).dp
-    Box(
-        modifier = Modifier.fillMaxWidth().height(cardHeight + 70.dp),
-        contentAlignment = Alignment.TopCenter
-    ) {
-        next?.let {
-            CharacterCard(
-                listing = it,
-                language = language,
-                showFullProfile = false,
-                onToggleProfile = {},
-                modifier = Modifier.fillMaxWidth().height(cardHeight).padding(top = 12.dp).graphicsLayer {
-                    scaleX = 0.96f
-                    scaleY = 0.96f
+    Column(modifier = modifier) {
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val cardHeight = maxHeight.coerceAtLeast(220.dp)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                next?.let {
+                    CharacterCard(
+                        listing = it,
+                        language = language,
+                        showFullProfile = false,
+                        onToggleProfile = {},
+                        modifier = Modifier.fillMaxSize().padding(top = 12.dp).graphicsLayer {
+                            scaleX = 0.96f
+                            scaleY = 0.96f
+                        }
+                    )
                 }
-            )
+
+                SwipeableCharacterCard(
+                    listing = current,
+                    language = language,
+                    showFullProfile = showFullProfile,
+                    onToggleProfile = { showFullProfile = !showFullProfile },
+                    systemLimitReached = systemLimitReached,
+                    isAdding = addingCatalogId != null,
+                    screenWidthPx = screenWidthPx,
+                    cardHeight = cardHeight,
+                    onPass = ::passCurrentFriend,
+                    onSelect = { onSwipeSelect(current) }
+                )
+            }
         }
 
-        SwipeableCharacterCard(
-            listing = current,
-            language = language,
-            showFullProfile = showFullProfile,
-            onToggleProfile = { showFullProfile = !showFullProfile },
-            systemLimitReached = systemLimitReached,
-            isAdding = addingCatalogId != null,
-            screenWidthPx = screenWidthPx,
-            cardHeight = cardHeight,
-            onPass = { passedIds = passedIds + current.id },
-            onSelect = { onSelect(current) }
-        )
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        OutlinedButton(
-            onClick = { passedIds = passedIds + current.id },
-            enabled = addingCatalogId == null,
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(when { bangla -> "বাদ দিন"; hindi -> "पास करें"; else -> "Pass" })
-        }
-        OutlinedButton(
-            onClick = { showFullProfile = !showFullProfile },
-            enabled = addingCatalogId == null,
-            modifier = Modifier.heightIn(min = 48.dp)
-        ) {
-            Text(when { bangla -> "তথ্য"; hindi -> "जानकारी"; else -> "Info" })
-        }
-        Button(
-            onClick = { onSelect(current) },
-            enabled = !systemLimitReached && addingCatalogId == null,
-            modifier = Modifier.weight(1.25f).heightIn(min = 48.dp)
-        ) {
-            Text(when {
-                bangla -> "যোগ করুন"
-                hindi -> "जोड़ें"
-                else -> "Add friend"
-            })
+            IconButton(
+                onClick = ::passCurrentFriend,
+                enabled = addingCatalogId == null,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = localizedText(language, "Pass", "पास करें", "বাদ দিন"),
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+            IconButton(
+                onClick = { showFullProfile = !showFullProfile },
+                enabled = addingCatalogId == null,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Info,
+                    contentDescription = localizedText(language, "Info", "जानकारी", "তথ্য"),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            IconButton(
+                onClick = { onSelect(current) },
+                enabled = !systemLimitReached && addingCatalogId == null,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    Icons.Filled.PersonAdd,
+                    contentDescription = localizedText(language, "Add friend", "दोस्त जोड़ें", "বন্ধু যোগ করুন"),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
         }
     }
 }
@@ -474,7 +798,17 @@ private fun CharacterCardFront(listing: SystemFriendListing, language: AppLangua
                 color = Color.White
             )
             if (interests.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                InterestPills(interests)
+            }
+        }
+    }
+}
+
+@Composable
+private fun InterestPills(interests: List<String>) {
+    val density = LocalDensity.current
+    Layout(
+        content = {
                     interests.forEach { interest ->
                         Text(
                             interest,
@@ -484,7 +818,39 @@ private fun CharacterCardFront(listing: SystemFriendListing, language: AppLangua
                             color = Color.White
                         )
                     }
-                }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { measurables, constraints ->
+        val gap = with(density) { 6.dp.roundToPx() }
+        val placeables = measurables.map {
+            it.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        }
+        val positions = ArrayList<Pair<Placeable, IntOffset>>(placeables.size)
+        var x = 0
+        var y = 0
+        var rowHeight = 0
+        var widestRow = 0
+
+        placeables.forEach { placeable ->
+            if (x > 0 && x + gap + placeable.width > constraints.maxWidth) {
+                widestRow = maxOf(widestRow, x)
+                y += rowHeight + gap
+                x = 0
+                rowHeight = 0
+            }
+            val itemX = if (x == 0) 0 else x + gap
+            positions += placeable to IntOffset(itemX, y)
+            x = itemX + placeable.width
+            rowHeight = maxOf(rowHeight, placeable.height)
+        }
+        widestRow = maxOf(widestRow, x)
+
+        val width = widestRow.coerceIn(constraints.minWidth, constraints.maxWidth)
+        val height = (if (placeables.isEmpty()) 0 else y + rowHeight)
+            .coerceIn(constraints.minHeight, constraints.maxHeight)
+        layout(width, height) {
+            positions.forEach { (placeable, position) ->
+                placeable.placeRelative(position.x, position.y)
             }
         }
     }
@@ -494,10 +860,18 @@ private fun CharacterCardFront(listing: SystemFriendListing, language: AppLangua
 private fun CharacterCardBack(listing: SystemFriendListing, language: AppLanguage) {
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
+    val chatLanguageName = when (listing.conversationLanguage) {
+        AppLanguage.ENGLISH -> localizedText(language, "English", "अंग्रेज़ी", "ইংরেজি")
+        AppLanguage.BANGLA -> localizedText(language, "Bangla", "बांग्ला", "বাংলা")
+        AppLanguage.HINDI -> localizedText(language, "Hindi", "हिंदी", "হিন্দি")
+    }
     val details = listOf(
+        localizedText(language, "Personality", "व्यक्तित्व", "ব্যক্তিত্ব") to listing.personality,
         localizedText(language, "Category", "श्रेणी", "ধরন") to listing.category,
         localizedText(language, "About", "परिचय", "পরিচিতি") to listing.description,
         localizedText(language, "Interests", "रुचियाँ", "আগ্রহ") to listing.tags,
+        localizedText(language, "Conversation style", "बातचीत की शैली", "কথোপকথনের ধরন") to listing.conversationStyle,
+        localizedText(language, "Chat language", "चैट की भाषा", "চ্যাটের ভাষা") to chatLanguageName,
         localizedText(language, "How you met", "आपकी पहचान", "তোমাদের পরিচয়") to listing.relationship,
         localizedText(language, "First message", "पहला संदेश", "প্রথম বার্তা") to listing.greeting
     )

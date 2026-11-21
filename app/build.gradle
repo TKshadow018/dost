@@ -18,6 +18,19 @@ if (file("google-services.json").exists()) {
     apply plugin: 'com.google.gms.google-services'
 }
 
+def validateReleaseFirebaseAuthConfig = tasks.register("validateReleaseFirebaseAuthConfig") {
+    doLast {
+        if ([firebaseApiKey, firebaseAppId, firebaseProjectId, firebaseSenderId].any { it.toString().isBlank() }) {
+            throw new GradleException(
+                "Release builds require app/google-services.json with Firebase configuration for com.snigtus.dost."
+            )
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseFirebaseAuthConfig)
+}
+
 android {
     namespace 'com.snigtus.dost'
     // Integer 37 makes AGP 9.1.0 look up the unpublished hash "android-37".
@@ -32,6 +45,16 @@ android {
     def uploadStorePassword = System.getenv("DOST_KEYSTORE_PASSWORD") ?: providers.gradleProperty("DOST_KEYSTORE_PASSWORD").orNull
     def uploadKeyPassword = System.getenv("DOST_KEY_PASSWORD") ?: providers.gradleProperty("DOST_KEY_PASSWORD").orNull
     def dostAppCredentialSecret = System.getenv("DOST_APP_CREDENTIAL_SECRET") ?: providers.gradleProperty("DOST_APP_CREDENTIAL_SECRET").orNull ?: ""
+    def dostPeopleEnabledValue = System.getenv("DOST_PEOPLE_ENABLED") ?: providers.gradleProperty("DOST_PEOPLE_ENABLED").orNull ?: "true"
+    if (!dostPeopleEnabledValue.equalsIgnoreCase("true") && !dostPeopleEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_PEOPLE_ENABLED must be either true or false.")
+    }
+    def dostPremiumEnabledValue = System.getenv("DOST_PREMIUM_ENABLED") ?: providers.gradleProperty("DOST_PREMIUM_ENABLED").orNull ?: "false"
+    if (!dostPremiumEnabledValue.equalsIgnoreCase("true") && !dostPremiumEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_PREMIUM_ENABLED must be either true or false.")
+    }
+    def dostPeopleEnabled = dostPeopleEnabledValue.equalsIgnoreCase("true")
+    def dostPremiumEnabled = dostPremiumEnabledValue.equalsIgnoreCase("true")
     def escapedDostAppCredentialSecret = dostAppCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")
 
     signingConfigs {
@@ -47,11 +70,13 @@ android {
         applicationId "com.snigtus.dost"
         minSdk 26
         targetSdk 36
-        versionCode 2
-        versionName "0.1.1"
+        versionCode 3
+        versionName "0.1.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
+        buildConfigField "boolean", "DOST_PEOPLE_ENABLED", dostPeopleEnabled.toString()
+        buildConfigField "boolean", "DOST_PREMIUM_ENABLED", dostPremiumEnabled.toString()
         buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseApiKey)
         buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseAppId)
         buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseProjectId)
@@ -64,6 +89,9 @@ android {
             signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
+            ndk {
+                debugSymbolLevel 'FULL'
+            }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -88,13 +116,21 @@ dependencies {
     implementation libs.androidx.ui.graphics
     implementation libs.androidx.ui.tooling.preview
     implementation libs.androidx.material3
+    implementation "androidx.compose.material:material-icons-extended"
     implementation libs.kotlinx.coroutines.android
     implementation libs.androidx.work.runtime.ktx
     implementation platform(libs.firebase.bom)
     implementation libs.firebase.auth
+    implementation libs.firebase.firestore
+    implementation libs.firebase.messaging
+    implementation libs.webrtc.android
+    implementation libs.kotlinx.coroutines.play.services
     implementation libs.androidx.credentials
     implementation libs.androidx.credentials.play.services.auth
     implementation libs.google.id
+    implementation libs.play.age.signals
+    implementation libs.play.integrity
+    implementation libs.play.billing
     testImplementation libs.junit
     testImplementation libs.kotlinx.coroutines.test
     // Unit tests run against the Android SDK stubs, whose org.json throws. Use the real parser in tests only.

@@ -46,6 +46,8 @@ class OpenRouterClient {
         internal const val MODEL_REPLY_LOG_LIMIT = 200
         internal const val MAX_SUMMARY_MESSAGES = 100
         internal const val MAX_SESSION_SUMMARY_ITEMS = MAX_RETRIEVED_SESSION_SUMMARIES
+        internal const val MAX_MEMORY_CONTEXT_CHARACTERS = 2_400
+        internal const val MAX_SUMMARY_CONTEXT_CHARACTERS = 1_600
 
         /** Messages fed to the session-summary prompt. The injection cap for stored summaries stays separate. */
         internal fun summaryMessages(messages: List<ChatMessage>): List<ChatMessage> =
@@ -53,10 +55,16 @@ class OpenRouterClient {
     }
 
     suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile = structuredProfileFromMemories(userName, userMemories)): AiReply = withContext(Dispatchers.IO) {
+        require(friendAgeResult(friend.age) == AccountAgeResult.VALID) {
+            "Messaging is disabled for friend profiles under 18."
+        }
         request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction, userAge, structuredUserProfile)
     }
 
     suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
+        require(friendAgeResult(age) == AccountAgeResult.VALID) {
+            "Generated friend profiles must be 18 or older."
+        }
         requestProfile(model, apiKey, name, age, gender, personality, language)
     }
 
@@ -95,14 +103,29 @@ class OpenRouterClient {
         require(installationId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
             "The installation id is invalid."
         }
-        val connection = URL("https://bisque-bear-900175.hostingersite.com/api/delete_archive.php")
-            .openConnection() as HttpURLConnection
-        connection.requestMethod = "POST"
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 15_000
-        connection.setRequestProperty("Accept", "application/json")
-        connection.setRequestProperty("X-Dost-Install-ID", installationId)
+        fun send(nowEpochSeconds: Long): HttpURLConnection =
+            (URL("https://bisque-bear-900175.hostingersite.com/api/delete_archive.php")
+                .openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15_000
+                readTimeout = 15_000
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-Dost-Install-ID", installationId)
+                dostAppCredentialValue(installationId, nowEpochSeconds)?.let {
+                    setRequestProperty("X-Dost-App-Credential", it)
+                }
+            }
+
+        var connection = send(System.currentTimeMillis() / 1000)
         try {
+            if (connection.responseCode == 401) {
+                val serverMillis = connection.getHeaderFieldDate("Date", -1L)
+                val serverSeconds = serverMillis / 1000
+                if (serverMillis >= 0L && kotlin.math.abs(serverSeconds - System.currentTimeMillis() / 1000) >= 30) {
+                    connection.disconnect()
+                    connection = send(serverSeconds)
+                }
+            }
             val statusCode = connection.responseCode
             val stream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
@@ -118,20 +141,35 @@ class OpenRouterClient {
 
     private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile): AiReply {
         val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
-        val connection = openConnection(apiKey, installationId, friend.id, resolvedSessionId)
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
         val friendDateTime = ZonedDateTime.now(validZoneId(friend.timeZoneId)).format(formatter)
         val retrievalQuery = history.lastOrNull { it.role == "user" }?.content.orEmpty()
-        val memoryContext = retrieveRelevantUserMemories(retrievalQuery, userMemories, structuredUserProfile)
-            .joinToString("\n") { "- [${it.category}] ${it.fact}" }
-            .ifBlank { "No related profile facts for this turn." }
-        val sessionSummaryContext = retrieveRelevantSessionSummaries(retrievalQuery, sessionSummaries, MAX_SESSION_SUMMARY_ITEMS)
-            .joinToString("\n\n") { "Session summary: ${it.summary}" }
-            .ifBlank { "No related previous session summaries for this turn." }
+        val coreProfileFacts = coreUserProfileMemories(structuredUserProfile)
+        val coreProfileFactTexts = coreProfileFacts.map { it.fact.trim().lowercase() }.toSet()
+        val coreProfileContext = coreUserProfileContext(structuredUserProfile)
+        val memoryContext = boundedPromptContext(
+            retrieveRelevantUserMemories(retrievalQuery, userMemories, structuredUserProfile)
+                .filterNot { it.fact.trim().lowercase() in coreProfileFactTexts }
+                .map { "- [${it.category}] ${it.fact}" },
+            MAX_MEMORY_CONTEXT_CHARACTERS
+        ).ifBlank { "No related profile facts for this turn." }
+        val sessionSummaryContext = boundedPromptContext(
+            retrieveRelevantSessionSummaries(retrievalQuery, sessionSummaries, MAX_SESSION_SUMMARY_ITEMS)
+                .map { "Session summary: ${it.summary}" },
+            MAX_SUMMARY_CONTEXT_CHARACTERS,
+            "\n\n"
+        ).ifBlank { "No related previous session summaries for this turn." }
+        val routineContext = friend.effectiveRoutineBlocks().joinToString("\n") { block ->
+            val days = block.daysOfWeek.sorted().joinToString(",") { java.time.DayOfWeek.of(it).name.lowercase(Locale.ROOT) }
+            val start = java.time.LocalTime.of(block.startMinute / 60, block.startMinute % 60)
+                .format(DateTimeFormatter.ofPattern("h:mm a", Locale.ROOT))
+            "- ${block.reason.ifBlank { "Routine" }}: $days at $start for ${block.durationMinutes} minutes"
+        }
         val profileContext = listOf(
             "Personality: ${friend.personality}", "How you know each other: ${friend.relationship}",
-            "Busy with: ${friend.busyReason}", "Interests: ${friend.interests}", "Family: ${friend.family}",
+            "Busy with: ${friend.busyReason}", "Routine blocks:\n$routineContext",
+            "Interests: ${friend.interests}", "Family: ${friend.family}",
             "Family members: ${friend.familyMembers}", "Family activities: ${friend.familyActivities}",
             "Financial condition: ${friend.financialCondition}", "Address: ${friend.address}", "Height: ${friend.height}",
             "Weight: ${friend.weight}", "Facial features: ${friend.facialFeatures}", "Body features: ${friend.bodyFeatures}"
@@ -152,6 +190,8 @@ class OpenRouterClient {
             ${relationshipStatePrompt(friendshipScore, loveScore, userAge, friend.age)}
             Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Stay in character, never claim to be a real person, and answer naturally.
             Per-friend structured profile name: ${structuredUserProfile.name.ifBlank { "not provided" }}.
+            Core profile facts (always include as durable context when relevant):
+            ${coreProfileContext.ifBlank { "No core profile facts saved." }}
             Relevant profile facts and memories retrieved for the latest user message. Use them only when relevant:
             $memoryContext
             $memoryExtractionGuidance
@@ -194,6 +234,11 @@ class OpenRouterClient {
             put("friend_name", friend.name)
             put("user_age", userAge)
             put("friend_age", friend.age)
+            put("chat_language", when (language) {
+                AppLanguage.BANGLA -> "bn"
+                AppLanguage.HINDI -> "hi"
+                AppLanguage.ENGLISH -> "en"
+            })
             put("model", model)
             put("messages", messages)
             put("temperature", 0.8)
