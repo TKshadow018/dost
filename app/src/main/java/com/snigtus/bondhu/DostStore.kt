@@ -5,10 +5,12 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.util.AtomicFile
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -21,10 +23,13 @@ import javax.crypto.spec.GCMParameterSpec
 
 private const val SYSTEM_FRIEND_PASS_KEY_PREFIX = "system_friend_passed_at_"
 internal const val SYSTEM_FRIEND_PASS_DURATION_MILLIS = 7L * 24L * 60L * 60L * 1000L
+private const val PEOPLE_PROFILE_PASS_KEY_PREFIX = "people_profile_passed_at_"
+internal const val PEOPLE_PROFILE_PASS_DURATION_MILLIS = 90L * 24L * 60L * 60L * 1000L
 internal const val LEGACY_PROFILE_NAMESPACE = "legacy"
 private const val ACCOUNT_REGISTRY_PREFERENCES = "dost_account_registry"
 private const val ACTIVE_PROFILE_NAMESPACE = "active_profile_namespace"
 private val profileRegistryLock = Any()
+private val peopleOutboxLock = Any()
 
 internal fun accountProfileNamespace(accountId: String): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(accountId.toByteArray(StandardCharsets.UTF_8))
@@ -147,6 +152,11 @@ internal fun isSystemFriendPassActive(passedAtMillis: Long, nowMillis: Long): Bo
         && passedAtMillis <= nowMillis
         && nowMillis - passedAtMillis < SYSTEM_FRIEND_PASS_DURATION_MILLIS
 
+internal fun isPeopleProfilePassActive(passedAtMillis: Long, nowMillis: Long): Boolean =
+    passedAtMillis > 0L
+        && passedAtMillis <= nowMillis
+        && nowMillis - passedAtMillis < PEOPLE_PROFILE_PASS_DURATION_MILLIS
+
 class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     private val context = context
     internal val profileNamespace = requestedProfileNamespace
@@ -158,6 +168,7 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
         File(context.filesDir, "profiles/$profileNamespace").apply { mkdirs() }
     }
     private val messagesDirectory = File(profileFilesDirectory, "messages").apply { mkdirs() }
+    private val peopleOutboxDirectory = File(messagesDirectory, "people_outbox")
     internal val chatImagesDirectory = File(profileFilesDirectory, "chat_images").apply { mkdirs() }
     internal val systemFriendPhotosDirectory = File(profileFilesDirectory, "system-friend-photos")
 
@@ -306,6 +317,92 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("anonymous_telemetry_enabled", enabled).apply()
     }
+    fun peopleCallAlertsEnabled(defaultEnabled: Boolean): Boolean =
+        preferences.getBoolean("people_call_alerts_enabled", defaultEnabled)
+    fun hasPeopleCallAlertsChoice(): Boolean = preferences.contains("people_call_alerts_enabled")
+    fun setPeopleCallAlertsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("people_call_alerts_enabled", enabled).apply()
+    }
+    fun peopleMessageNotificationsEnabled(): Boolean =
+        preferences.getBoolean("people_message_notifications_enabled", false)
+    fun setPeopleMessageNotificationsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("people_message_notifications_enabled", enabled).apply()
+    }
+    fun aiNotificationPreviewsEnabled(): Boolean =
+        preferences.getBoolean("ai_notification_previews_enabled", false)
+    fun setAiNotificationPreviewsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("ai_notification_previews_enabled", enabled).apply()
+    }
+    fun pinnedConversationIds(): Set<String> = conversationPreferenceIds("pinned_conversation_ids")
+    fun mutedConversationIds(): Set<String> =
+        conversationPreferenceIds("muted_conversation_ids") +
+            preferences.getStringSet("muted_people_chat_ids", emptySet())
+                .orEmpty()
+                .filter { it.matches(Regex("[A-Za-z0-9_-]{1,128}")) }
+                .map { "people:$it" }
+    fun archivedConversationIds(): Set<String> = conversationPreferenceIds("archived_conversation_ids")
+    fun isConversationMuted(conversationKey: String): Boolean {
+        requireValidConversationKey(conversationKey)
+        if (conversationKey in mutedConversationIds()) return true
+        return conversationKey.startsWith("people:")
+            && conversationKey.removePrefix("people:") in
+            preferences.getStringSet("muted_people_chat_ids", emptySet()).orEmpty()
+    }
+    fun isConversationArchived(conversationKey: String): Boolean {
+        requireValidConversationKey(conversationKey)
+        return conversationKey in archivedConversationIds()
+    }
+    fun isConversationPinned(conversationKey: String): Boolean {
+        requireValidConversationKey(conversationKey)
+        return conversationKey in pinnedConversationIds()
+    }
+    fun setConversationPinned(conversationKey: String, pinned: Boolean) {
+        updateConversationPreference("pinned_conversation_ids", conversationKey, pinned)
+    }
+    fun setConversationMuted(conversationKey: String, muted: Boolean) {
+        updateConversationPreference("muted_conversation_ids", conversationKey, muted)
+        if (conversationKey.startsWith("people:")) {
+            updatePeopleChatMuteCompatibility(conversationKey.removePrefix("people:"), muted)
+        }
+    }
+    fun setConversationArchived(conversationKey: String, archived: Boolean) {
+        updateConversationPreference("archived_conversation_ids", conversationKey, archived)
+    }
+    fun removeConversationPreferences(conversationKey: String) {
+        setConversationPinned(conversationKey, false)
+        setConversationMuted(conversationKey, false)
+        setConversationArchived(conversationKey, false)
+    }
+    fun isPeopleChatMuted(conversationId: String): Boolean {
+        require(conversationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        return isConversationMuted("people:$conversationId")
+    }
+    fun setPeopleChatMuted(conversationId: String, muted: Boolean) {
+        require(conversationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        setConversationMuted("people:$conversationId", muted)
+    }
+    private fun updatePeopleChatMuteCompatibility(conversationId: String, muted: Boolean) {
+        val mutedIds = preferences.getStringSet("muted_people_chat_ids", emptySet())
+            .orEmpty()
+            .toMutableSet()
+        if (muted) mutedIds += conversationId else mutedIds -= conversationId
+        preferences.edit().putStringSet("muted_people_chat_ids", mutedIds).apply()
+    }
+    private fun conversationPreferenceIds(preferenceKey: String): Set<String> =
+        preferences.getStringSet(preferenceKey, emptySet())
+            .orEmpty()
+            .filterTo(mutableSetOf(), ::isValidConversationPreferenceKey)
+    private fun updateConversationPreference(preferenceKey: String, conversationKey: String, enabled: Boolean) {
+        requireValidConversationKey(conversationKey)
+        val ids = conversationPreferenceIds(preferenceKey).toMutableSet()
+        if (enabled) ids += conversationKey else ids -= conversationKey
+        preferences.edit().putStringSet(preferenceKey, ids).apply()
+    }
+    private fun requireValidConversationKey(conversationKey: String) {
+        require(isValidConversationPreferenceKey(conversationKey)) { "Invalid conversation preference key." }
+    }
+    private fun isValidConversationPreferenceKey(conversationKey: String): Boolean =
+        conversationKey.matches(Regex("(ai|people):[A-Za-z0-9_-]{1,128}"))
     internal fun peopleProfileDraft(): PeopleProfileDraft = PeopleProfileDraft(
         country = preferences.getString("people_profile_country", "") ?: "",
         bio = preferences.getString("people_profile_bio", "") ?: "",
@@ -344,6 +441,35 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
         val editor = preferences.edit()
         preferences.all.keys
             .filter { it.startsWith(SYSTEM_FRIEND_PASS_KEY_PREFIX) }
+            .forEach { editor.remove(it) }
+        editor.apply()
+    }
+    fun passedPeopleProfileIds(nowMillis: Long = System.currentTimeMillis()): Set<String> {
+        val passedIds = mutableSetOf<String>()
+        val editor = preferences.edit()
+        var removedExpiredPass = false
+        preferences.all.forEach { (key, value) ->
+            if (!key.startsWith(PEOPLE_PROFILE_PASS_KEY_PREFIX)) return@forEach
+            val profileUid = key.removePrefix(PEOPLE_PROFILE_PASS_KEY_PREFIX)
+            val passedAtMillis = value as? Long
+            if (profileUid.isBlank() || passedAtMillis == null || !isPeopleProfilePassActive(passedAtMillis, nowMillis)) {
+                editor.remove(key)
+                removedExpiredPass = true
+            } else {
+                passedIds += profileUid
+            }
+        }
+        if (removedExpiredPass) editor.apply()
+        return passedIds
+    }
+    fun markPeopleProfilePassed(profileUid: String, nowMillis: Long = System.currentTimeMillis()) {
+        require(profileUid.isNotBlank() && profileUid.length <= 128) { "Invalid People profile ID" }
+        preferences.edit().putLong(PEOPLE_PROFILE_PASS_KEY_PREFIX + profileUid, nowMillis).apply()
+    }
+    fun clearPassedPeopleProfiles() {
+        val editor = preferences.edit()
+        preferences.all.keys
+            .filter { it.startsWith(PEOPLE_PROFILE_PASS_KEY_PREFIX) }
             .forEach { editor.remove(it) }
         editor.apply()
     }
@@ -436,7 +562,7 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
                     AppLanguage.HINDI -> "hi"
                     AppLanguage.ENGLISH -> "en"
                 })
-                put("showFriendSearchAndCount", showFriendSearchAndCount())
+                put("showFriendCount", showFriendCount())
                 put("timeZone", userTimeZoneId())
                 put("model", aiModel())
                 put("proactiveEnabled", proactiveEnabled())
@@ -473,7 +599,10 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
         require(chatLanguage.isEmpty() || chatLanguage in setOf("bn", "hi", "en")) {
             "The backup chat language is invalid."
         }
-        val showFriendSearchAndCount = settings.optBoolean("showFriendSearchAndCount", false)
+        val showFriendCount = settings.optBoolean(
+            "showFriendCount",
+            settings.optBoolean("showFriendSearchAndCount", false)
+        )
         val timeZone = backupString(settings, "timeZone", 100)
         val parsedTimeZone = runCatching { ZoneId.of(timeZone).id }.getOrNull()
         require(parsedTimeZone != null) { "The backup timezone is invalid." }
@@ -725,7 +854,8 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
                 .putString("user_time_zone", parsedTimeZone)
                 .putString("language", language)
                 .putString("chat_language", chatLanguage)
-                .putBoolean("show_friend_search_and_count", showFriendSearchAndCount)
+                .putBoolean("show_friend_count", showFriendCount)
+                .remove("show_friend_search_and_count")
                 .putString("ai_model", model)
                 .putBoolean("proactive_enabled", proactiveEnabled)
                 .putInt("proactive_cadence_minutes", proactiveCadenceMinutes)
@@ -896,6 +1026,111 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     private fun messageFile(friendId: String): File {
         val safeId = friendId.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "unknown" }
         return File(messagesDirectory, "$safeId.json")
+    }
+
+    private fun peopleOutboxConversationDirectory(conversationId: String, create: Boolean): File? {
+        require(conversationId.isNotBlank()) { "A conversation ID is required for the message outbox." }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(conversationId.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val directory = File(peopleOutboxDirectory, digest)
+        if (!directory.exists() && !create) return null
+        if (create) check(directory.mkdirs() || directory.isDirectory) {
+            "Could not create the People message outbox."
+        }
+        check(directory.isDirectory) { "The People message outbox is unavailable." }
+        return directory
+    }
+
+    private fun peopleOutboxFile(conversationId: String, messageId: String, create: Boolean): File? {
+        require(isValidSocialMessageId(messageId)) { "The message ID is invalid." }
+        val directory = peopleOutboxConversationDirectory(conversationId, create) ?: return null
+        return File(directory, "$messageId.json")
+    }
+
+    internal fun loadPendingPeopleMessages(conversationId: String): List<PendingPeopleMessage> =
+        synchronized(peopleOutboxLock) {
+            val directory = peopleOutboxConversationDirectory(conversationId, create = false)
+                ?: return@synchronized emptyList()
+            val files = directory.listFiles()
+                ?: error("Could not read the People message outbox.")
+            val messageIds = files.mapNotNull { file ->
+                when {
+                    file.name.endsWith(".json.bak") -> file.name.removeSuffix(".json.bak")
+                    file.name.endsWith(".json") -> file.name.removeSuffix(".json")
+                    else -> null
+                }
+            }.distinct()
+            messageIds.mapNotNull { messageId ->
+                peopleOutboxFile(conversationId, messageId, create = false)
+                    ?.let(::readPendingPeopleMessage)
+            }.filter { it.conversationId == conversationId }
+                .sortedBy { it.createdAtMillis }
+        }
+
+    internal fun loadPendingPeopleMessage(conversationId: String, messageId: String): PendingPeopleMessage? =
+        synchronized(peopleOutboxLock) {
+            peopleOutboxFile(conversationId, messageId, create = false)
+                ?.takeIf { it.exists() || File(it.path + ".bak").exists() }
+                ?.let(::readPendingPeopleMessage)
+        }
+
+    internal fun savePendingPeopleMessage(message: PendingPeopleMessage) = synchronized(peopleOutboxLock) {
+        require(message.uid.isNotBlank() && message.conversationId.isNotBlank())
+        require(isValidSocialMessageId(message.messageId))
+        require(message.text.isNotBlank() && message.text.length <= 2_000)
+        val file = checkNotNull(peopleOutboxFile(message.conversationId, message.messageId, create = true))
+        val atomicFile = AtomicFile(file)
+        var output: FileOutputStream? = null
+        try {
+            output = atomicFile.startWrite()
+            output.write(pendingPeopleMessageToJson(message).toString().toByteArray(StandardCharsets.UTF_8))
+            atomicFile.finishWrite(output)
+        } catch (exception: Exception) {
+            output?.let(atomicFile::failWrite)
+            throw IllegalStateException("Could not save an outgoing People message.", exception)
+        }
+    }
+
+    internal fun removePendingPeopleMessage(conversationId: String, messageId: String) =
+        synchronized(peopleOutboxLock) {
+            val file = peopleOutboxFile(conversationId, messageId, create = false) ?: return@synchronized
+            if (!file.exists() && !File(file.path + ".bak").exists()) return@synchronized
+            AtomicFile(file).delete()
+            check(!file.exists() && !File(file.path + ".bak").exists()) {
+                "Could not remove a sent People message from the outbox."
+            }
+            file.parentFile?.takeIf { it.list()?.isEmpty() == true }?.delete()
+        }
+
+    private fun pendingPeopleMessageToJson(message: PendingPeopleMessage): JSONObject = JSONObject().apply {
+        put("uid", message.uid)
+        put("conversationId", message.conversationId)
+        put("messageId", message.messageId)
+        put("text", message.text)
+        put("createdAtMillis", message.createdAtMillis)
+        put("status", message.status.name)
+    }
+
+    private fun readPendingPeopleMessage(file: File): PendingPeopleMessage {
+        try {
+            val atomicFile = AtomicFile(file)
+            val json = JSONObject(atomicFile.openRead().bufferedReader(StandardCharsets.UTF_8).use { it.readText() })
+            val message = PendingPeopleMessage(
+                uid = json.getString("uid"),
+                conversationId = json.getString("conversationId"),
+                messageId = json.getString("messageId"),
+                text = json.getString("text"),
+                createdAtMillis = json.getLong("createdAtMillis"),
+                status = PendingPeopleMessageStatus.valueOf(json.getString("status"))
+            )
+            check(isValidSocialMessageId(message.messageId) && message.uid.isNotBlank()
+                && message.conversationId.isNotBlank() && message.text.isNotBlank()
+            ) { "A saved People message is invalid." }
+            return message
+        } catch (exception: Exception) {
+            throw IllegalStateException("Could not read a saved outgoing People message.", exception)
+        }
     }
 
     fun loadMessages(friendId: String): MutableList<ChatMessage> = runCatching {
@@ -1074,6 +1309,7 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     }
 
     fun deleteFriendData(friend: Friend) {
+        removeConversationPreferences("ai:${friend.id}")
         loadMessages(friend.id).forEach { message ->
             message.imagePath.takeIf { it.isNotBlank() }?.let(::deleteChatImage)
         }
@@ -1522,10 +1758,16 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
             AppLanguage.ENGLISH -> "en"
         }).apply()
     }
-    fun showFriendSearchAndCount(): Boolean =
-        preferences.getBoolean("show_friend_search_and_count", false)
-    fun setShowFriendSearchAndCount(show: Boolean) {
-        preferences.edit().putBoolean("show_friend_search_and_count", show).apply()
+    fun showFriendCount(): Boolean =
+        preferences.getBoolean(
+            "show_friend_count",
+            preferences.getBoolean("show_friend_search_and_count", false)
+        )
+    fun setShowFriendCount(show: Boolean) {
+        preferences.edit()
+            .putBoolean("show_friend_count", show)
+            .remove("show_friend_search_and_count")
+            .apply()
     }
 
     private data class ImportedBackupFriend(
@@ -1556,7 +1798,7 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
         const val BACKUP_FORMAT = "dost-local-backup"
         const val BACKUP_VERSION = 1
 
-        const val MAX_BACKUP_FRIENDS = 10
+        const val MAX_BACKUP_FRIENDS = 1_000
         const val MAX_BACKUP_TEXT_LENGTH = 250_000
         const val MAX_BACKUP_IMAGE_BYTES = 375_000
         const val MAX_BACKUP_IMAGE_BASE64_LENGTH = 500_000

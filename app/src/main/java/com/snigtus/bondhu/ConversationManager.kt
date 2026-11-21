@@ -410,9 +410,9 @@ object ConversationManager {
     }
 
     private fun unreadableReply(language: AppLanguage): String = when (language) {
-        AppLanguage.BANGLA -> "এই উত্তরটা পড়া যায়নি। মেসেজ চেপে ধরে Reply differently বেছে আবার চেষ্টা করো।"
-        AppLanguage.HINDI -> "यह जवाब पढ़ा नहीं जा सका। संदेश को दबाकर Reply differently चुनें और फिर कोशिश करें।"
-        AppLanguage.ENGLISH -> "I couldn't read that reply. Touch and hold this message and choose Reply differently to try again."
+        AppLanguage.BANGLA -> "এই উত্তরটি পড়া যায়নি। অন্য উত্তর চাইতে নিচের “আবার চেষ্টা করুন” চাপুন।"
+        AppLanguage.HINDI -> "यह जवाब पढ़ा नहीं जा सका। दूसरा जवाब पाने के लिए नीचे “फिर कोशिश करें” दबाएँ।"
+        AppLanguage.ENGLISH -> "I couldn't read that reply. Tap Try again below to request another response."
     }
 
     private fun connectionIssueReply(language: AppLanguage): String = when (language) {

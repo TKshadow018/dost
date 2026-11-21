@@ -1,9 +1,12 @@
 package com.snigtus.dost
 
 import android.content.Context
+import android.util.Log
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -11,6 +14,7 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.tasks.await
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.Date
 import java.util.UUID
@@ -24,6 +28,7 @@ internal data class PeopleProfileDraft(
 internal enum class PeopleContactPolicy(val firestoreValue: String) {
     EVERYONE("everyone"),
     REQUESTS("requests"),
+    MATCHES("matches"),
     NOBODY("nobody");
 
     companion object {
@@ -46,6 +51,15 @@ internal data class PublicPersonProfile(
     val contactPolicy: PeopleContactPolicy = PeopleContactPolicy.EVERYONE
 )
 
+internal fun filterPeopleByInterest(
+    profiles: List<PublicPersonProfile>,
+    interestQuery: String
+): List<PublicPersonProfile> {
+    val normalizedQuery = interestQuery.trim()
+    if (normalizedQuery.isEmpty()) return profiles
+    return profiles.filter { it.interests.contains(normalizedQuery, ignoreCase = true) }
+}
+
 internal data class SocialConversation(
     val id: String,
     val peer: PublicPersonProfile,
@@ -59,17 +73,167 @@ internal data class SocialContactRequest(
     val sender: PublicPersonProfile
 )
 
+internal enum class SocialContactRequestStatus(val firestoreValue: String) {
+    PENDING("pending"),
+    ACCEPTED("accepted"),
+    IGNORED("ignored");
+
+    companion object {
+        fun fromFirestore(value: String?): SocialContactRequestStatus =
+            values().firstOrNull { it.firestoreValue == value }
+                ?: error("A contact request has an invalid status.")
+    }
+}
+
+internal data class SocialOutgoingContactRequest(
+    val recipientUid: String,
+    val status: SocialContactRequestStatus
+)
+
 internal sealed class PeopleContactStartResult {
     data class Conversation(val value: SocialConversation) : PeopleContactStartResult()
     object RequestSent : PeopleContactStartResult()
+    data class ExistingRequest(val status: SocialContactRequestStatus) : PeopleContactStartResult()
+    object IncomingRequest : PeopleContactStartResult()
+    object Unavailable : PeopleContactStartResult()
 }
 
 internal data class SocialChatMessage(
     val id: String,
     val senderUid: String,
     val text: String,
-    val createdAtMillis: Long
+    val createdAtMillis: Long,
+    val deliveryState: SocialMessageDeliveryState = SocialMessageDeliveryState.SENT
 )
+
+internal fun searchSocialMessages(
+    messages: List<SocialChatMessage>,
+    query: String
+): List<SocialChatMessage> {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) return messages
+    return messages.filter { it.text.contains(normalizedQuery, ignoreCase = true) }
+}
+
+internal data class OlderSocialMessagePage(
+    val messages: List<SocialChatMessage>,
+    val hasMore: Boolean
+)
+
+internal enum class SocialMessageDeliveryState { SENDING, WAITING, SENT, FAILED }
+
+internal enum class PendingPeopleMessageStatus { WAITING, FAILED }
+
+internal data class PendingPeopleMessage(
+    val uid: String,
+    val conversationId: String,
+    val messageId: String,
+    val text: String,
+    val createdAtMillis: Long,
+    val status: PendingPeopleMessageStatus
+)
+
+internal data class PeopleMessageDeliveryUpdate(
+    val uid: String,
+    val conversationId: String,
+    val messageId: String,
+    val deliveryState: SocialMessageDeliveryState
+)
+
+private val SOCIAL_MESSAGE_ID_PATTERN = Regex("[A-Za-z0-9_-]{1,128}")
+internal const val MAX_SOCIAL_CHAT_MESSAGES = 500
+
+internal fun isValidSocialMessageId(messageId: String): Boolean =
+    SOCIAL_MESSAGE_ID_PATTERN.matches(messageId)
+
+internal fun PendingPeopleMessage.toSocialChatMessage(): SocialChatMessage =
+    SocialChatMessage(
+        id = messageId,
+        senderUid = uid,
+        text = text,
+        createdAtMillis = createdAtMillis,
+        deliveryState = when (status) {
+            PendingPeopleMessageStatus.WAITING -> SocialMessageDeliveryState.WAITING
+            PendingPeopleMessageStatus.FAILED -> SocialMessageDeliveryState.FAILED
+        }
+    )
+
+internal fun isRetryablePeopleMessageFailure(exception: Throwable): Boolean {
+    var cause: Throwable? = exception
+    while (cause != null) {
+        when (cause) {
+            is FirebaseFirestoreException -> return cause.code in setOf(
+                FirebaseFirestoreException.Code.UNAVAILABLE,
+                FirebaseFirestoreException.Code.DEADLINE_EXCEEDED,
+                FirebaseFirestoreException.Code.ABORTED
+            )
+            is FirebaseNetworkException, is IOException -> return true
+        }
+        cause = cause.cause
+    }
+    return false
+}
+
+internal fun peopleFailureMessage(
+    error: Throwable,
+    language: AppLanguage,
+    fallback: String
+): String {
+    var cause: Throwable? = error
+    while (cause != null) {
+        if (cause is kotlinx.coroutines.CancellationException) throw cause
+        if (cause is FirebaseFirestoreException) {
+            peopleFailureMessageForFirestoreCode(cause.code.name, language)?.let { return it }
+        }
+        if (cause is FirebaseNetworkException || cause is IOException) {
+            return peopleConnectionFailureMessage(language)
+        }
+        cause = cause.cause
+    }
+    return fallback
+}
+
+internal fun peopleFailureMessageForFirestoreCode(code: String, language: AppLanguage): String? =
+    when (code) {
+        "RESOURCE_EXHAUSTED" -> when (language) {
+            AppLanguage.BANGLA -> "অনেকবার চেষ্টা হয়েছে। একটু অপেক্ষা করে আবার চেষ্টা করুন।"
+            AppLanguage.HINDI -> "बहुत अधिक प्रयास हुए। थोड़ी देर बाद फिर कोशिश करें।"
+            AppLanguage.ENGLISH -> "Too many attempts. Wait a little and try again."
+        }
+        "PERMISSION_DENIED" -> when (language) {
+            AppLanguage.BANGLA -> "এই কাজটি এই প্রোফাইল বা অ্যাকাউন্টের জন্য উপলভ্য নয়। পরে আবার চেষ্টা করুন।"
+            AppLanguage.HINDI -> "यह कार्रवाई इस प्रोफ़ाइल या खाते के लिए उपलब्ध नहीं है। बाद में फिर कोशिश करें।"
+            AppLanguage.ENGLISH -> "This action is unavailable for this profile or account. Try again later."
+        }
+        "UNAVAILABLE", "DEADLINE_EXCEEDED", "ABORTED" -> peopleConnectionFailureMessage(language)
+        else -> null
+    }
+
+private fun peopleConnectionFailureMessage(language: AppLanguage): String = when (language) {
+    AppLanguage.BANGLA -> "সংযোগে সমস্যা হয়েছে। ইন্টারনেট পরীক্ষা করে আবার চেষ্টা করুন।"
+    AppLanguage.HINDI -> "कनेक्शन में समस्या है। इंटरनेट जाँचकर फिर कोशिश करें।"
+    AppLanguage.ENGLISH -> "Connection problem. Check your internet and try again."
+}
+
+internal fun mergeSocialMessages(
+    confirmedMessages: List<SocialChatMessage>,
+    pendingMessages: List<SocialChatMessage>
+): List<SocialChatMessage> {
+    val uniqueConfirmedMessages = confirmedMessages.distinctBy { it.id }
+    val confirmedIds = uniqueConfirmedMessages.mapTo(mutableSetOf()) { it.id }
+    return (uniqueConfirmedMessages + pendingMessages.filterNot { it.id in confirmedIds })
+        .sortedBy { it.createdAtMillis }
+}
+
+private fun DocumentSnapshot.toSocialChatMessage(): SocialChatMessage =
+    SocialChatMessage(
+        id = id,
+        senderUid = getString("senderUid")
+            ?: error("A chat message is missing its sender."),
+        text = getString("text")
+            ?: error("A chat message is missing its text."),
+        createdAtMillis = getTimestamp("createdAt")?.toDate()?.time ?: 0L
+    )
 
 internal data class PeopleCallDescription(
     val type: String,
@@ -124,9 +288,10 @@ internal fun socialConversationId(firstUid: String, secondUid: String): String {
 }
 
 internal class PeopleRepository(context: Context) {
-    private val app = FirebaseApp.getApps(context.applicationContext).firstOrNull()
+    private val applicationContext = context.applicationContext
+    private val app = FirebaseApp.getApps(applicationContext).firstOrNull()
     private val firestore = app?.let(FirebaseFirestore::getInstance)
-    private val callApiClient = PeopleCallApiClient(context.applicationContext, app)
+    private val callApiClient = PeopleCallApiClient(applicationContext, app)
 
     private fun database(): FirebaseFirestore =
         firestore ?: throw IllegalStateException("Firebase is not configured for this app.")
@@ -195,6 +360,8 @@ internal class PeopleRepository(context: Context) {
         val peerProfileRef = database.collection(PROFILES).document(peer.uid)
         val requestRef = database.collection(CONTACT_REQUESTS).document(peer.uid)
             .collection(INCOMING_REQUESTS).document(uid)
+        val incomingRequestRef = database.collection(CONTACT_REQUESTS).document(uid)
+            .collection(INCOMING_REQUESTS).document(peer.uid)
         return database.runTransaction { transaction ->
             val existing = transaction.get(conversationRef)
             if (existing.exists()) {
@@ -208,38 +375,46 @@ internal class PeopleRepository(context: Context) {
                 val peerSnapshot = transaction.get(peerProfileRef)
                 val currentProfile = ownSnapshot.toPublicPersonProfile()
                 val currentPeer = peerSnapshot.toPublicPersonProfile()
-                check(currentProfile.isPublic && currentPeer.isPublic
-                    && currentProfile.ageCohort == currentPeer.ageCohort
-                ) { "This profile is no longer available for a chat." }
-                when (currentPeer.contactPolicy) {
-                    PeopleContactPolicy.EVERYONE -> {
-                        transaction.set(conversationRef, newConversationData(uid, currentProfile, currentPeer))
-                        PeopleContactStartResult.Conversation(
-                            SocialConversation(conversationRef.id, currentPeer, "", 0L)
-                        )
-                    }
-                    PeopleContactPolicy.REQUESTS -> {
-                        val existingRequest = transaction.get(requestRef)
-                        check(!existingRequest.exists()) {
-                            if (existingRequest.getString("status") == "pending") {
-                                "A contact request is already pending."
-                            } else {
-                                "This contact request was already handled."
+                if (!currentProfile.isPublic || !currentPeer.isPublic
+                    || currentProfile.ageCohort != currentPeer.ageCohort
+                ) {
+                    PeopleContactStartResult.Unavailable
+                } else {
+                    val incomingRequest = transaction.get(incomingRequestRef)
+                    if (incomingRequest.exists()
+                        && incomingRequest.getString("status") == SocialContactRequestStatus.PENDING.firestoreValue
+                    ) {
+                        PeopleContactStartResult.IncomingRequest
+                    } else {
+                        when (currentPeer.contactPolicy) {
+                            PeopleContactPolicy.EVERYONE -> {
+                                transaction.set(conversationRef, newConversationData(uid, currentProfile, currentPeer))
+                                PeopleContactStartResult.Conversation(
+                                    SocialConversation(conversationRef.id, currentPeer, "", 0L)
+                                )
                             }
+                            PeopleContactPolicy.REQUESTS, PeopleContactPolicy.MATCHES -> {
+                                val existingRequest = transaction.get(requestRef)
+                                if (existingRequest.exists()) {
+                                    PeopleContactStartResult.ExistingRequest(
+                                        SocialContactRequestStatus.fromFirestore(existingRequest.getString("status"))
+                                    )
+                                } else {
+                                    transaction.set(requestRef, mapOf(
+                                        "senderUid" to uid,
+                                        "recipientUid" to peer.uid,
+                                        "conversationId" to conversationRef.id,
+                                        "status" to SocialContactRequestStatus.PENDING.firestoreValue,
+                                        "senderProfile" to currentProfile.toFirestoreMap().filterKeys { it != "isPublic" },
+                                        "createdAt" to FieldValue.serverTimestamp(),
+                                        "updatedAt" to FieldValue.serverTimestamp()
+                                    ))
+                                    PeopleContactStartResult.RequestSent
+                                }
+                            }
+                            PeopleContactPolicy.NOBODY -> PeopleContactStartResult.Unavailable
                         }
-                        transaction.set(requestRef, mapOf(
-                            "senderUid" to uid,
-                            "recipientUid" to peer.uid,
-                            "conversationId" to conversationRef.id,
-                            "status" to "pending",
-                            "senderProfile" to currentProfile.toFirestoreMap().filterKeys { it != "isPublic" },
-                            "createdAt" to FieldValue.serverTimestamp(),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        ))
-                        PeopleContactStartResult.RequestSent
                     }
-                    PeopleContactPolicy.NOBODY ->
-                        error("This person is not accepting new chats.")
                 }
             }
         }.await()
@@ -271,6 +446,46 @@ internal class PeopleRepository(context: Context) {
                     onError(exception)
                 }
             }
+    }
+
+    fun listenOutgoingRequests(
+            uid: String,
+            onChange: (List<SocialOutgoingContactRequest>) -> Unit,
+            onError: (Exception) -> Unit
+    ): ListenerRegistration {
+            requireSignedIn(uid)
+            return database().collectionGroup(INCOMING_REQUESTS)
+                .whereEqualTo("senderUid", uid)
+                .whereIn(
+                    "status",
+                    SocialContactRequestStatus.values().map(SocialContactRequestStatus::firestoreValue)
+                )
+                .orderBy("updatedAt", Query.Direction.DESCENDING)
+                .limit(MAX_CONTACT_REQUESTS.toLong())
+                .addSnapshotListener { snapshot, listenerError ->
+                    if (listenerError != null) {
+                        onError(listenerError)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null) {
+                        onError(IllegalStateException("Could not load sent contact requests."))
+                        return@addSnapshotListener
+                    }
+                    try {
+                        onChange(snapshot.documents.map { document ->
+                            check(document.getString("senderUid") == uid) {
+                                "A sent contact request has an invalid sender."
+                            }
+                            SocialOutgoingContactRequest(
+                                recipientUid = document.getString("recipientUid")
+                                    ?: error("A sent contact request is missing its recipient."),
+                                status = SocialContactRequestStatus.fromFirestore(document.getString("status"))
+                            )
+                        })
+                    } catch (exception: Exception) {
+                        onError(exception)
+                    }
+                }
     }
 
     suspend fun acceptContactRequest(uid: String, request: SocialContactRequest): SocialConversation {
@@ -418,8 +633,8 @@ internal class PeopleRepository(context: Context) {
         requireSignedIn(uid)
         return database().collection(CHATS).document(conversationId)
             .collection(MESSAGES)
-            .orderBy("createdAt", Query.Direction.ASCENDING)
-            .limit(MAX_CHAT_MESSAGES.toLong())
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(MAX_SOCIAL_CHAT_MESSAGES.toLong())
             .addSnapshotListener { snapshot, listenerError ->
                 if (listenerError != null) {
                     onError(listenerError)
@@ -430,20 +645,37 @@ internal class PeopleRepository(context: Context) {
                     return@addSnapshotListener
                 }
                 try {
-                    onChange(snapshot.documents.map { document ->
-                        SocialChatMessage(
-                            id = document.id,
-                            senderUid = document.getString("senderUid")
-                                ?: error("A chat message is missing its sender."),
-                            text = document.getString("text")
-                                ?: error("A chat message is missing its text."),
-                            createdAtMillis = document.getTimestamp("createdAt")?.toDate()?.time ?: 0L
-                        )
-                    })
+                    onChange(snapshot.documents.map { it.toSocialChatMessage() }
+                        .sortedBy { it.createdAtMillis })
                 } catch (exception: Exception) {
                     onError(exception)
                 }
             }
+    }
+
+    suspend fun loadOlderMessages(
+        uid: String,
+        conversationId: String,
+        beforeMessageId: String
+    ): OlderSocialMessagePage {
+        requireSignedIn(uid)
+        require(isValidSocialMessageId(beforeMessageId)) { "The message history cursor is invalid." }
+        val collection = database().collection(CHATS).document(conversationId).collection(MESSAGES)
+        val cursor = collection.document(beforeMessageId).get().await()
+        check(cursor.exists()) { "The last visible message is no longer available." }
+        val page = collection
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .startAfter(cursor)
+            .limit((MAX_SOCIAL_CHAT_MESSAGES + 1).toLong())
+            .get()
+            .await()
+            .documents
+        return OlderSocialMessagePage(
+            messages = page.take(MAX_SOCIAL_CHAT_MESSAGES)
+                .map { it.toSocialChatMessage() }
+                .sortedBy { it.createdAtMillis },
+            hasMore = page.size > MAX_SOCIAL_CHAT_MESSAGES
+        )
     }
 
     suspend fun getConversation(uid: String, conversationId: String): SocialConversation? {
@@ -455,22 +687,47 @@ internal class PeopleRepository(context: Context) {
     suspend fun registerCallToken(uid: String, token: String) {
         requireSignedIn(uid)
         require(token.length in 32..4096) { "Firebase returned an invalid call notification token." }
-        val tokenId = MessageDigest.getInstance("SHA-256")
-            .digest(token.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
         database().collection(CALL_TOKENS).document(uid)
-            .collection(CALL_TOKEN_DEVICES).document(tokenId)
+            .collection(CALL_TOKEN_DEVICES).document(notificationTokenId(token))
             .set(mapOf("token" to token, "updatedAt" to FieldValue.serverTimestamp()))
             .await()
     }
 
+    suspend fun registerPeopleMessageToken(uid: String, token: String) {
+        requireSignedIn(uid)
+        require(token.length in 32..4096) { "Firebase returned an invalid message notification token." }
+        database().collection(MESSAGE_TOKENS).document(uid)
+            .collection(CALL_TOKEN_DEVICES).document(notificationTokenId(token))
+            .set(mapOf("token" to token, "updatedAt" to FieldValue.serverTimestamp()))
+            .await()
+    }
+
+    suspend fun removePeopleMessageToken(uid: String, token: String) {
+        requireSignedIn(uid)
+        database().collection(MESSAGE_TOKENS).document(uid)
+            .collection(CALL_TOKEN_DEVICES).document(notificationTokenId(token))
+            .delete()
+            .await()
+    }
+
+    suspend fun removePeopleMessageToken(uid: String) {
+        requireSignedIn(uid)
+        val firebaseApp = app ?: throw IllegalStateException("Firebase is not configured for People notifications.")
+        val token = FirebaseMessaging.getInstance().token.await()
+        removePeopleMessageToken(uid, token)
+    }
+
+    suspend fun peopleMessageMessagingToken(uid: String): String {
+        requireSignedIn(uid)
+        val firebaseApp = app ?: throw IllegalStateException("Firebase is not configured for People notifications.")
+        return FirebaseMessaging.getInstance().token.await()
+            .also { registerPeopleMessageToken(uid, it) }
+    }
+
     suspend fun removeCallToken(uid: String, token: String) {
         requireSignedIn(uid)
-        val tokenId = MessageDigest.getInstance("SHA-256")
-            .digest(token.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
         database().collection(CALL_TOKENS).document(uid)
-            .collection(CALL_TOKEN_DEVICES).document(tokenId)
+            .collection(CALL_TOKEN_DEVICES).document(notificationTokenId(token))
             .delete()
             .await()
     }
@@ -622,26 +879,40 @@ internal class PeopleRepository(context: Context) {
         callApiClient.notifyIncomingCall(uid, chatId, callId)
     }
 
+    suspend fun notifyNewMessage(uid: String, chatId: String, messageId: String) {
+        requireSignedIn(uid)
+        callApiClient.notifyNewMessage(uid, chatId, messageId)
+    }
+
     suspend fun callIceServers(uid: String, chatId: String, callId: String): List<PeopleIceServer> {
         requireSignedIn(uid)
         return callApiClient.iceServers(uid, chatId, callId)
     }
 
-    suspend fun sendMessage(uid: String, conversationId: String, text: String) {
+    suspend fun sendMessage(uid: String, conversationId: String, text: String, clientMessageId: String) {
         requireSignedIn(uid)
         val trimmed = text.trim()
         require(trimmed.isNotEmpty() && trimmed.length <= MAX_SOCIAL_MESSAGE_LENGTH) {
             "Messages must contain 1–2,000 characters."
         }
+        require(isValidSocialMessageId(clientMessageId)) { "The message ID is invalid." }
         val database = database()
         val conversation = database.collection(CHATS).document(conversationId)
-        val message = conversation.collection(MESSAGES).document()
-        database.runTransaction { transaction ->
+        val message = conversation.collection(MESSAGES).document(clientMessageId)
+        val created = database.runTransaction { transaction ->
             val conversationSnapshot = transaction.get(conversation)
+            val existingMessage = transaction.get(message)
             check(conversationSnapshot.exists()) { "This conversation is not available." }
             val members = conversationSnapshot.get("members") as? List<*>
                 ?: error("A conversation is missing its participants.")
             check(uid in members) { "This conversation is not available." }
+            if (existingMessage.exists()) {
+                check(
+                    existingMessage.getString("senderUid") == uid
+                        && existingMessage.getString("text") == trimmed
+                ) { "A different message already uses this ID." }
+                return@runTransaction false
+            }
             val peerUid = members.filterIsInstance<String>().firstOrNull { it != uid }
                 ?: error("A conversation is missing the other participant.")
             val unreadCounts = conversationSnapshot.get("unreadCounts") as? Map<*, *>
@@ -659,7 +930,21 @@ internal class PeopleRepository(context: Context) {
                 "text" to trimmed,
                 "createdAt" to FieldValue.serverTimestamp()
             ))
+            true
         }.await()
+        if (created) {
+            try {
+                PeopleMessageNotificationWork.enqueue(
+                    applicationContext,
+                    activeProfileNamespace(applicationContext),
+                    uid,
+                    conversationId,
+                    clientMessageId
+                )
+            } catch (error: Exception) {
+                Log.e(TAG, "A sent People message could not be queued for notification delivery.", error)
+            }
+        }
     }
 
     suspend fun blockUser(uid: String, peerUid: String) {
@@ -671,11 +956,7 @@ internal class PeopleRepository(context: Context) {
     }
 
     suspend fun reportUser(uid: String, peerUid: String, conversationId: String, reason: String) {
-        requireSignedIn(uid)
-        val trimmed = reason.trim()
-        require(peerUid.isNotBlank() && peerUid != uid && trimmed.length in 3..500) {
-            "Choose a reason between 3 and 500 characters."
-        }
+        val trimmed = validatedReportReason(uid, peerUid, reason)
         database().collection(REPORTS).add(mapOf(
             "reporterUid" to uid,
             "targetUid" to peerUid,
@@ -686,11 +967,7 @@ internal class PeopleRepository(context: Context) {
     }
 
     suspend fun reportContactRequest(uid: String, peerUid: String, reason: String) {
-        requireSignedIn(uid)
-        val trimmed = reason.trim()
-        require(peerUid.isNotBlank() && peerUid != uid && trimmed.length in 3..500) {
-            "Choose a reason between 3 and 500 characters."
-        }
+        val trimmed = validatedReportReason(uid, peerUid, reason)
         database().collection(REPORTS).add(mapOf(
             "reporterUid" to uid,
             "targetUid" to peerUid,
@@ -698,6 +975,26 @@ internal class PeopleRepository(context: Context) {
             "reason" to trimmed,
             "createdAt" to FieldValue.serverTimestamp()
         )).await()
+    }
+
+    suspend fun reportPublicProfile(uid: String, peerUid: String, reason: String) {
+        val trimmed = validatedReportReason(uid, peerUid, reason)
+        database().collection(REPORTS).add(mapOf(
+            "reporterUid" to uid,
+            "targetUid" to peerUid,
+            "profileUid" to peerUid,
+            "reason" to trimmed,
+            "createdAt" to FieldValue.serverTimestamp()
+        )).await()
+    }
+
+    private fun validatedReportReason(uid: String, peerUid: String, reason: String): String {
+        requireSignedIn(uid)
+        val trimmed = reason.trim()
+        require(peerUid.isNotBlank() && peerUid != uid && trimmed.length in 3..500) {
+            "Choose a reason between 3 and 500 characters."
+        }
+        return trimmed
     }
 
     private fun validateProfile(profile: PublicPersonProfile) {
@@ -855,6 +1152,7 @@ internal class PeopleRepository(context: Context) {
     }
 
     private companion object {
+        const val TAG = "PeopleRepository"
         const val PROFILES = "publicProfiles"
         const val CHATS = "peopleChats"
         const val MESSAGES = "messages"
@@ -868,13 +1166,18 @@ internal class PeopleRepository(context: Context) {
         const val CALLER_CANDIDATES = "callerCandidates"
         const val CALLEE_CANDIDATES = "calleeCandidates"
         const val CALL_TOKENS = "peopleCallTokens"
+        const val MESSAGE_TOKENS = "peopleMessageTokens"
         const val CALL_TOKEN_DEVICES = "devices"
         const val MAX_DISCOVERED_PEOPLE = 100
         const val MAX_CONVERSATIONS = 100
-        const val MAX_CHAT_MESSAGES = 500
         const val MAX_CONTACT_REQUESTS = 100
         const val MAX_SOCIAL_MESSAGE_LENGTH = 2_000
         const val MAX_CALL_SDP_LENGTH = 65_536
         const val MAX_CALL_CANDIDATE_LENGTH = 4_096
+
+        fun notificationTokenId(token: String): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest(token.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
     }
 }

@@ -33,6 +33,32 @@ class FirebaseAuthRepository(context: Context) {
     val currentAccount: AuthAccount?
         get() = auth?.currentUser?.toAuthAccount()
 
+    suspend fun currentIdToken(forceRefresh: Boolean = false): String {
+        val user = requireAuth().currentUser
+            ?: throw IllegalStateException("Sign in to manage Premium.")
+        return user.getIdToken(forceRefresh).awaitTask().token
+            ?: throw IOException("Firebase did not return an ID token.")
+    }
+
+    suspend fun hasPremiumEntitlement(forceRefresh: Boolean = false): Boolean {
+        val user = requireAuth().currentUser ?: return false
+        val claims = user.getIdToken(forceRefresh).awaitTask().claims
+        return premiumClaimIsActive(claims, System.currentTimeMillis() / 1000)
+    }
+
+    internal suspend fun premiumEntitlement(forceRefresh: Boolean = false): PremiumEntitlement {
+        val user = requireAuth().currentUser
+            ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
+        val claims = user.getIdToken(forceRefresh).awaitTask().claims
+        val isLifetime = claims["dostPremiumLifetime"] == true
+        val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong()
+        return PremiumEntitlement(
+            isActive = premiumClaimIsActive(claims, System.currentTimeMillis() / 1000),
+            isLifetime = isLifetime,
+            expiresAtEpochSeconds = expiresAt
+        )
+    }
+
     suspend fun ensureAdultEligibility() {
         val user = requireAuth().currentUser
             ?: throw IllegalStateException("Sign in to Firebase before opening People.")

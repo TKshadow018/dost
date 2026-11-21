@@ -16,12 +16,14 @@ The app already has a first, minimal real-person experience:
 - A user may publish a profile containing display name, broad age band, gender, country, optional bio, and interests.
 - The People screen discovers published profiles and presents a swipe deck.
 - Selecting a profile opens an existing chat, starts a chat immediately when the recipient allows everyone, sends a contact request when required, or is refused when the recipient has disabled new chats.
+- Profile owners can also opt into **Mutual match first**: an interest request remains pending until the recipient accepts it, and only then can the chat open. Existing contact preferences remain unchanged.
 - Chat text is stored in Firestore and displayed live while the chat screen is open.
 - One-to-one audio and video calls use WebRTC media with Firestore signaling, FCM incoming-call alerts, and short-lived TURN credentials from the Hostinger API. The Android implementation still requires service deployment, TURN provisioning, Firestore TTL configuration, and device testing before release.
 - Users can block or report a person. Reports are restricted to Firebase project administrators and have a manual 72-hour review target, a support-email appeal path, and emergency-services guidance; there is no in-app moderation dashboard or automated report notification.
 - Play Age Signals is checked before any app screen is initialized; the app proceeds only when a shared age range starts at 18 or older. Signup also requires a self-reported age of 18 or older. Missing, minor, verification-required, and failed signals block the whole app.
 - Firestore profile rules accept adult age bands and the `adult` cohort only, deny reads of legacy under-18 People profiles and chats, and require an unexpired server-issued eligibility claim. Before opening People, the app binds the Firebase UID and eligibility result to a Play Integrity Standard token; the Hostinger API validates it and refreshes the claim for six hours.
-- Real-person text chats do not have message push notifications, read receipts, typing indicators, online status, group conversations, media messages, or in-app social-chat deletion. FCM is used only for incoming call alerts. Voice notes are not planned.
+- Real-person text chats support optional generic FCM message alerts, off by default, when the notification endpoint is deployed and configured. Sender-facing read receipts, typing indicators, online status, group conversations, media messages, and in-app social-chat deletion are not available. Voice notes are not planned.
+- People chat history uses a bounded 500-message live listener with on-demand older pages. Search covers messages currently loaded on the device; load older pages to search further back. Passed discovery profiles persist for up to 90 days and can be cleared with **Start over**.
 - Current Firestore collections, rules, and indexes are described in [FIRESTORE_SETUP.md](./FIRESTORE_SETUP.md), [firestore.rules](./firestore.rules), and [firestore.indexes.json](./firestore.indexes.json).
 - Current data practices are described in [the privacy policy](./app/api/privacy-policy.txt).
 
@@ -41,9 +43,14 @@ The app already has a first, minimal real-person experience:
 These are approved targets for implementation, not claims about features already shipped:
 
 - Keep direct chats available, but add user controls over who may contact them. Mutual matching must not become the only way to start a conversation.
-- Delete inactive human chats after 36 months. Build and verify the cleanup process before describing this as active retention behavior.
-- Offer both delete-for-me and delete-for-everyone. The latter is allowed for 15 minutes after sending and must leave a clear tombstone for both participants.
 - Prepare marketing materials as drafts only. Do not publish, contact creators, or spend money without separate approval.
+
+## Product choices confirmed
+
+- Add mutual-match as an optional contact preference while preserving direct contact and request-first behavior; existing profiles are not migrated.
+- Plan both profile photos and People chat images, using authenticated Hostinger upload and retrieval. Implementation remains blocked on upload authorization, quotas, deletion, and privacy-review requirements below.
+- Keep AI conversations local with encrypted export/import; do not add cloud sync.
+- Defer AI voice and all People-message deletion/retention semantics. The earlier 36-month retention and 15-minute delete-for-everyone proposal is not approved for implementation.
 
 ## 4. Prioritized roadmap
 
@@ -73,14 +80,14 @@ These are approved targets for implementation, not claims about features already
 **Priority: P1; build on the current text-chat feature**
 
 - [x] Create a dedicated People inbox with conversation previews, latest activity, unread badges, and stable ordering.
-- [ ] Add FCM push notifications for new messages, with notification preferences and privacy-safe lock-screen text.
-- [ ] Add message states: sending, sent, failed/retry, and read where appropriate. Avoid suggesting a delivery guarantee that Firestore has not confirmed.
+- [x] Add optional FCM push notifications for new messages, with per-device notification preferences, per-chat mute, and privacy-safe generic lock-screen text. The client and PHP endpoint are implemented; production deployment and two-account delivery still require verification.
+- [x] Add sending, sent, waiting, and failed/retry states. Sender-facing read receipts are not available; do not suggest a delivery guarantee that Firestore has not confirmed.
 - [x] Add unread tracking and mark-as-read behavior that works across app restarts and multiple devices.
-- [ ] Add pagination and bounded listener windows for long conversations; do not load an unlimited message history into one listener.
-- [ ] Handle offline sending and reconnect/retry without duplicate messages, using stable client-generated message IDs and server timestamps.
+- [x] Add pagination and bounded listener windows for long conversations; do not load an unlimited message history into one listener.
+- [x] Handle offline sending and reconnect/retry without duplicate messages, using stable client-generated message IDs.
 - [ ] Add typing indicators and online/last-seen status only as opt-in settings, with an explicit "hide my status" option.
-- [ ] Add conversation search and clear navigation between People chats and AI chats.
-- [ ] Add local notifications only after the user understands and grants the relevant Android notification permission.
+- [x] Add People conversation text search over loaded history, on-demand older-page loading, and clear navigation between People chats and AI chats.
+- [x] Ask before enabling People message notifications and keep them off by default; Android notification permission is also required.
 
 **Exit criteria**
 
@@ -114,15 +121,15 @@ These are approved targets for implementation, not claims about features already
 
 **Priority: P1/P2; refine the existing swipe experience**
 
-- [ ] Improve profile creation with previews, photo crop/reorder, optional prompts, interest tags, and clear visibility controls.
+- [ ] Improve profile creation with previews, photo crop/reorder, optional prompts, interest tags, and clear visibility controls. Profile photos and chat images are selected for future implementation but remain release-gated on secure upload/retrieval, deletion, quotas, and policy updates.
 - [ ] Upload optional profile photos to the Hostinger `people-profiles` folder using the existing endpoint and `baseUrl`; do not provision Firebase Storage.
 - [ ] Add a profile completeness preview and let users hide or delete a profile without deleting their Firebase account.
-- [ ] Persist pass/swipe history across sessions and provide a clear, bounded "start over" action.
+- [x] Persist pass history for up to 90 days across sessions and provide a clear **Start over** action.
 - [ ] Add user-controlled discovery preferences such as language and broad interests; avoid sensitive or discriminatory targeting.
 - [ ] Consider an allowlist mode for people explicitly selected by the user after the request and block flows are stable.
 - [x] Let users control who may contact them: everyone in their eligible group, requests first, or nobody. Existing profile documents without a preference retain the previous everyone-can-start behavior.
 - [x] Add an incoming message-request inbox with accept, ignore, block, and report actions. Accepted requests create an immutable, conversation-keyed approval record; a handled request cannot be recreated for the same pair. Trusted account-level rate limits remain outstanding.
-- [ ] Consider mutual matching as an optional or default mode for people seeking reciprocal introductions. Keep the current one-way mode only with strong request controls and user consent.
+- [x] Add optional match-first contact preference. An interest request cannot open a chat until the recipient accepts it; direct and request-first modes remain available without migration.
 - [ ] Add profile verification only if a real, privacy-preserving verification process and appeal path exist. Do not imply that a badge proves identity or safety beyond the checks performed.
 - [ ] Avoid exact location, distance sorting, or "nearby" discovery until a separate privacy and safety review approves it.
 

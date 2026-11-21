@@ -111,6 +111,38 @@ function localized_system_friend_greeting($greetings, $language = 'en')
     return is_string($greeting) ? trim($greeting) : '';
 }
 
+function catalog_preview_text($value, $maxCharacters)
+{
+    if (!is_string($value)) {
+        return '';
+    }
+    $value = trim($value);
+    $maxCharacters = max(0, (int) $maxCharacters);
+    if (function_exists('mb_substr')) {
+        return mb_substr($value, 0, $maxCharacters, 'UTF-8');
+    }
+    $matched = array();
+    if (preg_match('/\A.{0,' . $maxCharacters . '}/us', $value, $matched) !== 1) {
+        return '';
+    }
+    return $matched[0];
+}
+
+function public_friend_listing($profile)
+{
+    $listing = array_intersect_key($profile, array_flip(array(
+        'id', 'name', 'age', 'gender', 'category', 'description', 'relationship',
+        'personality', 'conversationStyle', 'greeting', 'photo_url'
+    )));
+    $listing['personality'] = catalog_preview_text(isset($profile['personality']) ? $profile['personality'] : '', 240);
+    $listing['conversationStyle'] = catalog_preview_text(
+        isset($profile['conversationStyle']) ? $profile['conversationStyle'] : '',
+        240
+    );
+    $listing['tags'] = catalog_preview_text(isset($profile['interests']) ? $profile['interests'] : '', 240);
+    return $listing;
+}
+
 function validate_system_friend_catalog($catalogDirectory)
 {
     $errors = array();

@@ -57,6 +57,28 @@ if (localized_system_friend_greeting($validFixture['greeting'], 'bn') !== 'হ�
     exit(1);
 }
 
+$listingFixture = array_merge($validFixture, array(
+    'id' => 'catalog-test',
+    'greeting' => 'Hi!',
+    'photo_url' => 'friends.php?photo=catalog-test',
+    'personality' => str_repeat('বাংলা', 100),
+    'interests' => str_repeat('i', 300),
+    'conversationStyle' => str_repeat('s', 300),
+    'memories' => 'private memory',
+    'family' => 'private family detail'
+));
+$publicListing = public_friend_listing($listingFixture);
+if (!isset($publicListing['personality'], $publicListing['conversationStyle'], $publicListing['tags'])
+    || preg_match('/\A.{0,240}\z/us', $publicListing['personality']) !== 1
+    || strlen($publicListing['tags']) !== 240
+    || strlen($publicListing['conversationStyle']) !== 240
+    || isset($publicListing['country'], $publicListing['memories'], $publicListing['family'], $publicListing['interests'])
+    || json_encode($publicListing) === false
+) {
+    fwrite(STDERR, "FAIL: Public catalog listings did not expose bounded character metadata safely.\n");
+    exit(1);
+}
+
 $catalogDirectory = __DIR__ . DIRECTORY_SEPARATOR . 'system_friends';
 $colocatedPhoto = system_friend_photo_location($catalogDirectory, 'aarav-mehta.webp');
 $caseSensitivePhoto = system_friend_photo_location($catalogDirectory, 'tania-akter.jPG');

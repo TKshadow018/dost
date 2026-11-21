@@ -69,6 +69,7 @@ internal enum class LocalizedText(
     REPLY_DIFFERENTLY("Reply differently", "অন্যভাবে উত্তর দিন", "अलग तरीके से जवाब दें"),
     ADD_FRIEND_FIRST("Add a friend in Dost first", "আগে Dost-এ একজন বন্ধু যোগ করুন", "पहले Dost में एक दोस्त जोड़ें"),
     CHAT_WITH_FRIEND("Chat with %s", "%s-এর সঙ্গে চ্যাট", "%s के साथ चैट"),
+    FRIENDSHIP_SCORE("%s · %s/100", "%s · %s/১০০", "%s · %s/१००"),
     DRAG_TO_CLOSE("Drag here to close", "বন্ধ করতে এখানে টানুন", "बंद करने के लिए यहाँ खींचें"),
     MESSAGE("Message", "বার্তা", "संदेश"),
     SEND("Send", "পাঠান", "भेजें"),

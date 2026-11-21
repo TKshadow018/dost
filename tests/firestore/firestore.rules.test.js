@@ -8,9 +8,11 @@ import {
 } from "@firebase/rules-unit-testing";
 import {
   collection,
+  collectionGroup,
   doc,
   getDoc,
   getDocs,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -361,6 +363,24 @@ test("call push tokens are private and writable only by their owner", async () =
   }));
 });
 
+test("message push tokens are private and writable only by their owner", async () => {
+  const tokenRef = doc(user("alice"), "peopleMessageTokens/alice/devices/device-1");
+  await assertSucceeds(setDoc(tokenRef, {
+    token: "fcm-registration-token".padEnd(64, "z"),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(user("bob"), "peopleMessageTokens/alice/devices/device-1")));
+  await assertFails(setDoc(doc(user("bob"), "peopleMessageTokens/alice/devices/device-2"), {
+    token: "fcm-registration-token".padEnd(64, "w"),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(user("alice"), "peopleMessageTokens/alice/devices/device-3"), {
+    token: "fcm-registration-token".padEnd(64, "v"),
+    updatedAt: serverTimestamp(),
+    text: "must not be stored in a push token",
+  }));
+});
+
 test("creating a chat requires two adult public profiles and exact snapshots", async () => {
   await seedProfile("alice", { displayName: "Alice" });
   await seedProfile("bob", { displayName: "Bob" });
@@ -441,6 +461,28 @@ test("request-only profiles require an accepted contact request before chat crea
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }));
+  const sent = await assertSucceeds(getDocs(query(
+    collectionGroup(user("alice"), "incoming"),
+    where("senderUid", "==", "alice"),
+    where("status", "in", ["pending", "accepted", "ignored"]),
+    orderBy("updatedAt", "desc"),
+  )));
+  assert.equal(sent.size, 1);
+  await assertFails(getDocs(query(
+    collectionGroup(user("mallory"), "incoming"),
+    where("senderUid", "==", "alice"),
+    where("status", "in", ["pending", "accepted", "ignored"]),
+    orderBy("updatedAt", "desc"),
+  )));
+  await assertFails(setDoc(doc(user("bob"), "peopleContactRequests/alice/incoming/bob"), {
+    senderUid: "bob",
+    recipientUid: "alice",
+    conversationId: "alice-bob",
+    status: "pending",
+    senderProfile: snapshot({ displayName: "Bob", contactPolicy: "requests" }),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
   const incoming = await assertSucceeds(getDocs(query(
     collection(user("bob"), "peopleContactRequests/bob/incoming"),
     where("recipientUid", "==", "bob"),
@@ -472,6 +514,58 @@ test("request-only profiles require an accepted contact request before chat crea
     ...chat,
     createdBy: "bob",
   }));
+});
+
+test("match-first profiles require an accepted expression of interest before chat creation", async () => {
+  await seedProfile("alice", { displayName: "Alice" });
+  await seedProfile("bob", { displayName: "Bob", contactPolicy: "matches" });
+  const chat = {
+    members: ["alice", "bob"],
+    ageCohort: "adult",
+    memberProfiles: {
+      alice: snapshot({ displayName: "Alice" }),
+      bob: snapshot({ displayName: "Bob", contactPolicy: "matches" }),
+    },
+    createdBy: "alice",
+    createdAt: serverTimestamp(),
+    lastMessage: "",
+    lastMessageSenderUid: "",
+    lastMessageAt: serverTimestamp(),
+    lastMessageId: "",
+    unreadCounts: { alice: 0, bob: 0 },
+  };
+  await assertFails(setDoc(doc(user("alice"), "peopleChats/alice-bob"), chat));
+
+  const approval = {
+    conversationId: "alice-bob",
+    recipientUid: "bob",
+    senderUid: "alice",
+    members: ["alice", "bob"],
+    createdBy: "bob",
+    createdAt: serverTimestamp(),
+  };
+  await assertFails(setDoc(doc(user("bob"), "peopleContactApprovals/alice-bob"), approval));
+
+  const request = doc(user("alice"), "peopleContactRequests/bob/incoming/alice");
+  await assertSucceeds(setDoc(request, {
+    senderUid: "alice",
+    recipientUid: "bob",
+    conversationId: "alice-bob",
+    status: "pending",
+    senderProfile: snapshot({ displayName: "Alice" }),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  const bobFirestore = user("bob");
+  const accept = writeBatch(bobFirestore);
+  accept.update(doc(bobFirestore, "peopleContactRequests/bob/incoming/alice"), {
+    status: "accepted",
+    respondedBy: "bob",
+    updatedAt: serverTimestamp(),
+  });
+  accept.set(doc(bobFirestore, "peopleContactApprovals/alice-bob"), approval);
+  accept.set(doc(bobFirestore, "peopleChats/alice-bob"), { ...chat, createdBy: "bob" });
+  await assertSucceeds(accept.commit());
 });
 
 test("a recipient can report a pending contact request but an outsider cannot", async () => {
@@ -663,4 +757,49 @@ test("reports can only be submitted by a participant about the other chat partic
   );
   await assertFails(getDoc(doc(user("alice"), "peopleReports/report-1")));
   await assertFails(getDocs(collection(user("bob"), "peopleReports")));
+});
+
+test("public profile reports require public adult profiles and a single profile context", async () => {
+  await seedProfile("alice");
+  await seedProfile("bob");
+  await seedProfile("hidden", { isPublic: false });
+  await seedProfile("minor", { ageBand: "13–17", ageCohort: "minor" });
+  await seedProfile("private-reporter", { isPublic: false });
+
+  const report = {
+    reporterUid: "alice",
+    targetUid: "bob",
+    profileUid: "bob",
+    reason: "Profile impersonation",
+    createdAt: serverTimestamp(),
+  };
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "peopleReports/profile-report"), report),
+  );
+  await assertFails(
+    setDoc(doc(user("alice"), "peopleReports/hidden-profile-report"), {
+      ...report,
+      targetUid: "hidden",
+      profileUid: "hidden",
+    }),
+  );
+  await assertFails(
+    setDoc(doc(user("alice"), "peopleReports/minor-profile-report"), {
+      ...report,
+      targetUid: "minor",
+      profileUid: "minor",
+    }),
+  );
+  await assertFails(
+    setDoc(doc(user("private-reporter"), "peopleReports/private-reporter-report"), {
+      ...report,
+      reporterUid: "private-reporter",
+    }),
+  );
+  await assertFails(
+    setDoc(doc(user("alice"), "peopleReports/mixed-context-report"), {
+      ...report,
+      conversationId: "alice-bob",
+    }),
+  );
 });

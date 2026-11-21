@@ -19,6 +19,7 @@ AI-friend conversations and real-person conversations are separate. A real perso
 
 ### Have conversations that can continue over time
 
+- Use the chat-first inbox to return to either an AI friend or a People conversation; their messages remain in separate systems.
 - Chat with each friend separately.
 - Choose whether to save a useful detail as a memory for that friend. Review, correct, or remove saved memories.
 - Review conversation recaps and summaries, and return to shared topics, rituals, or moments.
@@ -37,9 +38,9 @@ The Games page has nine games that run in the app: Guess the Number, Rock Paper 
 
 ### Meet people, where available
 
-In builds with the People service configured, eligible adults can publish an optional profile, browse other published profiles, and start a one-to-one text chat or live audio or video call. Chats update live while users are connected, and the inbox tracks unread messages. Incoming calls can alert you while Dost is in the background when notifications are enabled.
+In builds with the People service configured, eligible adults can publish an optional profile, browse other published profiles, and start a one-to-one text chat or live audio or video call. Passing a profile is saved for up to 90 days, with a **Start over** action to clear the history. People chats support on-demand loading of older messages and searching the history loaded on the device. Chats update live while users are connected, and the inbox tracks unread messages.
 
-Selecting a profile currently starts a direct chat; a mutual match or accepted message request is not required first. Audio calls require microphone access; video calls also require camera access. Calls need an internet connection and the supporting Hostinger and self-hosted TURN services to be configured. Dost does not record call audio or video. Voice notes and image messages are not included.
+The profile owner's contact preference determines whether selecting a profile opens a direct chat, sends a request, requires a mutual match, or cannot start a new chat. Direct contact remains available to people who allow it; match-first is optional. Optional People message notifications are off by default and use generic alerts without message text or sender names; delivery depends on Android permission and the supporting service being deployed and configured. Audio calls require microphone access; video calls also require camera access. Calls need an internet connection and the supporting Hostinger and self-hosted TURN services to be configured. Dost does not record call audio or video. Voice notes and image messages are not included.
 
 ## Privacy and account notes
 
@@ -47,6 +48,7 @@ Selecting a profile currently starts a direct chat; a mutual match or accepted m
 - Real-person chats and call signaling are stored in Firebase and can be read by the participants and project administrators. Chat messages are not end-to-end encrypted. WebRTC encrypts call media in transit; Dost does not record it. The app does not currently provide in-app deletion of chat messages.
 - The People service requires adult eligibility and may not be available in every build until its supporting services are configured.
 - An optional passphrase-encrypted backup can move local AI-chat data to another device. Keep the passphrase safe; it cannot be recovered.
-- Some features require sign-in and an internet connection. FCM is used for incoming call alerts; ordinary human-chat message notifications and sender-facing read receipts are not currently available.
+- Dost is for adults 18 and older. App access requires adult age eligibility; People discovery additionally depends on its supporting services and operational release gates.
+- Some features require sign-in and an internet connection. FCM is used for incoming-call alerts and can also deliver optional People message alerts where the service is configured. Sender-facing read receipts are not available.
 
 For details about data handling, read the [Dost privacy policy](./app/api/privacy-policy.txt). Feature availability can vary by app build and service configuration.

@@ -45,6 +45,7 @@ import androidx.work.WorkManager
 import com.snigtus.dost.ui.theme.DostTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -155,7 +156,7 @@ fun DostApp(
     var language by appViewModel.language
     var chatLanguage by appViewModel.chatLanguage
     var screen by appViewModel.screen
-    var showFriendSearchAndCount by remember { mutableStateOf(store.showFriendSearchAndCount()) }
+    var showFriendCount by remember { mutableStateOf(store.showFriendCount()) }
     var name by appViewModel.name
     var email by appViewModel.email
     var age by appViewModel.age
@@ -164,6 +165,7 @@ fun DostApp(
     var openRouterApiKey by appViewModel.openRouterApiKey
     var aiModel by appViewModel.aiModel
     var anonymousTelemetryEnabled by remember { mutableStateOf(store.anonymousTelemetryEnabled()) }
+    var aiNotificationPreviewsEnabled by remember { mutableStateOf(store.aiNotificationPreviewsEnabled()) }
     var proactiveEnabled by remember { mutableStateOf(store.proactiveEnabled()) }
     var proactiveCadenceMinutes by remember { mutableIntStateOf(store.proactiveCadenceMinutes()) }
     var automaticFollowUpMinutes by remember { mutableIntStateOf(store.automaticFollowUpMinutes()) }
@@ -171,6 +173,12 @@ fun DostApp(
     var quietHoursEndMinute by remember { mutableIntStateOf(store.quietHoursEndMinute()) }
     val friends = appViewModel.friends
     var selectedFriend by appViewModel.selectedFriend
+    var selectedMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
+    var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.ALL) }
+    var homeInboxSearchQuery by remember { mutableStateOf("") }
+    var pinnedConversationIds by remember { mutableStateOf(store.pinnedConversationIds()) }
+    var mutedConversationIds by remember { mutableStateOf(store.mutedConversationIds()) }
+    var archivedConversationIds by remember { mutableStateOf(store.archivedConversationIds()) }
     var closeAfterOverlayPermission by appViewModel.closeAfterOverlayPermission
     var bubbleFriendId by appViewModel.bubbleFriendId
     val scope = rememberCoroutineScope()
@@ -190,14 +198,70 @@ fun DostApp(
     var knowledgeReturnScreen by rememberSaveable { mutableStateOf(AppScreen.SETTINGS) }
     var knowledgeFriendFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var chatReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var peopleChatReturnScreen by rememberSaveable { mutableStateOf(AppScreen.PEOPLE) }
     var gameReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     val homeListState = rememberLazyListState()
     val knowledgeListState = rememberLazyListState()
     var systemFriendCatalog by remember { mutableStateOf(emptyList<SystemFriendListing>()) }
     var systemFriendCatalogLoading by remember { mutableStateOf(false) }
     var systemFriendCatalogError by remember { mutableStateOf<String?>(null) }
+    var systemFriendAddError by remember { mutableStateOf<String?>(null) }
     var addingSystemFriendId by remember { mutableStateOf<String?>(null) }
+    var recentlyAddedSystemFriend by remember { mutableStateOf<Friend?>(null) }
     var selectedPeopleConversation by remember { mutableStateOf<SocialConversation?>(null) }
+    var peopleInboxConversations by remember { mutableStateOf(emptyList<SocialConversation>()) }
+    var peopleInboxLoading by remember { mutableStateOf(false) }
+    var peopleInboxError by remember { mutableStateOf<String?>(null) }
+    var peopleInboxEligibleUid by remember { mutableStateOf("") }
+    var peopleInboxRefreshKey by remember { mutableIntStateOf(0) }
+    val activeFirebaseUid = authRepository.currentAccount?.uid.orEmpty()
+    var isPremium by remember(activeFirebaseUid) { mutableStateOf(false) }
+
+    LaunchedEffect(activeFirebaseUid, isPremium) {
+        if (activeFirebaseUid.isBlank()) {
+            isPremium = false
+            return@LaunchedEffect
+        }
+        try {
+            val entitlement = authRepository.premiumEntitlement()
+            isPremium = entitlement.isActive
+            if (entitlement.isActive && !entitlement.isLifetime) {
+                val expiry = entitlement.expiresAtEpochSeconds ?: return@LaunchedEffect
+                val remainingMillis = expiry * 1000 - System.currentTimeMillis()
+                if (remainingMillis > 0) delay(remainingMillis)
+                isPremium = authRepository.hasPremiumEntitlement(forceRefresh = true)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            isPremium = false
+            settingsNotice = "Premium status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
+        }
+    }
+
+    fun toggleConversationPinned(conversationKey: String) {
+        store.setConversationPinned(conversationKey, conversationKey !in pinnedConversationIds)
+        pinnedConversationIds = store.pinnedConversationIds()
+    }
+
+    fun toggleConversationMuted(conversationKey: String) {
+        val muted = conversationKey !in mutedConversationIds
+        store.setConversationMuted(conversationKey, muted)
+        mutedConversationIds = store.mutedConversationIds()
+        if (muted) {
+            when {
+                conversationKey.startsWith("ai:") ->
+                    ReplyNotifier.cancelReply(context, conversationKey.removePrefix("ai:"))
+                conversationKey.startsWith("people:") ->
+                    PeopleMessageNotifications.cancel(context, conversationKey.removePrefix("people:"))
+            }
+        }
+    }
+
+    fun toggleConversationArchived(conversationKey: String) {
+        store.setConversationArchived(conversationKey, conversationKey !in archivedConversationIds)
+        archivedConversationIds = store.archivedConversationIds()
+    }
 
     fun withAdultEligibility(action: () -> Unit) {
         if (checkingPeopleEligibility) return
@@ -206,6 +270,7 @@ fun DostApp(
             peopleEligibilityError = null
             try {
                 authRepository.ensureAdultEligibility()
+                peopleInboxEligibleUid = authRepository.currentAccount?.uid.orEmpty()
                 action()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -217,13 +282,100 @@ fun DostApp(
         }
     }
 
+    LaunchedEffect(activeFirebaseUid) {
+        showFriendCount = store.showFriendCount()
+        aiNotificationPreviewsEnabled = store.aiNotificationPreviewsEnabled()
+        homeInboxFilter = HomeInboxFilter.ALL
+        homeInboxSearchQuery = ""
+        recentlyAddedSystemFriend = null
+        pinnedConversationIds = store.pinnedConversationIds()
+        mutedConversationIds = store.mutedConversationIds()
+        archivedConversationIds = store.archivedConversationIds()
+        peopleInboxConversations = emptyList()
+        peopleInboxEligibleUid = ""
+        peopleInboxError = null
+        peopleInboxLoading = false
+    }
+
+    LaunchedEffect(recentlyAddedSystemFriend?.id) {
+        val friendId = recentlyAddedSystemFriend?.id ?: return@LaunchedEffect
+        delay(15_000)
+        if (recentlyAddedSystemFriend?.id == friendId) recentlyAddedSystemFriend = null
+    }
+
+    LaunchedEffect(screen, selectedMainTab, activeFirebaseUid, peopleInboxRefreshKey) {
+        if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS || !BuildConfig.DOST_PEOPLE_ENABLED) {
+            return@LaunchedEffect
+        }
+        if (activeFirebaseUid.isBlank()) {
+            peopleInboxConversations = emptyList()
+            peopleInboxError = when (language) {
+                AppLanguage.BANGLA -> "মানুষের চ্যাট দেখতে Firebase-এ সাইন ইন করুন।"
+                AppLanguage.HINDI -> "लोगों की चैट देखने के लिए Firebase में साइन इन करें।"
+                AppLanguage.ENGLISH -> "Sign in to Firebase to show People chats."
+            }
+            return@LaunchedEffect
+        }
+        if (peopleInboxEligibleUid == activeFirebaseUid) return@LaunchedEffect
+
+        peopleInboxLoading = true
+        peopleInboxError = null
+        try {
+            authRepository.ensureAdultEligibility()
+            peopleInboxEligibleUid = activeFirebaseUid
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            peopleInboxError = error.message?.take(160)
+                ?: "The age-eligibility check failed."
+        } finally {
+            peopleInboxLoading = false
+        }
+    }
+
+    DisposableEffect(
+        screen,
+        selectedMainTab,
+        activeFirebaseUid,
+        peopleInboxEligibleUid,
+        peopleInboxRefreshKey
+    ) {
+        if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS
+            || !BuildConfig.DOST_PEOPLE_ENABLED
+            || activeFirebaseUid.isBlank()
+            || peopleInboxEligibleUid != activeFirebaseUid
+        ) {
+            onDispose { }
+        } else {
+            peopleInboxLoading = true
+            val registration = try {
+                PeopleRepository(context).listenConversations(
+                    activeFirebaseUid,
+                    onChange = {
+                        peopleInboxConversations = it
+                        peopleInboxError = null
+                        peopleInboxLoading = false
+                    },
+                    onError = {
+                        peopleInboxError = it.message ?: "Could not load People chats."
+                        peopleInboxLoading = false
+                    }
+                )
+            } catch (error: Exception) {
+                peopleInboxError = error.message ?: "Could not load People chats."
+                peopleInboxLoading = false
+                null
+            }
+            onDispose { registration?.remove() }
+        }
+    }
+
     suspend fun importBackupText(backupText: String) {
         withContext(Dispatchers.IO) {
             ConversationManager.importLocalData(JSONObject(backupText))
         }
         language = store.language()
         chatLanguage = store.chatLanguage()
-        showFriendSearchAndCount = store.showFriendSearchAndCount()
+        showFriendCount = store.showFriendCount()
         name = store.userName()
         email = store.userEmail()
         age = store.userAge()
@@ -234,6 +386,7 @@ fun DostApp(
         friends.clear()
         friends.addAll(store.loadFriends())
         selectedFriend = null
+        recentlyAddedSystemFriend = null
         knowledgeFriendFilter = null
         screen = AppScreen.HOME
         settingsNotice = "Local data imported."
@@ -249,18 +402,20 @@ fun DostApp(
             AppScreen.KNOWLEDGE,
             AppScreen.GAMES,
             AppScreen.SETTINGS,
+            AppScreen.PREMIUM,
             AppScreen.REGISTER
         ) || screen == AppScreen.AUTH && authMode != AuthMode.SIGN_IN
     ) {
         when (screen) {
             AppScreen.CHAT -> screen = chatReturnScreen
-            AppScreen.PEOPLE_CHAT -> screen = AppScreen.PEOPLE
+            AppScreen.PEOPLE_CHAT -> screen = peopleChatReturnScreen
             AppScreen.PEOPLE -> screen = AppScreen.HOME
             AppScreen.FRIEND_PROFILE -> screen = friendProfileReturnScreen
             AppScreen.SYSTEM_FRIEND_PICKER -> screen = AppScreen.HOME
             AppScreen.GAMES -> screen = gameReturnScreen
             AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
             AppScreen.SETTINGS -> screen = settingsReturnScreen
+            AppScreen.PREMIUM -> screen = AppScreen.SETTINGS
             AppScreen.REGISTER -> screen = AppScreen.AUTH
             AppScreen.AUTH -> authMode = AuthMode.SIGN_IN
             else -> Unit
@@ -544,7 +699,11 @@ fun DostApp(
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) {
-            settingsNotice = "Friend messages are enabled, but Android notifications are off. You can still read messages in Dost."
+            settingsNotice = when (language) {
+                AppLanguage.BANGLA -> "Dost-এর নোটিফিকেশন বন্ধ। আপনি চ্যাট চালিয়ে যেতে পারেন; সতর্কবার্তা চাইলে Android নোটিফিকেশন সেটিংস থেকে চালু করুন।"
+                AppLanguage.HINDI -> "Dost की सूचनाएँ बंद हैं। आप चैट जारी रख सकते हैं; अलर्ट चाहिए तो Android सूचना सेटिंग में चालू करें।"
+                AppLanguage.ENGLISH -> "Dost notifications are off. You can still chat; turn them on in Android notification settings whenever you want alerts."
+            }
         }
     }
     val relationshipUpdates = ConversationManager.relationshipUpdates.collectAsState().value
@@ -625,7 +784,7 @@ fun DostApp(
 
     fun addFriendWithProfile(friend: Friend) {
         val safeFriend = friend.withLoveMeterGated(store.userAge())
-        if (friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS) return
+        if (!isPremium && friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS) return
         val pending = safeFriend.copy(profilePending = true)
         friends.add(pending)
         store.saveFriends(friends)
@@ -636,20 +795,37 @@ fun DostApp(
         friends.filter { it.profilePending }.forEach { startProfileGeneration(it.id) }
     }
 
-    fun addSystemFriend(friend: Friend) {
+    fun removeFriendPermanently(friend: Friend) {
+        if (!friends.remove(friend)) return
+        store.saveFriends(friends)
+        ConversationWorkScheduler.cancelAllForFriend(context, friend.id)
+        ReplyNotifier.cancelReply(context, friend.id)
+        ConversationManager.removeFriend(friend.id)
+        store.deleteFriendData(friend)
+        pinnedConversationIds = store.pinnedConversationIds()
+        mutedConversationIds = store.mutedConversationIds()
+        archivedConversationIds = store.archivedConversationIds()
+        generatingProfileIds = generatingProfileIds - friend.id
+        profileErrors = profileErrors - friend.id
+        if (recentlyAddedSystemFriend?.id == friend.id) recentlyAddedSystemFriend = null
+    }
+
+    fun addSystemFriend(friend: Friend): Friend? {
         if (friend.catalogId.isBlank()
-            || friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS
+            || (!isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS)
             || friends.any { it.catalogId == friend.catalogId }
-        ) return
+        ) return null
         val addedFriend = friend.copy(id = java.util.UUID.randomUUID().toString()).withLoveMeterGated(store.userAge())
         friends.add(addedFriend)
         store.saveFriends(friends)
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
+        return addedFriend
     }
 
     fun loadSystemFriendCatalog() {
         systemFriendCatalogLoading = true
         systemFriendCatalogError = null
+        systemFriendAddError = null
         scope.launch {
             try {
                 systemFriendCatalog = systemFriendClient.getCatalog(chatLanguage)
@@ -665,19 +841,27 @@ fun DostApp(
 
     fun addCatalogFriend(listing: SystemFriendListing) {
         val addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet()
-        if (addingSystemFriendId != null || listing.id in addedCatalogIds || friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS) return
+        if (addingSystemFriendId != null || listing.id in addedCatalogIds
+            || (!isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS)
+        ) return
         addingSystemFriendId = listing.id
-        systemFriendCatalogError = null
+        systemFriendAddError = null
         scope.launch {
             try {
                 val profile = systemFriendClient.getProfile(listing.id, chatLanguage)
                 val friendWithCachedPhoto = systemFriendClient.savePhotoForOfflineUse(context, profile)
-                addSystemFriend(friendWithCachedPhoto)
-                screen = AppScreen.HOME
+                val addedFriend = addSystemFriend(friendWithCachedPhoto)
+                if (addedFriend != null) {
+                    recentlyAddedSystemFriend = addedFriend
+                    selectedMainTab = MainTab.CHATS
+                    homeInboxFilter = HomeInboxFilter.ALL
+                    homeInboxSearchQuery = ""
+                    screen = AppScreen.HOME
+                }
             } catch (error: java.io.IOException) {
-                systemFriendCatalogError = LocalizedText.ADD_SYSTEM_FRIEND_FAILED.resolve(language)
+                systemFriendAddError = LocalizedText.ADD_SYSTEM_FRIEND_FAILED.resolve(language)
             } catch (error: org.json.JSONException) {
-                systemFriendCatalogError = LocalizedText.INVALID_SYSTEM_FRIEND.resolve(language)
+                systemFriendAddError = LocalizedText.INVALID_SYSTEM_FRIEND.resolve(language)
             } finally {
                 addingSystemFriendId = null
             }
@@ -724,7 +908,7 @@ fun DostApp(
         targetState = screen,
         label = "pageTransition",
         transitionSpec = {
-            val order = listOf(AppScreen.LANGUAGE_SETUP, AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.FRIEND_PROFILE, AppScreen.SETTINGS, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE)
+            val order = listOf(AppScreen.LANGUAGE_SETUP, AppScreen.SPLASH, AppScreen.AUTH, AppScreen.REGISTER, AppScreen.HOME, AppScreen.FRIEND_PROFILE, AppScreen.SETTINGS, AppScreen.PREMIUM, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE)
             val forward = order.indexOf(targetState) >= order.indexOf(initialState)
             val slideIn = slideInHorizontally(animationSpec = tween(300)) { if (forward) it else -it }
             val slideOut = slideOutHorizontally(animationSpec = tween(300)) { if (forward) -it else it }
@@ -851,48 +1035,97 @@ fun DostApp(
             onBack = { screen = AppScreen.AUTH },
             emailEditable = false
         )
-        AppScreen.HOME -> if (hasLocalAccountAccess()) HomeScreen(
+        AppScreen.HOME -> if (hasLocalAccountAccess()) MainNavigationScaffold(
             language = language,
-            showFriendSearchAndCount = showFriendSearchAndCount,
-            userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
-            friends = friends,
-            listState = homeListState,
-            onBrowseSystemFriends = {
-                screen = AppScreen.SYSTEM_FRIEND_PICKER
-                loadSystemFriendCatalog()
-            },
-            onOpenPeople = { withAdultEligibility { screen = AppScreen.PEOPLE } },
-            peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED,
-            onOpenGames = {
-                gameReturnScreen = AppScreen.HOME
-                screen = AppScreen.GAMES
-            },
-            onOpenSettings = {
-                settingsReturnScreen = AppScreen.HOME
-                screen = AppScreen.SETTINGS
-            },
-            onOpenFriendProfile = { openFriendProfile(it, AppScreen.HOME) },
-            onDeleteFriend = { friend ->
-                friends.remove(friend)
-                store.saveFriends(friends)
-                ConversationManager.removeFriend(friend.id)
-                store.deleteFriendData(friend)
-                generatingProfileIds = generatingProfileIds - friend.id
-                profileErrors = profileErrors - friend.id
-            },
-            onToggleFavorite = { friend ->
-                val updated = store.updateFriend(friend.id) { it.copy(favorite = !it.favorite) }
-                val index = friends.indexOfFirst { it.id == friend.id }
-                if (updated != null && index >= 0) friends[index] = updated
-            },
-            onOpenChat = { chatReturnScreen = AppScreen.HOME; selectedFriend = it; screen = AppScreen.CHAT },
-            generatingProfileIds = generatingProfileIds,
-            profileFailedIds = profileErrors.keys
-        )
+            selectedTab = selectedMainTab,
+            onSelectTab = { selectedMainTab = it }
+        ) {
+            when (selectedMainTab) {
+                MainTab.CHATS -> HomeScreen(
+                    language = language,
+                    showFriendCount = showFriendCount,
+                    isPremium = isPremium,
+                    userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
+                    friends = friends,
+                    peopleConversations = peopleInboxConversations,
+                    pinnedConversationIds = pinnedConversationIds,
+                    mutedConversationIds = mutedConversationIds,
+                    archivedConversationIds = archivedConversationIds,
+                    peopleInboxLoading = peopleInboxLoading,
+                    peopleInboxError = peopleInboxError,
+                    searchQuery = homeInboxSearchQuery,
+                    onSearchQueryChange = { homeInboxSearchQuery = it },
+                    selectedFilter = homeInboxFilter,
+                    onSelectedFilterChange = { homeInboxFilter = it },
+                    recentlyAddedSystemFriend = recentlyAddedSystemFriend,
+                    onDismissRecentlyAddedSystemFriend = { recentlyAddedSystemFriend = null },
+                    onUndoSystemFriend = ::removeFriendPermanently,
+                    listState = homeListState,
+                    onBrowseSystemFriends = {
+                        selectedMainTab = MainTab.DISCOVER
+                    },
+                    onOpenPeople = {
+                        selectedMainTab = MainTab.DISCOVER
+                        withAdultEligibility { screen = AppScreen.PEOPLE }
+                    },
+                    onRetryPeopleInbox = { peopleInboxRefreshKey++ },
+                    onOpenPeopleConversation = {
+                        withAdultEligibility {
+                            selectedPeopleConversation = it
+                            peopleChatReturnScreen = AppScreen.HOME
+                            screen = AppScreen.PEOPLE_CHAT
+                        }
+                    },
+                    onOpenGames = {
+                        gameReturnScreen = AppScreen.HOME
+                        screen = AppScreen.GAMES
+                    },
+                    onOpenDiscover = { selectedMainTab = MainTab.DISCOVER },
+                    onOpenFriendProfile = { openFriendProfile(it, AppScreen.HOME) },
+                    onDeleteFriend = ::removeFriendPermanently,
+                    onToggleFavorite = { friend ->
+                        val updated = store.updateFriend(friend.id) { it.copy(favorite = !it.favorite) }
+                        val index = friends.indexOfFirst { it.id == friend.id }
+                        if (updated != null && index >= 0) friends[index] = updated
+                    },
+                    onToggleConversationPinned = ::toggleConversationPinned,
+                    onToggleConversationMuted = ::toggleConversationMuted,
+                    onToggleConversationArchived = ::toggleConversationArchived,
+                    onOpenChat = {
+                        recentlyAddedSystemFriend = null
+                        chatReturnScreen = AppScreen.HOME
+                        selectedFriend = it
+                        screen = AppScreen.CHAT
+                    },
+                    generatingProfileIds = generatingProfileIds,
+                    profileFailedIds = profileErrors.keys,
+                    peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED,
+                    onOpenPremium = { screen = AppScreen.PREMIUM }
+                )
+                MainTab.DISCOVER -> DiscoverHomeScreen(
+                    language = language,
+                    peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED,
+                    onOpenAiFriends = {
+                        screen = AppScreen.SYSTEM_FRIEND_PICKER
+                        loadSystemFriendCatalog()
+                    },
+                    onOpenPeople = { withAdultEligibility { screen = AppScreen.PEOPLE } }
+                )
+                MainTab.PROFILE -> ProfileHomeScreen(
+                    language = language,
+                    userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
+                    email = authRepository.currentAccount?.email.orEmpty(),
+                    onOpenSettings = {
+                        settingsReturnScreen = AppScreen.HOME
+                        screen = AppScreen.SETTINGS
+                    }
+                )
+            }
+        }
         AppScreen.SETTINGS -> if (hasLocalAccountAccess()) SettingsScreen(
             language = language,
             chatLanguage = chatLanguage,
-            showFriendSearchAndCount = showFriendSearchAndCount,
+            showFriendCount = showFriendCount,
             friends = friends,
             userTimeZoneId = userTimeZoneId,
             signedInEmail = authRepository.currentAccount?.email,
@@ -900,6 +1133,7 @@ fun DostApp(
             openRouterApiKey = openRouterApiKey,
             aiModel = aiModel,
             anonymousTelemetryEnabled = anonymousTelemetryEnabled,
+            aiNotificationPreviewsEnabled = aiNotificationPreviewsEnabled,
             proactiveEnabled = proactiveEnabled,
             proactiveCadenceMinutes = proactiveCadenceMinutes,
             automaticFollowUpMinutes = automaticFollowUpMinutes,
@@ -907,14 +1141,8 @@ fun DostApp(
             quietHoursEndMinute = quietHoursEndMinute,
             settingsNotice = settingsNotice,
             onBack = { screen = settingsReturnScreen },
-            onDeleteFriend = { friend ->
-                friends.remove(friend)
-                store.saveFriends(friends)
-                ConversationManager.removeFriend(friend.id)
-                store.deleteFriendData(friend)
-                generatingProfileIds = generatingProfileIds - friend.id
-                profileErrors = profileErrors - friend.id
-            },
+            onOpenPremium = { screen = AppScreen.PREMIUM },
+            onDeleteFriend = ::removeFriendPermanently,
             onLanguageChange = {
                 language = it
                 store.saveLanguage(it)
@@ -925,9 +1153,9 @@ fun DostApp(
                 chatLanguage = it
                 store.saveChatLanguage(it)
             },
-            onShowFriendSearchAndCountChange = {
-                showFriendSearchAndCount = it
-                store.setShowFriendSearchAndCount(it)
+            onShowFriendCountChange = {
+                showFriendCount = it
+                store.setShowFriendCount(it)
             },
             onUserTimeZoneChange = {
                 userTimeZoneId = it
@@ -937,6 +1165,11 @@ fun DostApp(
             onAnonymousTelemetryChange = {
                 store.setAnonymousTelemetryEnabled(it)
                 anonymousTelemetryEnabled = it
+            },
+            onAiNotificationPreviewsChange = {
+                store.setAiNotificationPreviewsEnabled(it)
+                aiNotificationPreviewsEnabled = it
+                if (!it) friends.forEach { friend -> ReplyNotifier.cancelReply(context, friend.id) }
             },
             onProactiveEnabledChange = {
                 store.setProactiveEnabled(it)
@@ -957,6 +1190,16 @@ fun DostApp(
                     ReplyNotifier.ensureChannel(context)
                     notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
+            },
+            onOpenNotificationSettings = {
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                } else {
+                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(android.net.Uri.parse("package:${context.packageName}"))
+                }
+                context.startActivity(intent)
             },
             onProactiveCadenceChange = {
                 store.setProactiveCadenceMinutes(it)
@@ -1016,24 +1259,40 @@ fun DostApp(
                 }
             }
         )
+        AppScreen.PREMIUM -> if (hasLocalAccountAccess()) PremiumScreen(
+            language = language,
+            uid = activeFirebaseUid,
+            isPremium = isPremium,
+            authRepository = authRepository,
+            onBack = { screen = AppScreen.SETTINGS },
+            onEntitlementChanged = { isPremium = it }
+        )
         AppScreen.SYSTEM_FRIEND_PICKER -> if (hasLocalAccountAccess()) SystemFriendPickerScreen(
             language = language,
             catalog = systemFriendCatalog,
             isLoading = systemFriendCatalogLoading,
-            error = systemFriendCatalogError,
+            catalogError = systemFriendCatalogError,
+            addError = systemFriendAddError,
             addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet(),
             passedCatalogIds = store.passedSystemFriendIds(),
             addingCatalogId = addingSystemFriendId,
-            systemLimitReached = friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
-            customLimitReached = friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS,
+            systemLimitReached = !isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
+            customLimitReached = !isPremium && friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS,
             onRefresh = ::loadSystemFriendCatalog,
             onSelect = ::addCatalogFriend,
-            onPassCatalogFriend = { store.markSystemFriendPassed(it) },
-            onStartOver = store::clearPassedSystemFriends,
+            onPassCatalogFriend = {
+                systemFriendAddError = null
+                store.markSystemFriendPassed(it)
+            },
+            onStartOver = {
+                systemFriendAddError = null
+                store.clearPassedSystemFriends()
+            },
             onCreateCustomFriend = {
                 addFriendWithProfile(it)
                 screen = AppScreen.HOME
             },
+            onOpenPremium = { screen = AppScreen.PREMIUM },
             onManageFriends = {
                 settingsReturnScreen = AppScreen.SYSTEM_FRIEND_PICKER
                 screen = AppScreen.SETTINGS
@@ -1047,10 +1306,11 @@ fun DostApp(
             userAge = age.ifBlank { store.userAge() },
             userGender = gender.ifBlank { store.userGender() },
             store = store,
-            onBack = { screen = AppScreen.HOME },
+            onBack = { screen = AppScreen.HOME; selectedMainTab = MainTab.DISCOVER },
             onOpenConversation = {
                 withAdultEligibility {
                     selectedPeopleConversation = it
+                    peopleChatReturnScreen = AppScreen.PEOPLE
                     screen = AppScreen.PEOPLE_CHAT
                 }
             }
@@ -1063,7 +1323,7 @@ fun DostApp(
                 language = language,
                 uid = authRepository.currentAccount?.uid.orEmpty(),
                 conversation = conversation,
-                onBack = { screen = AppScreen.PEOPLE }
+                onBack = { screen = peopleChatReturnScreen }
             )
         } ?: run { screen = AppScreen.PEOPLE } else {
             selectedPeopleConversation = null
@@ -1122,6 +1382,7 @@ fun DostApp(
                 store = store,
                 onBack = { screen = chatReturnScreen },
                 language = language,
+                chatLanguage = chatLanguage,
                 initialDraft = appViewModel.chatDrafts[friend.id].orEmpty(),
                 initialImagePath = appViewModel.chatImageDrafts[friend.id].orEmpty(),
                 onDraftChange = { appViewModel.chatDrafts[friend.id] = it },
@@ -1130,6 +1391,15 @@ fun DostApp(
                     else appViewModel.chatImageDrafts[friend.id] = path
                 },
                 onFriendProfile = { openFriendProfile(friend, AppScreen.CHAT) },
+                onOpenMemories = {
+                    knowledgeReturnScreen = AppScreen.CHAT
+                    knowledgeFriendFilter = friend.id
+                    screen = AppScreen.KNOWLEDGE
+                },
+                onChatLanguageChange = {
+                    chatLanguage = it
+                    store.saveChatLanguage(it)
+                },
                 onOpenGames = {
                     gameReturnScreen = AppScreen.CHAT
                     screen = AppScreen.GAMES

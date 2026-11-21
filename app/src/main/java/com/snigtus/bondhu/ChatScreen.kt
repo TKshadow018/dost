@@ -39,10 +39,10 @@ import kotlinx.coroutines.*
 
 @Composable
 internal fun ChatScreen(
-    friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage,
+    friend: Friend, store: DostStore, onBack: () -> Unit, language: AppLanguage, chatLanguage: AppLanguage,
     initialDraft: String, initialImagePath: String,
     onDraftChange: (String) -> Unit, onImageDraftChange: (String) -> Unit,
-    onFriendProfile: () -> Unit, onOpenGames: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onFloatingChat: () -> Unit,
+    onFriendProfile: () -> Unit, onOpenMemories: () -> Unit, onChatLanguageChange: (AppLanguage) -> Unit, onOpenGames: () -> Unit, onFriendTimeZoneChange: (String) -> Unit, onFloatingChat: () -> Unit,
     profileGenerating: Boolean, profileError: ProfileFailure?, onRetryProfile: () -> Unit, onUseBasicProfile: () -> Unit
 ) {
     val context = LocalContext.current
@@ -70,7 +70,7 @@ internal fun ChatScreen(
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     var currentTime by remember { mutableStateOf(ZonedDateTime.now(validZoneId(store.userTimeZoneId()))) }
-    var showUserInfo by remember { mutableStateOf(false) }
+    var showChatLanguagePicker by remember { mutableStateOf(false) }
     var showSessionSummaries by remember { mutableStateOf(false) }
     var showReminderEditor by remember { mutableStateOf(false) }
     var reminderDraft by remember(friend.id) { mutableStateOf<PlannedEvent?>(null) }
@@ -82,11 +82,12 @@ internal fun ChatScreen(
     var sharedTopicRevision by remember(friend.id) { mutableIntStateOf(0) }
     var pendingMemory by remember { mutableStateOf<ChatMessage?>(null) }
     var pendingNotice by remember(friend.id) { mutableStateOf<ChatMessage?>(null) }
-    LaunchedEffect(friend.id, messages) {
-        pendingNotice = messages.lastOrNull(::isChatNotice)
-            ?.takeIf { it.messageId != store.dismissedChatNoticeId(friend.id) }
+    val dismissedChatNoticeId = store.dismissedChatNoticeId(friend.id)
+    LaunchedEffect(friend.id, messages, dismissedChatNoticeId) {
+        pendingNotice = messages.lastOrNull {
+            isChatNotice(it) && it.category != ERROR_MESSAGE_CATEGORY
+        }?.takeIf { it.messageId != dismissedChatNoticeId }
     }
-    var memoryRevision by remember(friend.id) { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
@@ -99,10 +100,12 @@ internal fun ChatScreen(
     val sharedRituals = remember(friend.id, sharedTopicRevision) {
         store.loadSharedMoments(friend.id).filter { it.kind == "shared_ritual" }
     }
-    val userMemories = remember(friend.id, memoryRevision) { store.loadUserMemories(friend.id) }
     var showFriendInfo by remember { mutableStateOf(false) }
-    val displayedMessages = remember(messages, searchQuery) {
-        messages.filterNot(::isChatNotice).let { conversation ->
+    val displayedMessages = remember(messages, searchQuery, dismissedChatNoticeId) {
+        messages.filter { message ->
+            (!isChatNotice(message) || message.category == ERROR_MESSAGE_CATEGORY) &&
+                message.messageId != dismissedChatNoticeId
+        }.let { conversation ->
             if (searchQuery.isBlank()) conversation else conversation.filter { it.content.contains(searchQuery, ignoreCase = true) }
         }
     }
@@ -189,6 +192,12 @@ internal fun ChatScreen(
                             )
                             DropdownMenuItem(
                                 text = {
+                                    Text(chatLabel(language, "AI chat language", "AI চ্যাটের ভাষা", "AI चैट की भाषा"))
+                                },
+                                onClick = { showChatMenu = false; showChatLanguagePicker = true }
+                            )
+                            DropdownMenuItem(
+                                text = {
                                     Text(when (language) {
                                         AppLanguage.BANGLA -> "অনুস্মারক যোগ করুন"
                                         AppLanguage.HINDI -> "रिमाइंडर जोड़ें"
@@ -216,12 +225,12 @@ internal fun ChatScreen(
                             DropdownMenuItem(
                                 text = {
                                     Text(when (language) {
-                                        AppLanguage.BANGLA -> "এই বন্ধু কী মনে রেখেছে"
-                                        AppLanguage.HINDI -> "यह दोस्त क्या याद रखता है"
-                                        AppLanguage.ENGLISH -> "What this friend remembers"
+                                        AppLanguage.BANGLA -> "সংরক্ষিত স্মৃতি পরিচালনা করুন"
+                                        AppLanguage.HINDI -> "सहेजी गई यादें प्रबंधित करें"
+                                        AppLanguage.ENGLISH -> "Manage saved memories"
                                     })
                                 },
-                                onClick = { showChatMenu = false; showUserInfo = true }
+                                onClick = { showChatMenu = false; onOpenMemories() }
                             )
                             DropdownMenuItem(text = { Text(LocalizedText.SESSION_SUMMARIES.resolve(language)) }, onClick = { showChatMenu = false; sessionSummaries = store.loadSessionSummaries(friend.id).takeLast(10).reversed(); showSessionSummaries = true })
                             DropdownMenuItem(text = { Text(LocalizedText.MINIMIZE_CHAT.resolve(language)) }, onClick = { showChatMenu = false; onFloatingChat() })
@@ -365,7 +374,15 @@ internal fun ChatScreen(
                                 }
                             }
                         } else null,
-                        onRegenerate = if (message.role == "assistant" && message.messageId == displayedMessages.lastOrNull { it.role == "assistant" }?.messageId) {
+                        onRegenerate = if (
+                            message.role == "assistant" && (
+                                if (message.category == ERROR_MESSAGE_CATEGORY) {
+                                    message.messageId == messages.lastOrNull()?.messageId
+                                } else {
+                                    message.messageId == displayedMessages.lastOrNull { it.role == "assistant" }?.messageId
+                                }
+                            )
+                        ) {
                             {
                                 if (message.category == ERROR_MESSAGE_CATEGORY) {
                                     coroutineScope.launch {
@@ -555,21 +572,14 @@ internal fun ChatScreen(
         onTimeZoneChange = onFriendTimeZoneChange,
         onDismiss = { showFriendInfo = false }
     )
-    if (showUserInfo) ConversationProfileDialog(
-        friend = friend,
-        memories = userMemories,
+    if (showChatLanguagePicker) ChatLanguageDialog(
         language = language,
-        onForget = { memory ->
-            store.deleteUserMemory(friend.id, memory)
-            memoryRevision += 1
-            coroutineScope.launch {
-                AnonymousTelemetry.record(store.anonymousTelemetryEnabled(), AnonymousTelemetryEvent.MEMORY_FORGOTTEN)
-            }
-            coroutineScope.launch {
-                snackbarHostState.showSnackbar(chatLabel(language, "Memory forgotten", "স্মৃতি মুছে ফেলা হয়েছে", "याद हटा दी गई"))
-            }
+        selectedLanguage = chatLanguage,
+        onSelect = {
+            onChatLanguageChange(it)
+            showChatLanguagePicker = false
         },
-        onDismiss = { showUserInfo = false }
+        onDismiss = { showChatLanguagePicker = false }
     )
     if (showSessionSummaries) SessionSummariesDialog(sessionSummaries, language, onDismiss = { showSessionSummaries = false })
     if (showSharedTopicEditor) {
@@ -634,43 +644,21 @@ internal fun ChatScreen(
         )
     }
     pendingNotice?.let { notice ->
-        val isErrorNotice = notice.category == ERROR_MESSAGE_CATEGORY
         val dismissNotice = {
             store.markChatNoticeDismissed(friend.id, notice.messageId)
             pendingNotice = null
         }
         AlertDialog(
             onDismissRequest = dismissNotice,
-            title = {
-                Text(
-                    if (isErrorNotice) chatLabel(language, "Chat error", "চ্যাটে সমস্যা", "चैट त्रुटि")
-                    else chatLabel(language, "System message", "সিস্টেম বার্তা", "सिस्टम संदेश")
-                )
-            },
+            title = { Text(chatLabel(language, "System message", "সিস্টেম বার্তা", "सिस्टम संदेश")) },
             text = { Text(notice.content) },
             confirmButton = {
                 TextButton(onClick = {
                     dismissNotice()
-                    if (isErrorNotice) {
-                        coroutineScope.launch {
-                            AnonymousTelemetry.record(store.anonymousTelemetryEnabled(), AnonymousTelemetryEvent.FAILED_SEND_RETRIED)
-                        }
-                        ConversationManager.regenerateReply(friend, language)
-                    }
                 }) {
-                    Text(
-                        if (isErrorNotice) chatLabel(language, "Try again", "আবার চেষ্টা করুন", "फिर कोशिश करें")
-                        else LocalizedText.CLOSE.resolve(language)
-                    )
+                    Text(LocalizedText.CLOSE.resolve(language))
                 }
-            },
-            dismissButton = if (isErrorNotice) {
-                {
-                    TextButton(onClick = dismissNotice) {
-                        Text(LocalizedText.CLOSE.resolve(language))
-                    }
-                }
-            } else null
+            }
         )
     }
     if (showReminderEditor) {
@@ -741,7 +729,6 @@ internal fun ChatScreen(
                     enabled = fact.isNotBlank(),
                     onClick = {
                         store.addUserMemories(friend.id, listOf(UserMemory("other", fact.trim())))
-                        memoryRevision += 1
                         pendingMemory = null
                         coroutineScope.launch {
                             AnonymousTelemetry.record(store.anonymousTelemetryEnabled(), AnonymousTelemetryEvent.MEMORY_SAVED)
@@ -784,6 +771,21 @@ private fun FriendInfoDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer
+                ) {
+                    Text(
+                        when (language) {
+                            AppLanguage.BANGLA -> "এটি একটি কাল্পনিক AI চরিত্র। উত্তর AI তৈরি করে এবং ভুল হতে পারে।"
+                            AppLanguage.HINDI -> "यह एक काल्पनिक AI पात्र है। जवाब AI बनाता है और गलत हो सकते हैं।"
+                            AppLanguage.ENGLISH -> "This is a fictional AI character. Replies are generated by AI and may be inaccurate."
+                        },
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
                 TimeZonePicker(
                     chatLabel(language, "Friend timezone", "বন্ধুর সময় অঞ্চল", "दोस्त का समय क्षेत्र"),
                     friend.timeZoneId,
@@ -838,85 +840,53 @@ private fun FriendInfoDialog(
 }
 
 @Composable
-private fun ConversationProfileDialog(friend: Friend, memories: List<UserMemory>, language: AppLanguage, onForget: (UserMemory) -> Unit, onDismiss: () -> Unit) {
-    val profileFacts = memories.filter { it.fact.isNotBlank() }.asReversed()
-    var forgetting by remember { mutableStateOf<UserMemory?>(null) }
+private fun ChatLanguageDialog(
+    language: AppLanguage,
+    selectedLanguage: AppLanguage,
+    onSelect: (AppLanguage) -> Unit,
+    onDismiss: () -> Unit
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(when (language) {
-                AppLanguage.BANGLA -> "${friend.name}-এর সঙ্গে আপনার পরিচিতি"
-                AppLanguage.HINDI -> "${friend.name} के साथ आपकी प्रोफ़ाइल"
-                AppLanguage.ENGLISH -> "Your profile with ${friend.name}"
-            })
-        },
+        title = { Text(chatLabel(language, "AI chat language", "AI চ্যাটের ভাষা", "AI चैट की भाषा")) },
         text = {
-            if (profileFacts.isEmpty()) {
-                Text(when (language) {
-                    AppLanguage.BANGLA -> "এই কথোপকথন থেকে এখনও আপনার সম্পর্কে কোনো তথ্য শেখা হয়নি।"
-                    AppLanguage.HINDI -> "इस बातचीत से अभी तक आपके बारे में कोई जानकारी नहीं सीखी गई है।"
-                    AppLanguage.ENGLISH -> "No information about you has been learned from this conversation yet."
-                })
-            } else {
-                LazyColumn(
-                    modifier = Modifier.heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(
-                        profileFacts,
-                        key = { memory -> "${memory.category}\u0000${memory.fact}\u0000${memory.replaces}" }
-                    ) { memory ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("• ${memory.fact}", modifier = Modifier.weight(1f))
-                            TextButton(onClick = { forgetting = memory }) {
-                                Text(when (language) {
-                                    AppLanguage.BANGLA -> "ভুলে যান"
-                                    AppLanguage.HINDI -> "भूल जाएँ"
-                                    AppLanguage.ENGLISH -> "Forget"
-                                }, color = MaterialTheme.colorScheme.error)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    chatLabel(
+                        language,
+                        "Applies to all AI chats. App menus keep your app language.",
+                        "সব AI চ্যাটে এই ভাষা প্রযোজ্য। অ্যাপের মেনু অ্যাপের ভাষাতেই থাকবে।",
+                        "यह सभी AI चैट पर लागू होती है। ऐप के मेनू ऐप की भाषा में ही रहेंगे।"
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                listOf(
+                    AppLanguage.ENGLISH to "English",
+                    AppLanguage.BANGLA to "বাংলা",
+                    AppLanguage.HINDI to "हिन्दी"
+                ).forEach { (option, label) ->
+                    FilterChip(
+                        selected = selectedLanguage == option,
+                        onClick = { onSelect(option) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                LanguageFlagIcon(option, Modifier.size(width = 20.dp, height = 13.dp))
+                                Text(label)
                             }
                         }
-                    }
+                    )
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(when (language) {
-                    AppLanguage.BANGLA -> "বন্ধ করুন"
-                    AppLanguage.HINDI -> "बंद करें"
-                    AppLanguage.ENGLISH -> "Close"
-                })
-            }
+            TextButton(onClick = onDismiss) { Text(LocalizedText.CLOSE.resolve(language)) }
         }
     )
-    forgetting?.let { memory ->
-        AlertDialog(
-            onDismissRequest = { forgetting = null },
-            title = {
-                Text(when (language) {
-                    AppLanguage.BANGLA -> "এই স্মৃতি ভুলে যাবেন?"
-                    AppLanguage.HINDI -> "यह याद भुलाएँ?"
-                    AppLanguage.ENGLISH -> "Forget this memory?"
-                })
-            },
-            text = { Text(memory.fact) },
-            confirmButton = {
-                TextButton(onClick = { onForget(memory); forgetting = null }) {
-                    Text(when (language) {
-                        AppLanguage.BANGLA -> "ভুলে যান"
-                        AppLanguage.HINDI -> "भूल जाएँ"
-                        AppLanguage.ENGLISH -> "Forget"
-                    }, color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { forgetting = null }) {
-                    Text(LocalizedText.CANCEL.resolve(language))
-                }
-            }
-        )
-    }
 }
 
 @Composable
@@ -1138,9 +1108,15 @@ private fun MessageBubble(
                     .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    if (isUser || !friendName.isNullOrBlank()) {
+                    val speakerLabel = when {
+                        isUser -> chatLabel(language, "You", "আপনি", "आप")
+                        message.category == ERROR_MESSAGE_CATEGORY -> chatLabel(language, "Reply issue", "উত্তরের সমস্যা", "जवाब में समस्या")
+                        !friendName.isNullOrBlank() -> friendName
+                        else -> null
+                    }
+                    speakerLabel?.let {
                         Text(
-                            if (isUser) chatLabel(language, "You", "আপনি", "आप") else friendName.orEmpty(),
+                            it,
                             style = MaterialTheme.typography.labelSmall,
                             color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1165,6 +1141,11 @@ private fun MessageBubble(
                         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
                     )
                     Text(message.content, style = MaterialTheme.typography.bodyLarge)
+                    if (!isUser && message.category == ERROR_MESSAGE_CATEGORY && onRegenerate != null) {
+                        TextButton(onClick = onRegenerate) {
+                            Text(chatLabel(language, "Try again", "আবার চেষ্টা করুন", "फिर कोशिश करें"))
+                        }
+                    }
                 }
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -1191,7 +1172,7 @@ private fun MessageBubble(
                         onClick = { menuOpen = false; onSaveMoment() }
                     )
                 }
-                if (!isUser && onRegenerate != null) {
+                if (!isUser && message.category != ERROR_MESSAGE_CATEGORY && onRegenerate != null) {
                     DropdownMenuItem(
                         text = {
                             Text(

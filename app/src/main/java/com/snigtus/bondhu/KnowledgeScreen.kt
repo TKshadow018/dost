@@ -39,6 +39,8 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
     var revision by remember { mutableStateOf(0) }
     var editing by remember { mutableStateOf<Pair<String, UserMemory>?>(null) }
     var deleting by remember { mutableStateOf<Pair<String, UserMemory>?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
     val visibleFriends = remember(friends, friendIdFilter) {
         if (friendIdFilter == null) friends else friends.filter { it.id == friendIdFilter }
     }
@@ -51,6 +53,7 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -98,6 +101,7 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    MemoryDataScopeNotice(language)
                 }
                 visibleFriends.filterNot { friend -> knowledge.any { it.first.id == friend.id } }.forEach { friend ->
                     OutlinedButton(onClick = { onOpenChat(friend) }, modifier = Modifier.fillMaxWidth()) {
@@ -122,15 +126,18 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
                 item(key = "memory-controls-hint") {
-                    Text(
-                        when {
-                            bangla -> "প্রতিটি বন্ধুর স্মৃতি আলাদা। ঠিক করুন বা মুছুন—পরিবর্তনটি পরের কথোপকথনে প্রযোজ্য হবে।"
-                            hindi -> "हर दोस्त की यादें अलग रहती हैं। सुधारें या हटाएँ—बदलाव अगली बातचीत में लागू होगा।"
-                            else -> "Each friend has separate memories. Correct or delete a detail; the change applies to future conversations."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            when {
+                                bangla -> "প্রতিটি বন্ধুর স্মৃতি আলাদা। ঠিক করুন বা মুছুন—পরিবর্তনটি পরের কথোপকথনে প্রযোজ্য হবে।"
+                                hindi -> "हर दोस्त की यादें अलग रहती हैं। सुधारें या हटाएँ—बदलाव अगली बातचीत में लागू होगा।"
+                                else -> "Each friend has separate memories. Correct or delete a detail; the change applies to future conversations."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        MemoryDataScopeNotice(language)
+                    }
                 }
                 knowledge.forEach { (friend, memories) ->
                     item(key = "friend-${friend.id}") {
@@ -165,6 +172,13 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
                 store.updateUserMemory(friendId, memory, updated)
                 editing = null
                 revision += 1
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(when {
+                        bangla -> "স্মৃতি হালনাগাদ হয়েছে"
+                        hindi -> "याद अपडेट की गई"
+                        else -> "Memory updated"
+                    })
+                }
             }
         )
     }
@@ -179,9 +193,38 @@ internal fun KnowledgeScreen(language: AppLanguage, friends: List<Friend>, store
                     store.deleteUserMemory(friendId, memory)
                     deleting = null
                     revision += 1
+                    coroutineScope.launch {
+                        AnonymousTelemetry.record(store.anonymousTelemetryEnabled(), AnonymousTelemetryEvent.MEMORY_FORGOTTEN)
+                        snackbarHostState.showSnackbar(when {
+                            bangla -> "স্মৃতি মুছে ফেলা হয়েছে"
+                            hindi -> "याद हटा दी गई"
+                            else -> "Saved fact deleted"
+                        })
+                    }
                 }) { Text(when { bangla -> "মুছুন"; hindi -> "हटाएँ"; else -> "Delete" }, color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text(when { bangla -> "বাতিল"; hindi -> "रद्द करें"; else -> "Cancel" }) } }
+        )
+    }
+}
+
+@Composable
+private fun MemoryDataScopeNotice(language: AppLanguage) {
+    val text = when (language) {
+        AppLanguage.BANGLA -> "সংরক্ষিত তথ্য এই ডিভাইসে Dost-এর ব্যক্তিগত অ্যাপ স্টোরেজে থাকে। প্রাসঙ্গিক তথ্য চ্যাটের সঙ্গে Dost-এর সার্ভার ও নির্বাচিত AI সেবায় পাঠানো হয়। তথ্য ঠিক করা বা মুছলে শুধু ভবিষ্যতের উত্তর বদলায়—আগের বার্তা বা সার্ভার আর্কাইভ মুছে যায় না। Settings থেকে আর্কাইভ আলাদাভাবে মুছুন।"
+        AppLanguage.HINDI -> "सहेजी गई जानकारी इस डिवाइस पर Dost के निजी ऐप स्टोरेज में रहती है। प्रासंगिक जानकारी चैट के साथ Dost के सर्वर और चुनी गई AI सेवा को भेजी जाती है। जानकारी सुधारने या हटाने से केवल भविष्य के जवाब बदलते हैं—पुराने संदेश या सर्वर आर्काइव नहीं मिटते। Settings में आर्काइव अलग से हटाएँ।"
+        AppLanguage.ENGLISH -> "Saved facts stay in Dost's private app storage on this device. Relevant facts are sent with chats to Dost's server and the selected AI provider. Correcting or deleting a fact affects future replies only—it does not delete past messages or server archives. Delete archives separately in Settings."
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(12.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
         )
     }
 }

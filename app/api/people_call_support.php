@@ -264,6 +264,42 @@ function dost_call_document_fields($response)
         : array();
 }
 
+function dost_message_push_request_is_valid($request)
+{
+    return is_array($request)
+        && count($request) === 2
+        && isset($request['chat_id'], $request['message_id'])
+        && is_string($request['chat_id'])
+        && is_string($request['message_id'])
+        && preg_match('/\A[A-Za-z0-9_-]{1,128}\z/', $request['chat_id']) === 1
+        && preg_match('/\A[A-Za-z0-9_-]{1,128}\z/', $request['message_id']) === 1;
+}
+
+function dost_message_push_context_is_valid($chat, $message, $uid)
+{
+    if (!is_array($chat) || !is_array($message)
+        || !isset($chat['members'], $chat['ageCohort'], $message['senderUid'],
+            $message['text'], $message['createdAt'])
+        || !is_array($chat['members'])
+        || count($chat['members']) !== 2
+        || !is_string($chat['members'][0])
+        || !is_string($chat['members'][1])
+        || $chat['members'][0] === $chat['members'][1]
+        || $chat['ageCohort'] !== 'adult'
+        || !is_string($uid)
+        || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1
+        || !in_array($uid, $chat['members'], true)
+        || $message['senderUid'] !== $uid
+        || !is_string($message['text'])
+        || trim($message['text']) === ''
+        || strlen($message['text']) > 8192
+        || !is_int($message['createdAt'])
+    ) {
+        return false;
+    }
+    return true;
+}
+
 function dost_call_valid_context($call, $chat, $uid, $now, $requireRinging)
 {
     if (!is_array($call) || !is_array($chat)

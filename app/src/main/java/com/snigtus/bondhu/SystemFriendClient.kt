@@ -30,7 +30,10 @@ internal class SystemFriendClient {
                 tags = profile.optString("tags"),
                 relationship = requiredText(profile, "relationship"),
                 greeting = requiredText(profile, "greeting"),
-                photoUrl = photoUrl(profile.optString("photo_url"))
+                photoUrl = photoUrl(profile.optString("photo_url")),
+                personality = profile.optString("personality"),
+                conversationStyle = profile.optString("conversationStyle"),
+                conversationLanguage = chatLanguage
             )
         }.sortedBy { it.name.lowercase() }
     }

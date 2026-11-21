@@ -239,9 +239,89 @@ internal object PeopleCallNotifications {
     const val ACTION_END = "com.snigtus.dost.action.PEOPLE_CALL_END"
 }
 
+internal object PeopleMessageNotifications {
+    private const val CHANNEL_ID = "people_messages"
+    private const val NOTIFICATION_ID_BASE = 74000
+
+    fun cancel(context: Context, chatId: String) {
+        NotificationManagerCompat.from(context).cancel(
+            "people_message_$chatId",
+            NOTIFICATION_ID_BASE + chatId.hashCode().and(0x7fff)
+        )
+    }
+
+    fun show(context: Context, chatId: String) {
+        val store = DostStore(context)
+        if (!store.peopleMessageNotificationsEnabled()
+            || store.isPeopleChatMuted(chatId)
+            || !ReplyNotifier.canNotify(context)
+        ) {
+            return
+        }
+        ensureChannel(context)
+        val (title, text) = when (store.language()) {
+            AppLanguage.ENGLISH -> "New message" to "Open Dost to view it."
+            AppLanguage.BANGLA -> "নতুন বার্তা" to "দেখতে Dost খুলুন।"
+            AppLanguage.HINDI -> "नया संदेश" to "देखने के लिए Dost खोलें।"
+        }
+        val notificationId = NOTIFICATION_ID_BASE + chatId.hashCode().and(0x7fff)
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val publicVersion = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        try {
+            NotificationManagerCompat.from(context)
+                .notify("people_message_$chatId", notificationId, notification)
+        } catch (error: SecurityException) {
+            Log.e(TAG, "People message notification permission is unavailable.", error)
+        }
+    }
+
+    private fun ensureChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "People messages",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "New People message alerts"
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    private const val TAG = "PeopleMessageNotify"
+}
+
 class PeopleCallMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
+        if (data["type"] == "people_message") {
+            showMessageNotification(data)
+            return
+        }
         if (data["type"] != "people_call") return
         val chatId = data["chat_id"].orEmpty()
         val callId = data["call_id"].orEmpty()
@@ -273,12 +353,37 @@ class PeopleCallMessagingService : FirebaseMessagingService() {
         super.onNewToken(token)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
+                if (!ReplyNotifier.canNotify(applicationContext)) return@launch
                 val uid = FirebaseAuthRepository(applicationContext).currentAccount?.uid ?: return@launch
-                PeopleRepository(applicationContext).registerCallToken(uid, token)
+                val store = DostStore(applicationContext)
+                val repository = PeopleRepository(applicationContext)
+                if (store.peopleCallAlertsEnabled(defaultEnabled = true)) {
+                    repository.registerCallToken(uid, token)
+                }
+                if (store.peopleMessageNotificationsEnabled()) {
+                    repository.registerPeopleMessageToken(uid, token)
+                }
             } catch (error: Exception) {
                 Log.e(TAG, "Could not register the refreshed call notification token.", error)
             }
         }
+    }
+
+    private fun showMessageNotification(data: Map<String, String>) {
+        val chatId = data["chat_id"].orEmpty()
+        val messageId = data["message_id"].orEmpty()
+        val senderUid = data["sender_uid"].orEmpty()
+        val recipientUid = data["recipient_uid"].orEmpty()
+        if (!chatId.matches(ID_PATTERN) || !messageId.matches(ID_PATTERN)
+            || !senderUid.matches(UID_PATTERN) || !recipientUid.matches(UID_PATTERN)
+            || senderUid == recipientUid
+        ) {
+            Log.w(TAG, "Ignoring an invalid People message notification payload.")
+            return
+        }
+        val uid = FirebaseAuthRepository(applicationContext).currentAccount?.uid
+        if (uid != recipientUid) return
+        PeopleMessageNotifications.show(applicationContext, chatId)
     }
 
     private companion object {

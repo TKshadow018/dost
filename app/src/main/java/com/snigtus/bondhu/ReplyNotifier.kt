@@ -21,6 +21,7 @@ object ReplyNotifier {
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "Friend replies", NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE }
             context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -34,6 +35,7 @@ object ReplyNotifier {
     fun notifyReply(context: Context, friend: Friend, preview: String, language: AppLanguage) {
         val notifications = NotificationManagerCompat.from(context)
         if (!notifications.areNotificationsEnabled()) return
+        if (DostStore(context).isConversationMuted("ai:${friend.id}")) return
         val postNotificationsGranted =
             ContextCompat.checkSelfPermission(context, POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !postNotificationsGranted) return
@@ -60,20 +62,45 @@ object ReplyNotifier {
             AppLanguage.HINDI -> "हालचाल रोकें"
             AppLanguage.ENGLISH -> "Pause check-ins"
         }
+        val showPreview = DostStore(context).aiNotificationPreviewsEnabled()
+        val title = if (showPreview) friend.name else "Dost"
+        val text = if (showPreview) preview else when (language) {
+            AppLanguage.BANGLA -> "আপনার AI বন্ধুর নতুন উত্তর এসেছে।"
+            AppLanguage.HINDI -> "आपके AI मित्र का नया जवाब आया है।"
+            AppLanguage.ENGLISH -> "You have a new AI friend reply."
+        }
+        val publicVersion = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Dost")
+            .setContentText(when (language) {
+                AppLanguage.BANGLA -> "নতুন AI উত্তর"
+                AppLanguage.HINDI -> "नया AI जवाब"
+                AppLanguage.ENGLISH -> "New AI reply"
+            })
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(friend.name)
-            .setContentText(preview)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)
             .setContentIntent(pending)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
             .addAction(0, snoozeLabel, actionIntent(context, friend.id, profileNamespace, ACTION_SNOOZE))
             .addAction(0, pauseLabel, actionIntent(context, friend.id, profileNamespace, ACTION_PAUSE))
             .build()
         if (postNotificationsGranted || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             notifications.notify(notificationId, notification)
         }
+    }
+
+    fun cancelReply(context: Context, friendId: String) {
+        val profileNamespace = activeProfileNamespace(context)
+        NotificationManagerCompat.from(context)
+            .cancel("$profileNamespace:$friendId".hashCode())
     }
 
     private fun actionIntent(context: Context, friendId: String, profileNamespace: String, action: String): PendingIntent {
@@ -90,19 +117,20 @@ object ReplyNotifier {
         )
     }
 
-    class ProactiveNotificationReceiver : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val requestedProfile = intent.getStringExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE)
-                ?: LEGACY_PROFILE_NAMESPACE
-            if (requestedProfile != activeProfileNamespace(context)) return
-            val friendId = intent.getStringExtra("friend_id")?.takeIf(String::isNotBlank) ?: return
-            val until = when (intent.action) {
-                "com.snigtus.dost.action.SNOOZE_PROACTIVE" -> System.currentTimeMillis() + 24 * 60 * 60 * 1000L
-                "com.snigtus.dost.action.PAUSE_PROACTIVE" -> Long.MAX_VALUE
-                else -> return
-            }
-            DostStore(context).pauseProactive(friendId, until)
-            ConversationWorkScheduler.cancelProactiveForFriend(context, friendId)
+}
+
+class ProactiveNotificationReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val requestedProfile = intent.getStringExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE)
+            ?: LEGACY_PROFILE_NAMESPACE
+        if (requestedProfile != activeProfileNamespace(context)) return
+        val friendId = intent.getStringExtra("friend_id")?.takeIf(String::isNotBlank) ?: return
+        val until = when (intent.action) {
+            "com.snigtus.dost.action.SNOOZE_PROACTIVE" -> System.currentTimeMillis() + 24 * 60 * 60 * 1000L
+            "com.snigtus.dost.action.PAUSE_PROACTIVE" -> Long.MAX_VALUE
+            else -> return
         }
+        DostStore(context).pauseProactive(friendId, until)
+        ConversationWorkScheduler.cancelProactiveForFriend(context, friendId)
     }
 }

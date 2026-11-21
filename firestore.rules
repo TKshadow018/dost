@@ -47,6 +47,12 @@ service cloud.firestore {
       return /databases/$(database)/documents/peopleContactRequests/$(recipientUid)/incoming/$(senderUid);
     }
 
+    function noPendingReverseContactRequest(recipientUid, senderUid) {
+      let reversePath = contactRequestPath(senderUid, recipientUid);
+      return (!exists(reversePath) || get(reversePath).data.get('status', '') != 'pending')
+        && (!existsAfter(reversePath) || getAfter(reversePath).data.get('status', '') != 'pending');
+    }
+
     function contactApprovalPath(chatId) {
       return /databases/$(database)/documents/peopleContactApprovals/$(chatId);
     }
@@ -83,7 +89,7 @@ service cloud.firestore {
         && data.interests is string
         && data.interests.size() <= 300
         && data.isPublic is bool
-        && data.get('contactPolicy', 'everyone') in ['everyone', 'requests', 'nobody']
+        && data.get('contactPolicy', 'everyone') in ['everyone', 'requests', 'matches', 'nobody']
         && data.updatedAt == request.time;
     }
 
@@ -162,7 +168,8 @@ service cloud.firestore {
         && profileIsPublic(senderUid)
         && profileIsPublic(recipientUid)
         && sameAgeCohort(senderUid, recipientUid)
-        && profile(recipientUid).get('contactPolicy', 'everyone') == 'requests'
+        && profile(recipientUid).get('contactPolicy', 'everyone') in ['requests', 'matches']
+        && noPendingReverseContactRequest(recipientUid, senderUid)
         && neitherBlocked(senderUid, recipientUid)
         && validProfileSnapshot(senderUid, data.senderProfile)
         && data.createdAt == request.time
@@ -185,6 +192,7 @@ service cloud.firestore {
 
     function validContactApproval(chatId) {
       let data = request.resource.data;
+      let acceptedRequestPath = contactRequestPath(data.recipientUid, data.senderUid);
       return ageEligible()
         && data.keys().hasAll([
           'conversationId', 'recipientUid', 'senderUid', 'members', 'createdBy', 'createdAt'
@@ -202,7 +210,11 @@ service cloud.firestore {
         && data.senderUid in data.members
         && data.members[0] != data.members[1]
         && data.createdBy == request.auth.uid
-        && data.createdAt == request.time;
+        && data.createdAt == request.time
+        && existsAfter(acceptedRequestPath)
+        && getAfter(acceptedRequestPath).data.status == 'accepted'
+        && getAfter(acceptedRequestPath).data.respondedBy == data.recipientUid
+        && getAfter(acceptedRequestPath).data.conversationId == chatId;
     }
 
     function validNewChat(chatId) {
@@ -508,6 +520,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /{path=**}/incoming/{senderUid} {
+      allow list: if ageEligible()
+        && resource.data.senderUid == request.auth.uid
+        && resource.data.status in ['pending', 'accepted', 'ignored'];
+    }
+
     match /peopleContactApprovals/{chatId} {
       allow get, list: if ageEligible() && resource.data.recipientUid == request.auth.uid;
       allow create: if validContactApproval(chatId);
@@ -537,13 +555,26 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == uid;
     }
 
+    match /peopleMessageTokens/{uid}/devices/{deviceId} {
+      allow get, list: if false;
+      allow create, update: if ageEligible()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasAll(['token', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 32
+        && request.resource.data.token.size() <= 4096
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
     match /peopleReports/{reportId} {
       allow create: if ageEligible()
         && request.resource.data.keys().hasAll([
           'reporterUid', 'targetUid', 'reason', 'createdAt'
         ])
         && request.resource.data.keys().hasOnly([
-          'reporterUid', 'targetUid', 'conversationId', 'contactRequestId', 'reason', 'createdAt'
+          'reporterUid', 'targetUid', 'conversationId', 'contactRequestId', 'profileUid', 'reason', 'createdAt'
         ])
         && request.resource.data.reporterUid == request.auth.uid
         && request.resource.data.targetUid is string
@@ -554,7 +585,7 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && (
           (request.resource.data.keys().hasAny(['conversationId'])
-            && !request.resource.data.keys().hasAny(['contactRequestId'])
+            && !request.resource.data.keys().hasAny(['contactRequestId', 'profileUid'])
             && request.resource.data.conversationId is string
             && exists(/databases/$(database)/documents/peopleChats/$(request.resource.data.conversationId))
             && get(/databases/$(database)/documents/peopleChats/$(request.resource.data.conversationId)).data.ageCohort == 'adult'
@@ -562,12 +593,21 @@ service cloud.firestore {
             && request.resource.data.targetUid in get(/databases/$(database)/documents/peopleChats/$(request.resource.data.conversationId)).data.members)
           ||
           (request.resource.data.keys().hasAny(['contactRequestId'])
-            && !request.resource.data.keys().hasAny(['conversationId'])
+            && !request.resource.data.keys().hasAny(['conversationId', 'profileUid'])
             && request.resource.data.contactRequestId == request.resource.data.targetUid
             && exists(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId))
             && get(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId)).data.status == 'pending'
             && get(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId)).data.recipientUid == request.auth.uid
             && get(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId)).data.senderUid == request.resource.data.targetUid)
+          ||
+          (request.resource.data.keys().hasAny(['profileUid'])
+            && !request.resource.data.keys().hasAny(['conversationId', 'contactRequestId'])
+            && request.resource.data.profileUid is string
+            && request.resource.data.profileUid == request.resource.data.targetUid
+            && profileIsPublic(request.resource.data.profileUid)
+            && profile(request.resource.data.profileUid).ageCohort == 'adult'
+            && profileIsPublic(request.auth.uid)
+            && profile(request.auth.uid).ageCohort == 'adult')
         );
       allow get, list, update, delete: if false;
     }

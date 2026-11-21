@@ -116,15 +116,6 @@ function public_friend_profile($profile)
     return $profile;
 }
 
-function public_friend_listing($profile)
-{
-    $listing = array_intersect_key($profile, array_flip(array(
-        'id', 'name', 'age', 'gender', 'category', 'description', 'relationship', 'greeting', 'photo_url'
-    )));
-    $listing['tags'] = substr(isset($profile['interests']) ? $profile['interests'] : '', 0, 240);
-    return $listing;
-}
-
 if (!isset($_SERVER['REQUEST_METHOD']) || $_SERVER['REQUEST_METHOD'] !== 'GET') {
     header('Allow: GET');
     respond_json(405, array('error' => 'GET requests only'));

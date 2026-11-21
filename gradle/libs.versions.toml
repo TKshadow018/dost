@@ -16,6 +16,7 @@ credentials = "1.6.0"
 googleId = "1.2.1"
 playAgeSignals = "0.0.4"
 playIntegrity = "1.6.0"
+playBilling = "9.1.0"
 webrtc = "150.7871.01"
 
 [libraries]
@@ -48,6 +49,7 @@ androidx-credentials-play-services-auth = { group = "androidx.credentials", name
 google-id = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleId" }
 play-age-signals = { group = "com.google.android.play", name = "age-signals", version.ref = "playAgeSignals" }
 play-integrity = { group = "com.google.android.play", name = "integrity", version.ref = "playIntegrity" }
+play-billing = { group = "com.android.billingclient", name = "billing", version.ref = "playBilling" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

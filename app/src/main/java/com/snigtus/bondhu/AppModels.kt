@@ -4,7 +4,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, SYSTEM_FRIEND_PICKER, CHAT, PEOPLE, PEOPLE_CHAT, GAMES, KNOWLEDGE }
+enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, PREMIUM, SYSTEM_FRIEND_PICKER, CHAT, PEOPLE, PEOPLE_CHAT, GAMES, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
 enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD, VERIFY_EMAIL }
 
@@ -54,6 +54,12 @@ internal const val MAX_CUSTOM_FRIENDS = 3
 internal const val MAX_SYSTEM_FRIENDS = 7
 internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 internal const val GLOBAL_PROACTIVE_SPACING_MILLIS = 15 * 60_000L
+
+internal fun premiumClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
+    if (claims["dostPremiumLifetime"] == true) return true
+    val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong() ?: return false
+    return expiresAt > nowEpochSeconds
+}
 
 internal fun stableIdempotencyKey(value: String): String =
     java.util.UUID.nameUUIDFromBytes(value.toByteArray(Charsets.UTF_8)).toString()
@@ -290,7 +296,10 @@ data class SystemFriendListing(
     val tags: String,
     val relationship: String,
     val greeting: String,
-    val photoUrl: String
+    val photoUrl: String,
+    val personality: String = "",
+    val conversationStyle: String = "",
+    val conversationLanguage: AppLanguage = AppLanguage.ENGLISH
 )
 
 fun availableSystemFriendDeck(
@@ -299,6 +308,27 @@ fun availableSystemFriendDeck(
     passedCatalogIds: Set<String> = emptySet()
 ): List<SystemFriendListing> =
     catalog.filterNot { it.id in addedCatalogIds || it.id in passedCatalogIds }
+
+fun filterSystemFriendCatalog(
+    catalog: List<SystemFriendListing>,
+    query: String
+): List<SystemFriendListing> {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) return catalog
+    return catalog.filter { listing ->
+        listOf(
+            listing.name,
+            listing.category,
+            listing.description,
+            listing.tags,
+            listing.personality,
+            listing.conversationStyle,
+            listing.relationship,
+            listing.greeting,
+            listing.conversationLanguage.name
+        ).any { it.contains(normalizedQuery, ignoreCase = true) }
+    }
+}
 
 fun initialGreetingMessage(friend: Friend, history: List<ChatMessage>, sessionId: String): ChatMessage? {
     val greeting = friend.greeting.trim()

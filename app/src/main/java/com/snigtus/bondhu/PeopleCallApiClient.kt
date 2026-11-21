@@ -25,11 +25,27 @@ internal class PeopleCallApiClient(
     private val applicationContext = context.applicationContext
 
     suspend fun notifyIncomingCall(uid: String, chatId: String, callId: String) {
-        post(uid, "people_call_push.php", chatId, callId)
+        post(
+            uid,
+            "people_call_push.php",
+            JSONObject().put("chat_id", chatId).put("call_id", callId)
+        )
+    }
+
+    suspend fun notifyNewMessage(uid: String, chatId: String, messageId: String) {
+        post(
+            uid,
+            "people_message_push.php",
+            JSONObject().put("chat_id", chatId).put("message_id", messageId)
+        )
     }
 
     suspend fun iceServers(uid: String, chatId: String, callId: String): List<PeopleIceServer> {
-        val response = post(uid, "people_call_ice_servers.php", chatId, callId)
+        val response = post(
+            uid,
+            "people_call_ice_servers.php",
+            JSONObject().put("chat_id", chatId).put("call_id", callId)
+        )
         val servers = response.optJSONArray("ice_servers")
             ?: throw IOException("The call service returned no ICE server configuration.")
         return (0 until servers.length()).map { index ->
@@ -49,7 +65,7 @@ internal class PeopleCallApiClient(
         }
     }
 
-    private suspend fun post(uid: String, endpoint: String, chatId: String, callId: String): JSONObject {
+    private suspend fun post(uid: String, endpoint: String, request: JSONObject): JSONObject {
         val firebaseApp = app ?: throw IOException("Firebase is not configured for People calls.")
         val user = FirebaseAuth.getInstance(firebaseApp).currentUser
             ?: throw IOException("Sign in again to use People calls.")
@@ -68,11 +84,7 @@ internal class PeopleCallApiClient(
                 setRequestProperty("Authorization", "Bearer $idToken")
             }
             try {
-                val request = JSONObject()
-                    .put("chat_id", chatId)
-                    .put("call_id", callId)
-                    .toString()
-                connection.outputStream.use { it.write(request.toByteArray(Charsets.UTF_8)) }
+                connection.outputStream.use { it.write(request.toString().toByteArray(Charsets.UTF_8)) }
                 val status = connection.responseCode
                 val body = (if (status in 200..299) connection.inputStream else connection.errorStream)
                     ?.bufferedReader(Charsets.UTF_8)
