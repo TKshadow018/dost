@@ -473,10 +473,11 @@ internal class PeopleCallEngine(context: Context) {
     private fun iceConfiguration(servers: List<PeopleIceServer>): PeerConnection.RTCConfiguration {
         val iceServers = servers.flatMap { server ->
             server.urls.map { url ->
-                PeerConnection.IceServer.builder(url)
-                    .setUsername(server.username)
-                    .setPassword(server.credential)
-                    .createIceServer()
+                val builder = PeerConnection.IceServer.builder(url)
+                if (server.username.isNotBlank() && server.credential.isNotBlank()) {
+                    builder.setUsername(server.username).setPassword(server.credential)
+                }
+                builder.createIceServer()
             }
         }
         return PeerConnection.RTCConfiguration(iceServers).apply {
