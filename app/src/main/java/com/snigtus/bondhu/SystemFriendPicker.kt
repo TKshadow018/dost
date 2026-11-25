@@ -97,6 +97,7 @@ internal fun SystemFriendPickerScreen(
     val hindi = language == AppLanguage.HINDI
     val availableCatalog = availableSystemFriendDeck(catalog, addedCatalogIds)
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var showSearch by rememberSaveable { mutableStateOf(false) }
     val filteredCatalog = filterSystemFriendCatalog(availableCatalog, searchQuery)
     var showCreateFriend by remember { mutableStateOf(false) }
     var pendingSwipeSelection by remember { mutableStateOf<SystemFriendListing?>(null) }
@@ -107,6 +108,24 @@ internal fun SystemFriendPickerScreen(
             TopAppBar(
                 title = { Text(when { bangla -> "AI বন্ধু"; hindi -> "AI दोस्त"; else -> "AI friends" }) },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            showSearch = !showSearch
+                            if (!showSearch) searchQuery = ""
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (showSearch) Icons.Filled.Close else Icons.Filled.Search,
+                            contentDescription = when {
+                                showSearch && bangla -> "খোঁজা বন্ধ করুন"
+                                showSearch && hindi -> "खोज बंद करें"
+                                showSearch -> "Close search"
+                                bangla -> "বন্ধু খুঁজুন"
+                                hindi -> "दोस्त खोजें"
+                                else -> "Search friends"
+                            }
+                        )
+                    }
                     TextButton(
                         onClick = {
                             if (customLimitReached) onOpenPremium() else showCreateFriend = true
@@ -155,31 +174,33 @@ internal fun SystemFriendPickerScreen(
                     color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
             }
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                enabled = addingCatalogId == null,
-                singleLine = true,
-                label = {
-                    Text(when {
-                        bangla -> "নাম, আগ্রহ বা কথোপকথনের ধরন খুঁজুন"
-                        hindi -> "नाम, रुचि या बातचीत की शैली खोजें"
-                        else -> "Search name, interests, or conversation style"
-                    })
-                },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (searchQuery.isNotBlank()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(
-                                Icons.Filled.Close,
-                                contentDescription = localizedText(language, "Clear search", "खोज साफ़ करें", "সার্চ মুছুন")
-                            )
+            if (showSearch) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    enabled = addingCatalogId == null,
+                    singleLine = true,
+                    label = {
+                        Text(when {
+                            bangla -> "নাম, আগ্রহ বা কথোপকথনের ধরন খুঁজুন"
+                            hindi -> "नाम, रुचि या बातचीत की शैली खोजें"
+                            else -> "Search name, interests, or conversation style"
+                        })
+                    },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotBlank()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = localizedText(language, "Clear search", "खोज साफ़ करें", "সার্চ মুছুন")
+                                )
+                            }
                         }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
 
             if (systemLimitReached) {
                 Surface(

@@ -23,10 +23,12 @@ import androidx.compose.foundation.text.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
@@ -192,6 +194,7 @@ internal fun HomeScreen(
     val messageMap = ConversationManager.messages.collectAsState().value
     val bangla = language == AppLanguage.BANGLA
     val hindi = language == AppLanguage.HINDI
+    var showSearch by rememberSaveable { mutableStateOf(false) }
     val customFriendCount = friends.count { it.catalogId.isBlank() }
     val systemFriendCount = friends.size - customFriendCount
     val canAddCustomFriend = isPremium || customFriendCount < MAX_CUSTOM_FRIENDS
@@ -205,13 +208,13 @@ internal fun HomeScreen(
     val inboxEntries = filterHomeInboxEntries(
         allInboxEntries,
         selectedFilter,
-        searchQuery,
+        if (showSearch) searchQuery else "",
         archivedConversationIds,
         messageMap
     )
     val visibleFriends = inboxEntries.filterIsInstance<HomeInboxEntry.AiFriend>().map { it.friend }
     val visiblePeople = inboxEntries.filterIsInstance<HomeInboxEntry.Person>().map { it.conversation }
-    val query = searchQuery.trim()
+    val query = if (showSearch) searchQuery.trim() else ""
 
     LaunchedEffect(recentlyAddedSystemFriend?.id) {
         if (recentlyAddedSystemFriend != null) listState.animateScrollToItem(0)
@@ -224,6 +227,24 @@ internal fun HomeScreen(
             TopAppBar(
                 title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            showSearch = !showSearch
+                            if (!showSearch) onSearchQueryChange("")
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (showSearch) Icons.Filled.Close else Icons.Filled.Search,
+                            contentDescription = when {
+                                showSearch && bangla -> "খোঁজা বন্ধ করুন"
+                                showSearch && hindi -> "खोज बंद करें"
+                                showSearch -> "Close search"
+                                bangla -> "চ্যাট খুঁজুন"
+                                hindi -> "चैट खोजें"
+                                else -> "Search chats"
+                            }
+                        )
+                    }
                     IconButton(onClick = onOpenGames) {
                         Icon(
                             imageVector = Icons.Filled.SportsEsports,
@@ -305,19 +326,21 @@ internal fun HomeScreen(
                             })
                         }
                     }
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = onSearchQueryChange,
-                        singleLine = true,
-                        label = {
-                            Text(when {
-                                bangla -> "বন্ধু বা কথোপকথন খুঁজুন"
-                                hindi -> "दोस्त या बातचीत खोजें"
-                                else -> "Search chats"
-                            })
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (showSearch) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            singleLine = true,
+                            label = {
+                                Text(when {
+                                    bangla -> "বন্ধু বা কথোপকথন খুঁজুন"
+                                    hindi -> "दोस्त या बातचीत खोजें"
+                                    else -> "Search chats"
+                                })
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)

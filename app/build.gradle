@@ -16,6 +16,7 @@ def firebaseSenderId = firebaseProjectInfo.project_number ?: ""
 def googleWebClientId = firebaseClient.oauth_client?.find { it.client_type?.toString() == "3" }?.client_id ?: ""
 if (file("google-services.json").exists()) {
     apply plugin: 'com.google.gms.google-services'
+    apply plugin: 'com.google.firebase.crashlytics'
 }
 
 def validateReleaseFirebaseAuthConfig = tasks.register("validateReleaseFirebaseAuthConfig") {
@@ -70,8 +71,8 @@ android {
         applicationId "com.snigtus.dost"
         minSdk 26
         targetSdk 36
-        versionCode 3
-        versionName "0.1.2"
+        versionCode 4
+        versionName "1.0.3"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
@@ -121,6 +122,7 @@ dependencies {
     implementation libs.androidx.work.runtime.ktx
     implementation platform(libs.firebase.bom)
     implementation libs.firebase.auth
+    implementation libs.firebase.crashlytics
     implementation libs.firebase.firestore
     implementation libs.firebase.messaging
     implementation libs.webrtc.android
