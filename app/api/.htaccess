@@ -8,6 +8,24 @@ Options -Indexes
     Require all denied
 </Files>
 
-<FilesMatch "^(test_.*\.php|age_eligibility_support\.php|.*\.txt)$">
+<FilesMatch "^\.ht">
     Require all denied
 </FilesMatch>
+
+<FilesMatch "\.bak$">
+    Require all denied
+</FilesMatch>
+
+<FilesMatch "^(test_.*\.php|.*_support\.php)$">
+    Require all denied
+</FilesMatch>
+
+<FilesMatch "^(?!privacy-policy\.txt$).+\.txt$">
+    Require all denied
+</FilesMatch>
+
+<Files "privacy-policy.txt">
+    Require all granted
+    ForceType text/plain
+    AddDefaultCharset UTF-8
+</Files>
