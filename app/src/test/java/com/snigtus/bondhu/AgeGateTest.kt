@@ -7,11 +7,12 @@ import org.junit.Test
 
 class AgeGateTest {
     @Test
-    fun registrationAcceptsThirteenAndRefusesYoungerOrUnusableAges() {
-        assertEquals(AccountAgeResult.VALID, accountAgeResult("13"))
+    fun registrationAcceptsAdultsAndRefusesMinorsOrUnusableAges() {
+        assertEquals(AccountAgeResult.VALID, accountAgeResult("18"))
         assertEquals(AccountAgeResult.VALID, accountAgeResult(" 18 "))
         assertEquals(AccountAgeResult.VALID, accountAgeResult("120"))
-        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("12"))
+        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("17"))
+        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("13"))
         assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("1"))
         assertEquals(AccountAgeResult.EMPTY, accountAgeResult("  "))
         assertEquals(AccountAgeResult.NOT_A_WHOLE_NUMBER, accountAgeResult("13abc"))
@@ -21,10 +22,11 @@ class AgeGateTest {
     }
 
     @Test
-    fun friendAgeMayBeUnderEighteenButMustBeARealAge() {
-        assertEquals(AccountAgeResult.VALID, friendAgeResult("17"))
-        assertEquals(AccountAgeResult.VALID, friendAgeResult("1"))
+    fun newFriendAgeMustBeAdultWhileLegacyAgeCanStillBeParsed() {
+        assertEquals(AccountAgeResult.UNDER_MINIMUM, friendAgeResult("17"))
+        assertEquals(AccountAgeResult.UNDER_MINIMUM, friendAgeResult("1"))
         assertEquals(AccountAgeResult.VALID, friendAgeResult("18"))
+        assertEquals(17, profileAgeOrNull("17"))
         assertEquals(AccountAgeResult.NOT_A_WHOLE_NUMBER, friendAgeResult("fifteen"))
         assertEquals(AccountAgeResult.ABOVE_MAXIMUM, friendAgeResult("121"))
         assertEquals(AccountAgeResult.EMPTY, friendAgeResult(""))

@@ -28,7 +28,7 @@ internal object FriendPhotoLoader {
     fun saveRemotePhoto(context: Context, photoUrl: String, catalogId: String): File {
         val cachedPhoto = downloadRemotePhoto(context, photoUrl)
             ?: throw IOException("Could not download the system friend's photo")
-        val directory = File(context.filesDir, "system-friend-photos")
+        val directory = DostStore(context).systemFriendPhotosDirectory
         if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
             throw IOException("Could not prepare storage for the system friend's photo")
         }

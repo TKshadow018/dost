@@ -16,7 +16,14 @@ function dost_normalize_path($path)
         return '';
     }
     $path = str_replace('\\', '/', trim($path));
-    $absolute = substr($path, 0, 1) === '/';
+    $drive = '';
+    if (preg_match('/\A([A-Za-z]:)\/(.*)\z/', $path, $matches) === 1) {
+        $drive = $matches[1];
+        $path = $matches[2];
+        $absolute = true;
+    } else {
+        $absolute = substr($path, 0, 1) === '/';
+    }
     $parts = array();
     foreach (explode('/', $path) as $part) {
         if ($part === '' || $part === '.') {
@@ -29,16 +36,25 @@ function dost_normalize_path($path)
         $parts[] = $part;
     }
     $normalized = implode('/', $parts);
+    if ($drive !== '') {
+        return $drive . '/' . $normalized;
+    }
     if ($absolute) {
         return '/' . $normalized;
     }
     return $normalized;
 }
 
+function dost_is_absolute_path($path)
+{
+    $normalized = dost_normalize_path($path);
+    return substr($normalized, 0, 1) === '/' || preg_match('/\A[A-Za-z]:\//', $normalized) === 1;
+}
+
 function dost_resolved_directory($path)
 {
     $normalized = dost_normalize_path($path);
-    if ($normalized === '' || substr($normalized, 0, 1) !== '/') {
+    if ($normalized === '' || !dost_is_absolute_path($normalized)) {
         return $normalized;
     }
     if (file_exists($normalized) || is_link($normalized)) {
@@ -149,7 +165,7 @@ function conversation_storage_base_directory()
     } else {
         $directory = dost_default_archive_beside(dirname(__DIR__));
     }
-    if (!is_string($directory) || substr($directory, 0, 1) !== '/') {
+    if (!is_string($directory) || !dost_is_absolute_path($directory)) {
         return false;
     }
     if (dost_path_is_inside_web_root($directory)) {
@@ -164,7 +180,7 @@ function dost_prepare_storage_directory($directory)
         return false;
     }
     $normalized = dost_resolved_directory($directory);
-    if (substr($normalized, 0, 1) !== '/' || dost_path_is_inside_web_root($normalized)) {
+    if (!dost_is_absolute_path($normalized) || dost_path_is_inside_web_root($normalized)) {
         return false;
     }
     if (!is_dir($normalized) && !is_link($normalized) && !@mkdir($normalized, 0700, true) && !is_dir($normalized)) {
