@@ -57,7 +57,12 @@ $setting = function ($environmentKey, $configKey) use ($config) {
     if (is_string($value) && trim($value) !== '') {
         return trim($value);
     }
-    return isset($config[$configKey]) && is_string($config[$configKey]) ? trim($config[$configKey]) : '';
+    if (isset($config[$configKey]) && is_bool($config[$configKey])) {
+        return $config[$configKey] ? 'true' : 'false';
+    }
+    return isset($config[$configKey]) && (is_string($config[$configKey]) || is_numeric($config[$configKey]))
+        ? trim((string) $config[$configKey])
+        : '';
 };
 $enabled = strtolower($setting('DOST_INTRO_PREMIUM_ENABLED', 'intro_premium_enabled'));
 if (!in_array($enabled, array('true', 'false'), true)) {
@@ -142,6 +147,11 @@ if (!is_string($serviceToken)) {
     error_log('Dost Premium intro service-account token exchange failed.');
     dost_premium_intro_respond(503, array('error' => 'Premium intro grants are unavailable'));
 }
+$claimLock = dost_firebase_claim_lock($request['uid']);
+if ($claimLock === false) {
+    error_log('Dost Premium intro custom-claim lock could not be acquired.');
+    dost_premium_intro_respond(503, array('error' => 'Premium intro grants are unavailable'));
+}
 $adminLookup = dost_age_http_json(
     'https://identitytoolkit.googleapis.com/v1/projects/' . rawurlencode($projectId) . '/accounts:lookup',
     array('Authorization: Bearer ' . $serviceToken),
@@ -197,4 +207,5 @@ if (empty($customClaims['dostPremiumIntroGranted'])) {
     $updatedClaims = $customClaims;
 }
 
+dost_firebase_claim_unlock($claimLock);
 dost_premium_intro_respond(200, dost_premium_intro_response($updatedClaims, time()));

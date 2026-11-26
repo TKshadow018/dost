@@ -156,6 +156,7 @@ internal fun HomeScreen(
     language: AppLanguage,
     showFriendCount: Boolean,
     isPremium: Boolean,
+    premiumIntroExpiryEpochSeconds: Long? = null,
     userName: String,
     friends: List<Friend>,
     peopleConversations: List<SocialConversation>,
@@ -287,6 +288,30 @@ internal fun HomeScreen(
                         },
                         onUndo = { onUndoSystemFriend(friend) }
                     )
+                }
+            }
+            if (isPremium && premiumIntroExpiryEpochSeconds != null) {
+                item(key = "premium-intro-until") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                LocalizedText.FREE_PREMIUM_UNTIL.resolve(
+                                    language,
+                                    localizedPremiumDate(premiumIntroExpiryEpochSeconds, language)
+                                ),
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            TextButton(onClick = onOpenPremium) {
+                                Text(LocalizedText.PREMIUM_VIEW_DETAILS.resolve(language))
+                            }
+                        }
+                    }
                 }
             }
             item {
@@ -1444,11 +1469,10 @@ internal fun SettingsScreen(
                     AppLanguage.HINDI -> "दोस्त प्रीमियम"
                     AppLanguage.ENGLISH -> "Dost Premium"
                 }) {
-                    Text(when (language) {
-                        AppLanguage.BANGLA -> "সীমাহীন AI বন্ধু ও People লাইক, দৈনিক প্রোফাইল বুস্ট, চ্যাট থিম এবং আরও AI কাস্টমাইজেশন।"
-                        AppLanguage.HINDI -> "असीमित AI दोस्त और People लाइक, रोज़ाना प्रोफ़ाइल बूस्ट, चैट थीम और अधिक AI कस्टमाइज़ेशन।"
-                        AppLanguage.ENGLISH -> "Unlimited AI companions and People likes, a daily profile boost, chat themes, and more AI customization."
-                    }, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        LocalizedText.PREMIUM_LIMITS_BENEFIT.resolve(language),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     Button(onClick = onOpenPremium, modifier = Modifier.fillMaxWidth()) {
                         Text(when (language) {
                             AppLanguage.BANGLA -> "প্রিমিয়াম দেখুন"

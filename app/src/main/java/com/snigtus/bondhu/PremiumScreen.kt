@@ -36,11 +36,18 @@ internal fun PremiumScreen(
     language: AppLanguage,
     uid: String,
     isPremium: Boolean,
+    entitlement: PremiumEntitlement,
     authRepository: FirebaseAuthRepository,
     onBack: () -> Unit,
     onEntitlementChanged: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
+    val introExpiry = entitlement.expiresAtEpochSeconds
+        ?.takeIf { isPremium && !entitlement.isLifetime && entitlement.source == "intro" }
+    val introExpiryText = introExpiry?.let {
+        LocalizedText.FREE_PREMIUM_UNTIL.resolve(language, localizedPremiumDate(it, language))
+    }
+    val introNearExpiry = premiumIntroIsNearExpiry(entitlement, System.currentTimeMillis() / 1000)
     if (!BuildConfig.DOST_PREMIUM_ENABLED) {
         Scaffold(
             topBar = {
@@ -55,17 +62,22 @@ internal fun PremiumScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    premiumText(
+                    if (isPremium) premiumText(
                         language,
-                        if (isPremium) "Premium is active. New purchases are temporarily disabled."
-                        else "Premium purchases are not available yet. The selected benefits are being prepared.",
-                        if (isPremium) "প্রিমিয়াম চালু আছে। নতুন কেনাকাটা সাময়িকভাবে বন্ধ।"
-                        else "প্রিমিয়াম কেনাকাটা এখনো চালু হয়নি। নির্বাচিত সুবিধাগুলো প্রস্তুত করা হচ্ছে।",
-                        if (isPremium) "प्रीमियम सक्रिय है। नई खरीदारी अस्थायी रूप से बंद है।"
-                        else "प्रीमियम खरीदारी अभी उपलब्ध नहीं है। चुनी गई सुविधाएँ तैयार की जा रही हैं।"
-                    ),
+                        "Premium is active. New purchases are temporarily disabled.",
+                        "প্রিমিয়াম চালু আছে। নতুন কেনাকাটা সাময়িকভাবে বন্ধ।",
+                        "प्रीमियम सक्रिय है। नई खरीदारी अस्थायी रूप से बंद है।"
+                    ) else LocalizedText.PREMIUM_PURCHASES_UNAVAILABLE.resolve(language),
                     style = MaterialTheme.typography.bodyLarge
                 )
+                Text(LocalizedText.PREMIUM_LIMITS_BENEFIT.resolve(language))
+                if (introExpiryText != null) {
+                    Text(introExpiryText, style = MaterialTheme.typography.titleMedium)
+                }
+                if (introNearExpiry) {
+                    Text(LocalizedText.PREMIUM_INTRO_EXPIRING.resolve(language))
+                    Text(LocalizedText.PREMIUM_PURCHASES_UNAVAILABLE.resolve(language))
+                }
             }
         }
         return
@@ -100,21 +112,30 @@ internal fun PremiumScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            if (state.isPremium) {
+                            if (isPremium) {
                                 premiumText(language, "Premium is active", "প্রিমিয়াম চালু আছে", "प्रीमियम सक्रिय है")
                             } else {
-                                premiumText(language, "More room for real and AI friendships", "বাস্তব ও AI বন্ধুত্বের জন্য আরও সুযোগ", "असली और AI दोस्ती के लिए अधिक सुविधाएँ")
+                                premiumText(language, "More room for AI friends", "AI বন্ধুর জন্য আরও সুযোগ", "AI दोस्तों के लिए अधिक जगह")
                             },
                             style = MaterialTheme.typography.titleLarge
                         )
-                        Text(premiumText(
-                            language,
-                            "Unlimited AI companions and People likes, one daily 30-minute profile boost, chat themes, and expanded AI-friend customization.",
-                            "সীমাহীন AI বন্ধু ও People লাইক, প্রতিদিন ৩০ মিনিটের একটি প্রোফাইল বুস্ট, চ্যাট থিম এবং AI বন্ধুকে আরও কাস্টমাইজ করার সুবিধা।",
-                            "असीमित AI दोस्त और People लाइक, रोज़ एक 30-मिनट प्रोफ़ाइल बूस्ट, चैट थीम और AI दोस्त को अधिक कस्टमाइज़ करने की सुविधा।"
-                        ))
+                        Text(LocalizedText.PREMIUM_LIMITS_BENEFIT.resolve(language))
                     }
                 }
+            }
+            if (introExpiryText != null) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            introExpiryText,
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                }
+            }
+            if (introNearExpiry) {
+                item { Text(LocalizedText.PREMIUM_INTRO_EXPIRING.resolve(language)) }
             }
             if (uid.isBlank()) {
                 item {

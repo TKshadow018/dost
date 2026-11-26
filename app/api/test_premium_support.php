@@ -69,6 +69,10 @@ dost_premium_test_assert(
     dost_premium_purchase_entitlement('dost_premium_annual', 'subscription', $subscription, $uid, $now) === false,
     'A purchase response for another product must not grant the requested plan.'
 );
+$claimLock = dost_firebase_claim_lock($uid);
+dost_premium_test_assert(is_resource($claimLock), 'Custom-claim updates acquire a per-user lock.');
+dost_firebase_claim_unlock($claimLock);
+dost_premium_test_assert(dost_firebase_claim_lock('invalid uid') === false, 'Custom-claim locks reject invalid user identifiers.');
 
 $claims = dost_premium_claims(
     array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => $now + 21600),
@@ -102,6 +106,10 @@ dost_premium_test_assert(
         && !isset($newAccountClaims['dostPremiumProductId']),
     'A new account receives one intro expiry from account creation without a fake Play product.'
 );
+dost_premium_test_assert(
+    dost_premium_account_creation_epoch((string) (($newAccountCreatedAt * 1000))) === $newAccountCreatedAt,
+    'Firebase account creation timestamps in milliseconds are converted to epoch seconds.'
+);
 $existingAccountClaims = dost_premium_intro_claims(
     array('dostAgeEligible' => true),
     $launchAt - 86400,
@@ -113,6 +121,37 @@ dost_premium_test_assert(
     is_array($existingAccountClaims)
         && $existingAccountClaims['dostPremiumUntil'] === $now + ($introDays * 86400),
     'An existing account receives the full intro window from its first grant after launch.'
+);
+$existingWithoutLaunch = dost_premium_intro_claims(
+    array(),
+    $now - (2 * 86400),
+    $introDays,
+    $now
+);
+dost_premium_test_assert(
+    is_array($existingWithoutLaunch)
+        && $existingWithoutLaunch['dostPremiumUntil'] === $now + ($introDays * 86400),
+    'An older account without a configured launch time receives the full window from its first grant.'
+);
+$existingPaidClaims = array(
+    'dostPremiumUntil' => $now + (120 * 86400),
+    'dostPremiumProductId' => 'dost_premium_annual',
+    'dostPremiumSource' => 'play'
+);
+$introOverPaid = dost_premium_intro_claims(
+    $existingPaidClaims,
+    $launchAt - 86400,
+    $introDays,
+    $now,
+    $launchAt
+);
+dost_premium_test_assert(
+    is_array($introOverPaid)
+        && $introOverPaid['dostPremiumUntil'] === $existingPaidClaims['dostPremiumUntil']
+        && $introOverPaid['dostPremiumProductId'] === 'dost_premium_annual'
+        && $introOverPaid['dostPremiumSource'] === 'play'
+        && $introOverPaid['dostPremiumIntroGranted'] === true,
+    'An intro marker is recorded without shortening an existing paid entitlement.'
 );
 $repeatedIntroClaims = dost_premium_intro_claims(
     $existingAccountClaims,
@@ -161,6 +200,19 @@ dost_premium_test_assert(
         && $keptLifetime['dostPremiumUntil'] === 0
         && $keptLifetime['dostPremiumSource'] === 'play',
     'A later subscription verification must record its source without downgrading lifetime access.'
+);
+$lifetimeIntro = dost_premium_intro_claims(
+    $lifetimeClaims,
+    $now - (365 * 86400),
+    $introDays,
+    $now,
+    $launchAt
+);
+dost_premium_test_assert(
+    is_array($lifetimeIntro)
+        && $lifetimeIntro['dostPremiumLifetime'] === true
+        && $lifetimeIntro['dostPremiumIntroGranted'] === true,
+    'A lifetime account is marked as having received the intro without changing its entitlement.'
 );
 
 fwrite(STDOUT, "PASS: Premium purchase verification rules passed.\n");

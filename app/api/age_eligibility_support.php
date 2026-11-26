@@ -72,6 +72,40 @@ function dost_age_custom_attributes($eligible, $now, $ttlSeconds)
     return is_string($attributes) ? $attributes : '';
 }
 
+function dost_firebase_claim_lock($uid)
+{
+    if (!is_string($uid) || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1) {
+        return false;
+    }
+    $directory = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'dost-firebase-claim-locks';
+    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
+        return false;
+    }
+    $path = $directory . DIRECTORY_SEPARATOR . hash('sha256', $uid) . '.lock';
+    $handle = @fopen($path, 'c');
+    if ($handle === false) {
+        return false;
+    }
+    @chmod($path, 0600);
+    $deadline = microtime(true) + 5;
+    do {
+        if (flock($handle, LOCK_EX | LOCK_NB)) {
+            return $handle;
+        }
+        usleep(10000);
+    } while (microtime(true) < $deadline);
+    fclose($handle);
+    return false;
+}
+
+function dost_firebase_claim_unlock($handle)
+{
+    if (is_resource($handle)) {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+}
+
 function dost_age_http_json($url, $headers, $payload)
 {
     if (!function_exists('curl_init')) {
