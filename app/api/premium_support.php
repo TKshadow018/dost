@@ -86,26 +86,89 @@ function dost_premium_claims($existing, $productId, $entitlement, $now)
     if (!is_array($existing) || !is_string($productId) || !is_array($entitlement) || !is_int($now)) {
         return false;
     }
-    if (!empty($existing['dostPremiumLifetime'])) {
-        return $existing;
-    }
     $existingExpiry = isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
         ? (int) $existing['dostPremiumUntil']
         : 0;
-    $newExpiry = !empty($entitlement['lifetime']) ? 0 : (isset($entitlement['expires_at']) ? (int) $entitlement['expires_at'] : 0);
-    if ($newExpiry > 0 && $newExpiry <= $now) {
+    $newLifetime = !empty($entitlement['lifetime']);
+    $newExpiry = $newLifetime ? 0 : (isset($entitlement['expires_at']) ? (int) $entitlement['expires_at'] : 0);
+    if (!$newLifetime && ($newExpiry <= 0 || $newExpiry <= $now)) {
         return false;
     }
-    if ($newExpiry > 0 && $existingExpiry > $newExpiry) {
-        return $existing;
-    }
-    $existing['dostPremiumLifetime'] = !empty($entitlement['lifetime']);
-    $existing['dostPremiumUntil'] = $newExpiry;
+    $lifetime = !empty($existing['dostPremiumLifetime']) || $newLifetime;
+    $existing['dostPremiumLifetime'] = $lifetime;
+    $existing['dostPremiumUntil'] = $lifetime ? 0 : max($existingExpiry, $newExpiry);
     $existing['dostPremiumProductId'] = $productId;
+    $existing['dostPremiumSource'] = 'play';
     return $existing;
 }
 
-function dost_premium_service_account_token($credentials, $now = null)
+function dost_premium_account_creation_epoch($createdAt)
+{
+    if (is_int($createdAt) || is_float($createdAt) || (is_string($createdAt) && is_numeric($createdAt))) {
+        $timestamp = (int) $createdAt;
+        if ($timestamp > 100000000000) {
+            $timestamp = (int) floor($timestamp / 1000);
+        }
+        return $timestamp > 0 ? $timestamp : false;
+    }
+    if (!is_string($createdAt) || trim($createdAt) === '') {
+        return false;
+    }
+    $timestamp = strtotime($createdAt);
+    return $timestamp === false ? false : $timestamp;
+}
+
+function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt = null)
+{
+    if (!is_array($existing) || !is_int($createdAt) || $createdAt <= 0
+        || !is_int($days) || $days < 1 || $days > 3650
+        || !is_int($now) || ($launchAt !== null && !is_int($launchAt))
+    ) {
+        return false;
+    }
+    if (!empty($existing['dostPremiumIntroGranted'])) {
+        return $existing;
+    }
+
+    if ($launchAt !== null) {
+        $start = $createdAt < $launchAt ? $now : $createdAt;
+    } else {
+        $start = $createdAt >= $now - 86400 ? $createdAt : $now;
+    }
+    $introExpiry = $start + ($days * 86400);
+    $existingExpiry = isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
+        ? (int) $existing['dostPremiumUntil']
+        : 0;
+    $hasBetterEntitlement = !empty($existing['dostPremiumLifetime']) || $existingExpiry > $introExpiry;
+    if (!$hasBetterEntitlement) {
+        $existing['dostPremiumLifetime'] = false;
+        $existing['dostPremiumUntil'] = $introExpiry;
+        $existing['dostPremiumSource'] = 'intro';
+    }
+    $existing['dostPremiumIntroGranted'] = true;
+    $existing['dostPremiumIntroGrantedAt'] = $now;
+    return $existing;
+}
+
+function dost_premium_intro_response($claims, $now)
+{
+    $lifetime = is_array($claims) && !empty($claims['dostPremiumLifetime']);
+    $until = is_array($claims) && isset($claims['dostPremiumUntil']) && is_numeric($claims['dostPremiumUntil'])
+        ? (int) $claims['dostPremiumUntil']
+        : null;
+    $source = is_array($claims) && isset($claims['dostPremiumSource']) && is_string($claims['dostPremiumSource'])
+        ? $claims['dostPremiumSource']
+        : (is_array($claims) && !empty($claims['dostPremiumProductId']) ? 'play' : null);
+    return array(
+        'premium' => $lifetime || ($until !== null && $until > $now),
+        'source' => $source,
+        'lifetime' => $lifetime,
+        'premium_until' => $until,
+        'intro_granted' => is_array($claims) && !empty($claims['dostPremiumIntroGranted'])
+    );
+}
+
+function dost_premium_service_account_token($credentials, $now = null, $scope = null)
 {
     if (!is_array($credentials)
         || !isset($credentials['client_email'], $credentials['private_key'])
@@ -115,10 +178,13 @@ function dost_premium_service_account_token($credentials, $now = null)
         return false;
     }
     $now = is_int($now) ? $now : time();
+    $scope = is_string($scope) && trim($scope) !== ''
+        ? trim($scope)
+        : 'https://www.googleapis.com/auth/androidpublisher https://www.googleapis.com/auth/identitytoolkit';
     $header = dost_age_base64url(json_encode(array('alg' => 'RS256', 'typ' => 'JWT')));
     $claims = dost_age_base64url(json_encode(array(
         'iss' => $credentials['client_email'],
-        'scope' => 'https://www.googleapis.com/auth/androidpublisher https://www.googleapis.com/auth/identitytoolkit',
+        'scope' => $scope,
         'aud' => 'https://oauth2.googleapis.com/token',
         'iat' => $now,
         'exp' => $now + 3600

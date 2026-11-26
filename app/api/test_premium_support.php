@@ -82,6 +82,73 @@ dost_premium_test_assert(
         && $claims['dostPremiumUntil'] === $now + 3600,
     'Premium claims must preserve unrelated Firebase custom claims.'
 );
+$introDays = 90;
+$launchAt = $now - 86400;
+$newAccountCreatedAt = $now - 3600;
+$newAccountClaims = dost_premium_intro_claims(
+    array('dostAgeEligible' => true),
+    $newAccountCreatedAt,
+    $introDays,
+    $now,
+    $launchAt
+);
+dost_premium_test_assert(
+    is_array($newAccountClaims)
+        && $newAccountClaims['dostPremiumUntil'] === $newAccountCreatedAt + ($introDays * 86400)
+        && $newAccountClaims['dostPremiumSource'] === 'intro'
+        && $newAccountClaims['dostPremiumIntroGranted'] === true
+        && $newAccountClaims['dostPremiumIntroGrantedAt'] === $now
+        && $newAccountClaims['dostAgeEligible'] === true
+        && !isset($newAccountClaims['dostPremiumProductId']),
+    'A new account receives one intro expiry from account creation without a fake Play product.'
+);
+$existingAccountClaims = dost_premium_intro_claims(
+    array('dostAgeEligible' => true),
+    $launchAt - 86400,
+    $introDays,
+    $now,
+    $launchAt
+);
+dost_premium_test_assert(
+    is_array($existingAccountClaims)
+        && $existingAccountClaims['dostPremiumUntil'] === $now + ($introDays * 86400),
+    'An existing account receives the full intro window from its first grant after launch.'
+);
+$repeatedIntroClaims = dost_premium_intro_claims(
+    $existingAccountClaims,
+    $now + 100000,
+    $introDays,
+    $now + 100000,
+    $launchAt
+);
+dost_premium_test_assert(
+    $repeatedIntroClaims === $existingAccountClaims,
+    'An intro marker makes subsequent grant attempts idempotent.'
+);
+$paidDuringIntro = dost_premium_claims(
+    $existingAccountClaims,
+    'dost_premium_monthly',
+    $entitlement,
+    $now
+);
+dost_premium_test_assert(
+    is_array($paidDuringIntro)
+        && $paidDuringIntro['dostPremiumUntil'] === $existingAccountClaims['dostPremiumUntil']
+        && $paidDuringIntro['dostPremiumIntroGranted'] === true
+        && $paidDuringIntro['dostPremiumProductId'] === 'dost_premium_monthly'
+        && $paidDuringIntro['dostPremiumSource'] === 'play',
+    'A shorter paid subscription records its product and source without reducing or clearing the intro entitlement.'
+);
+$expiredIntroClaims = array(
+    'dostPremiumLifetime' => false,
+    'dostPremiumUntil' => $now - 1,
+    'dostPremiumSource' => 'intro',
+    'dostPremiumIntroGranted' => true
+);
+dost_premium_test_assert(
+    dost_premium_intro_response($expiredIntroClaims, $now)['premium'] === false,
+    'An expired intro entitlement is inactive even though its one-time marker remains.'
+);
 $lifetimeClaims = dost_premium_claims($claims, 'dost_premium_lifetime', $lifetimeEntitlement, $now);
 dost_premium_test_assert(
     is_array($lifetimeClaims) && $lifetimeClaims['dostPremiumLifetime'] === true,
@@ -89,8 +156,11 @@ dost_premium_test_assert(
 );
 $keptLifetime = dost_premium_claims($lifetimeClaims, 'dost_premium_monthly', $entitlement, $now);
 dost_premium_test_assert(
-    is_array($keptLifetime) && $keptLifetime['dostPremiumLifetime'] === true,
-    'A later subscription verification must not downgrade lifetime access.'
+    is_array($keptLifetime)
+        && $keptLifetime['dostPremiumLifetime'] === true
+        && $keptLifetime['dostPremiumUntil'] === 0
+        && $keptLifetime['dostPremiumSource'] === 'play',
+    'A later subscription verification must record its source without downgrading lifetime access.'
 );
 
 fwrite(STDOUT, "PASS: Premium purchase verification rules passed.\n");
