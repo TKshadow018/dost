@@ -2,6 +2,7 @@ package com.snigtus.dost
 
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -482,13 +483,20 @@ object ConversationManager {
         val memories = store.loadUserMemories(friend.id)
         val sessionSummaries = store.loadSessionSummaries(friend.id)
         val structuredUserProfile = store.loadStructuredUserProfile(friend.id, store.userName())
+        val firebaseIdToken = try {
+            FirebaseAuthRepository(appContext).currentIdToken()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            ""
+        }
         try {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, store.chatLanguage(),
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
-                structuredUserProfile = structuredUserProfile
+                structuredUserProfile = structuredUserProfile, firebaseIdToken = firebaseIdToken
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
@@ -498,7 +506,7 @@ object ConversationManager {
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
-                structuredUserProfile = structuredUserProfile
+                structuredUserProfile = structuredUserProfile, firebaseIdToken = firebaseIdToken
             )
         }
     }

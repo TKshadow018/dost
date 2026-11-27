@@ -90,6 +90,17 @@ internal fun ChatScreen(
     }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    LaunchedEffect(friend.id) {
+        delay(45 * 60 * 1000L)
+        snackbarHostState.showSnackbar(
+            chatLabel(
+                language,
+                "You’ve been chatting for a while. Consider taking a break.",
+                "অনেকক্ষণ চ্যাট করছেন। একটু বিরতি নেওয়ার কথা ভাবুন।",
+                "आप काफ़ी देर से चैट कर रहे हैं। थोड़ा विराम लेने पर विचार करें।"
+            )
+        )
+    }
     var searchQuery by remember { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
     var sessionSummaries by remember(friend.id) { mutableStateOf(store.loadSessionSummaries(friend.id).takeLast(10).reversed()) }
@@ -156,6 +167,11 @@ internal fun ChatScreen(
                                     )
                                 }
                                     ?: "${friendshipLevel(friend.friendshipScore, language)} · ${friend.friendshipScore}/100",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                chatLabel(language, "AI, not a real person", "AI, বাস্তব মানুষ নয়", "AI, असली व्यक्ति नहीं"),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

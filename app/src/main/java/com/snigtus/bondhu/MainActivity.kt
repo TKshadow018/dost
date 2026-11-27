@@ -224,6 +224,22 @@ fun DostApp(
     var peopleInboxRefreshKey by remember { mutableIntStateOf(0) }
     val activeFirebaseUid = authRepository.currentAccount?.uid.orEmpty()
     var isPremium by remember(activeFirebaseUid) { mutableStateOf(false) }
+    var pendingModeDisclosure by remember { mutableStateOf<ModePrivacyDisclosure?>(null) }
+    var pendingModeAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val disclosurePreferences = remember(context) {
+        context.getSharedPreferences("dost_mode_disclosures", Context.MODE_PRIVATE)
+    }
+
+    LaunchedEffect(activeFirebaseUid, store.birthMonth(), store.birthYear()) {
+        if (activeFirebaseUid.isBlank()) return@LaunchedEffect
+        try {
+            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            Unit
+        }
+    }
 
     LaunchedEffect(activeFirebaseUid, isPremium) {
         if (activeFirebaseUid.isBlank()) {
@@ -277,6 +293,7 @@ fun DostApp(
             checkingPeopleEligibility = true
             peopleEligibilityError = null
             try {
+                authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
                 authRepository.ensureAdultEligibility()
                 peopleInboxEligibleUid = authRepository.currentAccount?.uid.orEmpty()
                 action()
@@ -290,11 +307,24 @@ fun DostApp(
         }
     }
 
+    fun withModeDisclosure(mode: PrivacyMode, action: () -> Unit) {
+        val disclosure = ModePrivacyDisclosures.forMode(mode)
+        val key = modeDisclosurePreferenceKey(activeFirebaseUid, mode)
+        if (disclosurePreferences.getBoolean(key, false)) {
+            action()
+        } else {
+            pendingModeDisclosure = disclosure
+            pendingModeAction = action
+        }
+    }
+
     fun openSuperSecure() {
         if (!BuildConfig.DOST_SUPER_SECURE_ENABLED) return
-        withAdultEligibility {
-            SuperSecureSession.active = true
-            screen = AppScreen.SUPER_SECURE
+        withModeDisclosure(PrivacyMode.SHIELD) {
+            withAdultEligibility {
+                SuperSecureSession.active = true
+                screen = AppScreen.SUPER_SECURE
+            }
         }
     }
 
@@ -343,6 +373,7 @@ fun DostApp(
         peopleInboxLoading = true
         peopleInboxError = null
         try {
+            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
             authRepository.ensureAdultEligibility()
             peopleInboxEligibleUid = activeFirebaseUid
         } catch (error: Exception) {
@@ -426,6 +457,7 @@ fun DostApp(
             AppScreen.KNOWLEDGE,
             AppScreen.GAMES,
             AppScreen.SETTINGS,
+            AppScreen.PRIVACY,
             AppScreen.PREMIUM,
             AppScreen.REGISTER
         ) || screen == AppScreen.AUTH && authMode != AuthMode.SIGN_IN
@@ -444,6 +476,7 @@ fun DostApp(
             AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
             AppScreen.SETTINGS -> screen = settingsReturnScreen
             AppScreen.PREMIUM -> screen = premiumReturnScreen
+            AppScreen.PRIVACY -> screen = AppScreen.SETTINGS
             AppScreen.REGISTER -> screen = AppScreen.AUTH
             AppScreen.AUTH -> authMode = AuthMode.SIGN_IN
             else -> Unit
@@ -533,8 +566,11 @@ fun DostApp(
 
     fun openRequestedFriend(friendId: String?) {
         val resolved = ChatLaunch.friendToOpen(hasLocalAccountAccess(), friendId, friends.map { it.id }.toSet()) ?: return
-        selectedFriend = friends.first { it.id == resolved }
-        screen = AppScreen.CHAT
+        withModeDisclosure(PrivacyMode.EXPLORE) {
+            selectedFriend = friends.first { it.id == resolved }
+            chatReturnScreen = AppScreen.HOME
+            screen = AppScreen.CHAT
+        }
     }
 
     fun completeAuthentication(account: AuthAccount) {
@@ -776,8 +812,16 @@ fun DostApp(
         generatingProfileIds = generatingProfileIds + friendId
         scope.launch {
             try {
+                val firebaseIdToken = try {
+                    authRepository.currentIdToken()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    ""
+                }
                 val profile = OpenRouterClient().generateFriendProfile(
-                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, friend.personality, requestLanguage
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender,
+                    friend.personality, requestLanguage, firebaseIdToken
                 )
                 val index = friends.indexOfFirst { it.id == friendId }
                 if (index >= 0 && friends[index].profilePending) {
@@ -1005,9 +1049,12 @@ fun DostApp(
                 val requestedId = openFriendRequests.value?.friendId
                 val resolved = ChatLaunch.friendToOpen(destination == AppScreen.HOME, requestedId, friends.map { it.id }.toSet())
                 if (resolved != null) {
-                    selectedFriend = friends.first { it.id == resolved }
-                    chatReturnScreen = AppScreen.HOME
-                    screen = AppScreen.CHAT
+                    screen = destination
+                    withModeDisclosure(PrivacyMode.EXPLORE) {
+                        selectedFriend = friends.first { it.id == resolved }
+                        chatReturnScreen = AppScreen.HOME
+                        screen = AppScreen.CHAT
+                    }
                 } else {
                     screen = destination
                 }
@@ -1049,19 +1096,39 @@ fun DostApp(
             language = language,
             name = name,
             email = email,
-            age = age,
             gender = gender,
             onNameChange = { name = it },
             onEmailChange = { email = it },
-            onAgeChange = { age = it },
             onGenderChange = { gender = it },
             onFinish = finish@{
-                if (name.isBlank() || email.isBlank() || accountAgeResult(age) != AccountAgeResult.VALID || gender.isBlank()) return@finish
-                store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
-                screen = AppScreen.HOME
+                if (name.isBlank() || email.isBlank()
+                    || ageCohortForAge(age.toIntOrNull() ?: 0) == null
+                    || gender.isBlank()
+                    || authRequestState == AuthRequestState.Loading
+                ) return@finish
+                scope.launch {
+                    authRequestState = AuthRequestState.Loading
+                    try {
+                        authRepository.currentAccount?.let {
+                            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+                        }
+                        store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
+                        authRequestState = AuthRequestState.Idle
+                        screen = AppScreen.HOME
+                    } catch (error: CancellationException) {
+                        authRequestState = AuthRequestState.Idle
+                        throw error
+                    } catch (error: Exception) {
+                        authRequestState = AuthRequestState.Error(
+                            error.message?.take(160) ?: "Could not save your age cohort."
+                        )
+                    }
+                }
             },
             onBack = { screen = AppScreen.AUTH },
-            emailEditable = false
+            emailEditable = false,
+            requestMessage = (authRequestState as? AuthRequestState.Error)?.message,
+            loading = authRequestState == AuthRequestState.Loading
         )
         AppScreen.HOME -> if (hasLocalAccountAccess()) MainNavigationScaffold(
             language = language,
@@ -1094,14 +1161,18 @@ fun DostApp(
                     },
                     onOpenPeople = {
                         selectedMainTab = MainTab.DISCOVER
-                        withAdultEligibility { screen = AppScreen.PEOPLE }
+                        withModeDisclosure(PrivacyMode.EXPLORE) {
+                            withAdultEligibility { screen = AppScreen.PEOPLE }
+                        }
                     },
                     onRetryPeopleInbox = { peopleInboxRefreshKey++ },
-                    onOpenPeopleConversation = {
-                        withAdultEligibility {
-                            selectedPeopleConversation = it
-                            peopleChatReturnScreen = AppScreen.HOME
-                            screen = AppScreen.PEOPLE_CHAT
+                    onOpenPeopleConversation = { conversation ->
+                        withModeDisclosure(PrivacyMode.EXPLORE) {
+                            withAdultEligibility {
+                                selectedPeopleConversation = conversation
+                                peopleChatReturnScreen = AppScreen.HOME
+                                screen = AppScreen.PEOPLE_CHAT
+                            }
                         }
                     },
                     onOpenGames = {
@@ -1119,11 +1190,13 @@ fun DostApp(
                     onToggleConversationPinned = ::toggleConversationPinned,
                     onToggleConversationMuted = ::toggleConversationMuted,
                     onToggleConversationArchived = ::toggleConversationArchived,
-                    onOpenChat = {
-                        recentlyAddedSystemFriend = null
-                        chatReturnScreen = AppScreen.HOME
-                        selectedFriend = it
-                        screen = AppScreen.CHAT
+                    onOpenChat = { friend ->
+                        withModeDisclosure(PrivacyMode.EXPLORE) {
+                            recentlyAddedSystemFriend = null
+                            chatReturnScreen = AppScreen.HOME
+                            selectedFriend = friend
+                            screen = AppScreen.CHAT
+                        }
                     },
                     generatingProfileIds = generatingProfileIds,
                     profileFailedIds = profileErrors.keys,
@@ -1134,10 +1207,16 @@ fun DostApp(
                     language = language,
                     peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED,
                     onOpenAiFriends = {
-                        screen = AppScreen.SYSTEM_FRIEND_PICKER
-                        loadSystemFriendCatalog()
+                        withModeDisclosure(PrivacyMode.EXPLORE) {
+                            screen = AppScreen.SYSTEM_FRIEND_PICKER
+                            loadSystemFriendCatalog()
+                        }
                     },
-                    onOpenPeople = { withAdultEligibility { screen = AppScreen.PEOPLE } }
+                    onOpenPeople = {
+                        withModeDisclosure(PrivacyMode.EXPLORE) {
+                            withAdultEligibility { screen = AppScreen.PEOPLE }
+                        }
+                    }
                 )
                 MainTab.PROFILE -> ProfileHomeScreen(
                     language = language,
@@ -1287,6 +1366,20 @@ fun DostApp(
                         "Archive deletion failed: ${error.message?.take(160) ?: "please try again"}"
                     }
                 }
+            },
+            onOpenPrivacy = {
+                screen = AppScreen.PRIVACY
+            }
+        )
+        AppScreen.PRIVACY -> if (hasLocalAccountAccess()) PrivacyScreen(
+            onBack = { screen = AppScreen.SETTINGS },
+            onOpenPrivacyPolicy = {
+                context.startActivity(
+                    Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse("https://bisque-bear-900175.hostingersite.com/api/privacy-policy.txt")
+                    )
+                )
             }
         )
         AppScreen.PREMIUM -> if (hasLocalAccountAccess()) PremiumScreen(
@@ -1329,7 +1422,9 @@ fun DostApp(
             },
             onBack = { screen = AppScreen.HOME }
         )
-        AppScreen.PEOPLE -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) PeopleScreen(
+        AppScreen.PEOPLE -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
+        ) PeopleScreen(
             language = language,
             uid = authRepository.currentAccount?.uid.orEmpty(),
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
@@ -1337,18 +1432,22 @@ fun DostApp(
             userGender = gender.ifBlank { store.userGender() },
             store = store,
             onBack = { screen = AppScreen.HOME; selectedMainTab = MainTab.DISCOVER },
-            onOpenConversation = {
-                withAdultEligibility {
-                    selectedPeopleConversation = it
-                    peopleChatReturnScreen = AppScreen.PEOPLE
-                    screen = AppScreen.PEOPLE_CHAT
+            onOpenConversation = { conversation ->
+                withModeDisclosure(PrivacyMode.EXPLORE) {
+                    withAdultEligibility {
+                        selectedPeopleConversation = conversation
+                        peopleChatReturnScreen = AppScreen.PEOPLE
+                        screen = AppScreen.PEOPLE_CHAT
+                    }
                 }
             }
         ) else {
             selectedPeopleConversation = null
             screen = AppScreen.HOME
         }
-        AppScreen.PEOPLE_CHAT -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) selectedPeopleConversation?.let { conversation ->
+        AppScreen.PEOPLE_CHAT -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
+        ) selectedPeopleConversation?.let { conversation ->
             PeopleChatScreen(
                 language = language,
                 uid = authRepository.currentAccount?.uid.orEmpty(),
@@ -1486,9 +1585,46 @@ fun DostApp(
             listState = knowledgeListState,
             friendIdFilter = knowledgeFriendFilter,
             onBack = { screen = knowledgeReturnScreen },
-            onOpenChat = { chatReturnScreen = AppScreen.KNOWLEDGE; selectedFriend = it; screen = AppScreen.CHAT }
+            onOpenChat = { friend ->
+                withModeDisclosure(PrivacyMode.EXPLORE) {
+                    chatReturnScreen = AppScreen.KNOWLEDGE
+                    selectedFriend = friend
+                    screen = AppScreen.CHAT
+                }
+            }
         )
     }
+    }
+    pendingModeDisclosure?.let { disclosure ->
+        AlertDialog(
+            onDismissRequest = {
+                pendingModeDisclosure = null
+                pendingModeAction = null
+            },
+            title = { Text("${disclosure.title} privacy") },
+            text = { Text(disclosure.text) },
+            confirmButton = {
+                TextButton(onClick = {
+                    disclosurePreferences.edit()
+                        .putBoolean(modeDisclosurePreferenceKey(activeFirebaseUid, disclosure.mode), true)
+                        .apply()
+                    val action = pendingModeAction
+                    pendingModeDisclosure = null
+                    pendingModeAction = null
+                    action?.invoke()
+                }) {
+                    Text("Continue")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingModeDisclosure = null
+                    pendingModeAction = null
+                }) {
+                    Text("Not now")
+                }
+            }
+        )
     }
     if (backupPasswordMode != null) {
         val exporting = backupPasswordMode == "export"

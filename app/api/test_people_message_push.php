@@ -95,5 +95,12 @@ dost_message_push_test_assert(
     !dost_cipher_message_push_context_is_valid($cipherChat, $cipherMessage, 'mallory', 'chat_123'),
     'Cipher notifications must reject nonmembers.'
 );
+dost_message_push_test_assert(
+    dost_call_cipher_cohort_is_eligible(array('dostAgeCohort' => 'teen'))
+        && dost_call_cipher_cohort_is_eligible(array('dostAgeCohort' => 'adult'))
+        && !dost_call_cipher_cohort_is_eligible(array('dostAgeCohort' => 'under13'))
+        && !dost_call_cipher_cohort_is_eligible(array()),
+    'Cipher notifications require a server-assigned 13+ age cohort, not adult eligibility.'
+);
 
 fwrite(STDOUT, "PASS: People message push authorization checks passed.\n");

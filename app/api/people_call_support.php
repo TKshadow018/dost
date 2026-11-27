@@ -397,6 +397,36 @@ function dost_call_user_is_eligible($projectId, $serviceToken, $uid, $now)
         && (int) $claims['dostAgeEligibleUntil'] > $now;
 }
 
+function dost_call_cipher_cohort_is_eligible($claims)
+{
+    return is_array($claims)
+        && isset($claims['dostAgeCohort'])
+        && in_array($claims['dostAgeCohort'], array('teen', 'adult'), true);
+}
+
+function dost_call_user_is_cipher_eligible($projectId, $serviceToken, $uid)
+{
+    $response = dost_call_http_json(
+        'POST',
+        'https://identitytoolkit.googleapis.com/v1/projects/' . rawurlencode($projectId) . '/accounts:lookup',
+        array('Authorization: Bearer ' . $serviceToken),
+        array('localId' => array($uid))
+    );
+    if ($response === false || $response['status'] !== 200
+        || !isset($response['body']['users'][0]['localId'])
+        || !is_string($response['body']['users'][0]['localId'])
+        || !hash_equals($uid, $response['body']['users'][0]['localId'])
+    ) {
+        return false;
+    }
+    $customAttributes = $response['body']['users'][0]['customAttributes'] ?? '{}';
+    if (!is_string($customAttributes)) {
+        return false;
+    }
+    $claims = json_decode($customAttributes, true);
+    return dost_call_cipher_cohort_is_eligible($claims);
+}
+
 function dost_call_authorize($settings, $idToken, $chatId, $callId, $requireRinging, $rateLimitScope = '', $rateLimit = 0)
 {
     $identity = dost_call_http_json(

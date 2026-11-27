@@ -2,21 +2,60 @@
 
 require_once __DIR__ . '/age_eligibility_support.php';
 
-function dost_premium_product_type($productId)
+function dost_premium_product($productId)
 {
     $products = array(
-        'dost_premium_monthly' => 'subscription',
-        'dost_premium_annual' => 'subscription',
-        'dost_premium_lifetime' => 'lifetime',
-        'dost_cipher_monthly' => 'subscription',
-        'dost_cipher_annual' => 'subscription'
+        'dost_explore_plus' => array('plan' => 'explore_plus', 'type' => 'subscription', 'adult' => true),
+        'dost_explore_plus_lifetime' => array('plan' => 'explore_plus', 'type' => 'inapp', 'adult' => true),
+        'dost_cipher' => array('plan' => 'cipher', 'type' => 'subscription', 'adult' => false),
+        'dost_shield_team' => array('plan' => 'shield_team', 'type' => 'subscription', 'adult' => true),
+        'dost_shield_business' => array('plan' => 'shield_business', 'type' => 'subscription', 'adult' => true),
+        'dost_plus' => array('plan' => 'plus_bundle', 'type' => 'subscription', 'adult' => true)
     );
     return isset($products[$productId]) ? $products[$productId] : false;
 }
 
-function dost_premium_is_cipher_product($productId)
+function dost_premium_product_type($productId)
 {
-    return is_string($productId) && in_array($productId, array('dost_cipher_monthly', 'dost_cipher_annual'), true);
+    $product = dost_premium_product($productId);
+    return is_array($product) ? $product['type'] : false;
+}
+
+function dost_premium_plan_enabled($plan, $config)
+{
+    $keys = array(
+        'explore_plus' => 'plan_explore_plus_enabled',
+        'cipher' => 'plan_cipher_enabled',
+        'shield_team' => 'plan_shield_enabled',
+        'shield_business' => 'plan_shield_enabled',
+        'plus_bundle' => 'plan_explore_plus_enabled'
+    );
+    if (!is_array($config) || !isset($keys[$plan])) {
+        return false;
+    }
+    $value = isset($config[$keys[$plan]]) ? $config[$keys[$plan]] : false;
+    $enabled = $value === true || (is_string($value) && strtolower(trim($value)) === 'true');
+    if ($plan === 'plus_bundle') {
+        $cipher = isset($config['plan_cipher_enabled']) ? $config['plan_cipher_enabled'] : false;
+        $enabled = $enabled && ($cipher === true
+            || (is_string($cipher) && strtolower(trim($cipher)) === 'true'));
+    }
+    return $enabled;
+}
+
+function dost_premium_user_adult_eligible($claims, $now)
+{
+    return is_array($claims)
+        && is_int($now)
+        && isset(
+            $claims['dostAgeCohort'],
+            $claims['dostAgeEligible'],
+            $claims['dostAgeEligibleUntil']
+        )
+        && $claims['dostAgeCohort'] === 'adult'
+        && $claims['dostAgeEligible'] === true
+        && is_int($claims['dostAgeEligibleUntil'])
+        && $claims['dostAgeEligibleUntil'] > $now;
 }
 
 function dost_premium_obfuscated_account_id($uid)
@@ -34,6 +73,7 @@ function dost_premium_purchase_entitlement($productId, $purchaseType, $purchase,
     ) {
         return false;
     }
+    $product = dost_premium_product($productId);
     $expectedAccountId = dost_premium_obfuscated_account_id($uid);
     $externalIds = isset($purchase['externalAccountIdentifiers']) && is_array($purchase['externalAccountIdentifiers'])
         ? $purchase['externalAccountIdentifiers']
@@ -60,12 +100,21 @@ function dost_premium_purchase_entitlement($productId, $purchaseType, $purchase,
         foreach ($purchase['lineItems'] as $lineItem) {
             if (!is_array($lineItem) || !isset($lineItem['productId'], $lineItem['expiryTime'])
                 || $lineItem['productId'] !== $productId || !is_string($lineItem['expiryTime'])
+                || !isset($lineItem['offerDetails']) || !is_array($lineItem['offerDetails'])
+                || !isset($lineItem['offerDetails']['basePlanId'])
+                || !in_array($lineItem['offerDetails']['basePlanId'], array('monthly', 'annual'), true)
             ) {
                 continue;
             }
             $expiresAt = strtotime($lineItem['expiryTime']);
             if ($expiresAt !== false && $expiresAt > $now) {
-                return array('lifetime' => false, 'expires_at' => $expiresAt);
+                return array(
+                    'lifetime' => false,
+                    'expires_at' => $expiresAt,
+                    'plan' => $product['plan'],
+                    'product_id' => $productId,
+                    'base_plan_id' => $lineItem['offerDetails']['basePlanId']
+                );
             }
         }
         return false;
@@ -82,43 +131,301 @@ function dost_premium_purchase_entitlement($productId, $purchaseType, $purchase,
     }
     foreach ($lineItems as $lineItem) {
         if (is_array($lineItem) && isset($lineItem['productId']) && $lineItem['productId'] === $productId) {
-            return array('lifetime' => true, 'expires_at' => null);
+            return array(
+                'lifetime' => true,
+                'expires_at' => null,
+                'plan' => $product['plan'],
+                'product_id' => $productId,
+                'base_plan_id' => null
+            );
         }
     }
     return false;
 }
 
-function dost_premium_claims($existing, $productId, $entitlement, $now)
+function dost_premium_claims(
+    $existing,
+    $productId,
+    $entitlement,
+    $now,
+    $purchaseToken = null,
+    $eventTime = null,
+    $requireAdult = true
+)
 {
-    if (!is_array($existing) || !is_string($productId) || !is_array($entitlement) || !is_int($now)) {
+    $product = dost_premium_product($productId);
+    if (!is_array($existing) || !is_string($productId) || !is_array($entitlement) || !is_int($now)
+        || !is_array($product) || !isset($entitlement['plan'])
+        || $entitlement['plan'] !== $product['plan']
+        || (!empty($product['adult']) && $requireAdult
+            && !dost_premium_user_adult_eligible($existing, $now))
+    ) {
         return false;
     }
-    if (dost_premium_is_cipher_product($productId)) {
-        $newExpiry = isset($entitlement['expires_at']) ? (int) $entitlement['expires_at'] : 0;
-        $existingExpiry = isset($existing['dostCipherUntil']) && is_numeric($existing['dostCipherUntil'])
-            ? (int) $existing['dostCipherUntil']
-            : 0;
-        if (!empty($entitlement['lifetime']) || $newExpiry <= $now) {
-            return false;
-        }
-        $existing['dostCipherUntil'] = max($existingExpiry, $newExpiry);
-        $existing['dostCipherProductId'] = $productId;
-        $existing['dostCipherSource'] = 'play';
-        return $existing;
-    }
-    $existingExpiry = isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
-        ? (int) $existing['dostPremiumUntil']
-        : 0;
     $newLifetime = !empty($entitlement['lifetime']);
     $newExpiry = $newLifetime ? 0 : (isset($entitlement['expires_at']) ? (int) $entitlement['expires_at'] : 0);
     if (!$newLifetime && ($newExpiry <= 0 || $newExpiry <= $now)) {
         return false;
     }
-    $lifetime = !empty($existing['dostPremiumLifetime']) || $newLifetime;
-    $existing['dostPremiumLifetime'] = $lifetime;
-    $existing['dostPremiumUntil'] = $lifetime ? 0 : max($existingExpiry, $newExpiry);
+    $plans = $product['plan'] === 'plus_bundle'
+        ? array('explore_plus', 'cipher')
+        : array($product['plan']);
+    foreach ($plans as $plan) {
+        $claimToken = $plan === 'explore_plus' ? 'dostExplorePlusToken'
+            : ($plan === 'cipher' ? 'dostCipherToken' : 'dostShieldToken');
+        $claimUpdated = $plan === 'explore_plus' ? 'dostExplorePlusUpdatedAt'
+            : ($plan === 'cipher' ? 'dostCipherUpdatedAt' : 'dostShieldUpdatedAt');
+        if ($eventTime !== null && is_int($eventTime) && is_string($purchaseToken) && $purchaseToken !== ''
+            && isset($existing[$claimToken])
+            && (!is_string($existing[$claimToken])
+                || !hash_equals($existing[$claimToken], hash('sha256', $purchaseToken)))
+            && isset($existing[$claimUpdated]) && is_numeric($existing[$claimUpdated])
+            && (int) $existing[$claimUpdated] > $eventTime
+        ) {
+            continue;
+        }
+        if ($plan === 'explore_plus') {
+            $oldExpiry = isset($existing['dostExplorePlusUntil']) && is_numeric($existing['dostExplorePlusUntil'])
+                ? (int) $existing['dostExplorePlusUntil']
+                : (isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
+                    ? (int) $existing['dostPremiumUntil'] : 0);
+            $lifetime = !empty($existing['dostExplorePlusLifetime']) || $newLifetime;
+            $existing['dostExplorePlusLifetime'] = $lifetime;
+            $existing['dostExplorePlusUntil'] = $lifetime ? 0 : max($oldExpiry, $newExpiry);
+            $existing['dostPremiumLifetime'] = $lifetime;
+            $existing['dostPremiumUntil'] = $existing['dostExplorePlusUntil'];
+            if (empty($existing['dostExplorePlusLifetime']) || $newLifetime) {
+                $existing['dostExplorePlusProductId'] = $productId;
+            }
+            if ((!$lifetime || $newLifetime) && is_string($purchaseToken) && $purchaseToken !== '') {
+                $existing[$claimToken] = hash('sha256', $purchaseToken);
+                $existing['dostExplorePlusUpdatedAt'] = $eventTime !== null && is_int($eventTime)
+                    ? $eventTime : $now;
+            }
+        } elseif ($plan === 'cipher') {
+            $oldExpiry = isset($existing['dostCipherUntil']) && is_numeric($existing['dostCipherUntil'])
+                ? (int) $existing['dostCipherUntil'] : 0;
+            $existing['dostCipherUntil'] = max($oldExpiry, $newExpiry);
+            $existing['dostCipherProductId'] = $productId;
+            if (is_string($purchaseToken) && $purchaseToken !== '') {
+                $existing[$claimToken] = hash('sha256', $purchaseToken);
+                $existing['dostCipherUpdatedAt'] = $eventTime !== null && is_int($eventTime)
+                    ? $eventTime : $now;
+            }
+        } else {
+            $existing['dostShieldUntil'] = $newExpiry;
+            $existing['dostShieldSeats'] = $plan === 'shield_team' ? 10 : 25;
+            $existing['dostShieldProductId'] = $productId;
+            if (is_string($purchaseToken) && $purchaseToken !== '') {
+                $existing[$claimToken] = hash('sha256', $purchaseToken);
+                $existing['dostShieldUpdatedAt'] = $eventTime !== null && is_int($eventTime)
+                    ? $eventTime : $now;
+            }
+        }
+    }
     $existing['dostPremiumProductId'] = $productId;
     $existing['dostPremiumSource'] = 'play';
+    return $existing;
+}
+
+function dost_premium_rtdn_token_info_is_valid($tokenInfo, $audience, $serviceAccountEmail)
+{
+    return is_array($tokenInfo) && is_string($audience) && $audience !== ''
+        && is_string($serviceAccountEmail) && $serviceAccountEmail !== ''
+        && isset(
+            $tokenInfo['aud'],
+            $tokenInfo['email'],
+            $tokenInfo['email_verified'],
+            $tokenInfo['iss'],
+            $tokenInfo['expires_in']
+        )
+        && is_string($tokenInfo['aud']) && hash_equals($audience, $tokenInfo['aud'])
+        && is_string($tokenInfo['email']) && hash_equals($serviceAccountEmail, $tokenInfo['email'])
+        && in_array($tokenInfo['email_verified'], array(true, 'true'), true)
+        && in_array($tokenInfo['iss'], array('accounts.google.com', 'https://accounts.google.com'), true)
+        && is_numeric($tokenInfo['expires_in']) && (int) $tokenInfo['expires_in'] > 0;
+}
+
+function dost_premium_shield_plan_fields($claims, $now)
+{
+    if (!is_array($claims) || !is_int($now)
+        || !isset($claims['dostShieldUntil'], $claims['dostShieldSeats'])
+        || !is_numeric($claims['dostShieldUntil']) || !is_numeric($claims['dostShieldSeats'])
+        || (int) $claims['dostShieldUntil'] <= $now
+    ) {
+        return false;
+    }
+    $seats = (int) $claims['dostShieldSeats'];
+    if (!in_array($seats, array(10, 25), true)) {
+        return false;
+    }
+    return array(
+        'seatLimit' => $seats,
+        'activeUntil' => gmdate('Y-m-d\TH:i:s\Z', (int) $claims['dostShieldUntil'])
+    );
+}
+
+function dost_premium_sync_shield_orgs($projectId, $serviceToken, $uid, $claims, $now)
+{
+    if (!is_string($projectId) || !is_string($serviceToken) || !is_string($uid)
+        || !is_array($claims) || !is_int($now)
+    ) {
+        return false;
+    }
+    $query = array('structuredQuery' => array(
+        'from' => array(array('collectionId' => 'secureOrgs')),
+        'where' => array('fieldFilter' => array(
+            'field' => array('fieldPath' => 'ownerUid'),
+            'op' => 'EQUAL',
+            'value' => array('stringValue' => $uid)
+        )),
+        'limit' => 100
+    ));
+    $response = dost_premium_http_json(
+        'POST',
+        'https://firestore.googleapis.com/v1/projects/' . rawurlencode($projectId)
+            . '/databases/(default)/documents:runQuery',
+        array('Authorization: Bearer ' . $serviceToken),
+        $query
+    );
+    if ($response === false || $response['status'] !== 200 || !is_array($response['body'])) {
+        return false;
+    }
+    $activePlan = dost_premium_shield_plan_fields($claims, $now);
+    foreach ($response['body'] as $result) {
+        if (!isset($result['document']['name'], $result['document']['fields']['ownerUid']['stringValue'])
+            || !is_string($result['document']['name'])
+            || !is_string($result['document']['fields']['ownerUid']['stringValue'])
+            || !hash_equals($uid, $result['document']['fields']['ownerUid']['stringValue'])
+            || preg_match('/\Aprojects\/[A-Za-z0-9_-]+\/databases\/\(default\)\/documents\/secureOrgs\/([A-Za-z0-9_-]{1,128})\z/', $result['document']['name'], $matches) !== 1
+        ) {
+            continue;
+        }
+        $oldPlan = isset($result['document']['fields']['plan']['mapValue']['fields'])
+            ? $result['document']['fields']['plan']['mapValue']['fields']
+            : array();
+        $seatLimit = $activePlan !== false
+            ? $activePlan['seatLimit']
+            : (isset($oldPlan['seatLimit']['integerValue'])
+                && in_array((int) $oldPlan['seatLimit']['integerValue'], array(10, 25), true)
+                    ? (int) $oldPlan['seatLimit']['integerValue'] : 25);
+        $activeUntil = $activePlan !== false
+            ? $activePlan['activeUntil']
+            : gmdate('Y-m-d\TH:i:s\Z', $now);
+        $url = 'https://firestore.googleapis.com/v1/projects/' . rawurlencode($projectId)
+            . '/databases/(default)/documents/secureOrgs/' . rawurlencode($matches[1])
+            . '?updateMask.fieldPaths=plan';
+        $updated = dost_premium_http_json(
+            'PATCH',
+            $url,
+            array('Authorization: Bearer ' . $serviceToken),
+            array('fields' => array('plan' => array('mapValue' => array('fields' => array(
+                'seatLimit' => array('integerValue' => (string) $seatLimit),
+                'activeUntil' => array('timestampValue' => $activeUntil)
+            )))))
+        );
+        if ($updated === false || !in_array($updated['status'], array(200, 201), true)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function dost_premium_store_purchase_owner($token, $uid, $productId, $directory, $refundRequired = false)
+{
+    if (!is_string($token) || $token === '' || !is_string($uid)
+        || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1
+        || !is_array(dost_premium_product($productId)) || !is_string($directory) || $directory === ''
+    ) {
+        return false;
+    }
+    if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
+        return false;
+    }
+    @chmod($directory, 0700);
+    $path = rtrim($directory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR
+        . hash('sha256', $token) . '.json';
+    $encoded = json_encode(array(
+        'uid' => $uid,
+        'product_id' => $productId,
+        'refund_required' => $refundRequired === true
+    ));
+    if (!is_string($encoded)) {
+        return false;
+    }
+    $written = @file_put_contents($path, $encoded, LOCK_EX);
+    @chmod($path, 0600);
+    return $written === strlen($encoded);
+}
+
+function dost_premium_purchase_owner($token, $directory)
+{
+    if (!is_string($token) || $token === '' || !is_string($directory) || $directory === '') {
+        return false;
+    }
+    $path = rtrim($directory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR
+        . hash('sha256', $token) . '.json';
+    $handle = @fopen($path, 'r');
+    if ($handle === false || !flock($handle, LOCK_SH)) {
+        if (is_resource($handle)) {
+            fclose($handle);
+        }
+        return false;
+    }
+    $contents = stream_get_contents($handle);
+    flock($handle, LOCK_UN);
+    fclose($handle);
+    $owner = is_string($contents) ? json_decode($contents, true) : null;
+    if (!is_array($owner) || !isset($owner['uid'], $owner['product_id'])
+        || !is_string($owner['uid']) || !is_string($owner['product_id'])
+        || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $owner['uid']) !== 1
+        || !is_array(dost_premium_product($owner['product_id']))
+    ) {
+        return false;
+    }
+    return $owner;
+}
+
+function dost_premium_revoke_claims($existing, $productId, $now, $purchaseToken = null, $eventTime = null)
+{
+    $product = dost_premium_product($productId);
+    if (!is_array($existing) || !is_array($product) || !is_int($now)) {
+        return false;
+    }
+    $tokenHash = is_string($purchaseToken) && $purchaseToken !== '' ? hash('sha256', $purchaseToken) : null;
+    $plans = $product['plan'] === 'plus_bundle'
+        ? array('explore_plus', 'cipher')
+        : array($product['plan']);
+    foreach ($plans as $plan) {
+        $claimProductId = $plan === 'explore_plus' ? 'dostExplorePlusProductId'
+            : ($plan === 'cipher' ? 'dostCipherProductId' : 'dostShieldProductId');
+        $claimToken = $plan === 'explore_plus' ? 'dostExplorePlusToken'
+            : ($plan === 'cipher' ? 'dostCipherToken' : 'dostShieldToken');
+        $claimUpdated = $plan === 'explore_plus' ? 'dostExplorePlusUpdatedAt'
+            : ($plan === 'cipher' ? 'dostCipherUpdatedAt' : 'dostShieldUpdatedAt');
+        if (!isset($existing[$claimProductId]) || $existing[$claimProductId] !== $productId
+            || ($tokenHash !== null
+                && (!isset($existing[$claimToken]) || !is_string($existing[$claimToken])
+                    || !hash_equals($existing[$claimToken], $tokenHash)))
+            || ($eventTime !== null && is_int($eventTime)
+                && isset($existing[$claimUpdated]) && is_numeric($existing[$claimUpdated])
+                && $eventTime < (int) $existing[$claimUpdated])
+        ) {
+            continue;
+        }
+        if ($plan === 'explore_plus') {
+            $existing['dostExplorePlusLifetime'] = false;
+            $existing['dostExplorePlusUntil'] = $now;
+            $existing['dostPremiumLifetime'] = false;
+            $existing['dostPremiumUntil'] = $now;
+        } elseif ($plan === 'cipher') {
+            $existing['dostCipherUntil'] = $now;
+        } else {
+            $existing['dostShieldUntil'] = $now;
+            $existing['dostShieldSeats'] = 0;
+        }
+        $existing[$claimUpdated] = $eventTime !== null && is_int($eventTime) ? $eventTime : $now;
+    }
     return $existing;
 }
 
@@ -143,6 +450,7 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
     if (!is_array($existing) || !is_int($createdAt) || $createdAt <= 0
         || !is_int($days) || $days < 1 || $days > 3650
         || !is_int($now) || ($launchAt !== null && !is_int($launchAt))
+        || !dost_premium_user_adult_eligible($existing, $now)
     ) {
         return false;
     }
@@ -156,11 +464,15 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
         $start = $createdAt >= $now - 86400 ? $createdAt : $now;
     }
     $introExpiry = $start + ($days * 86400);
-    $existingExpiry = isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
-        ? (int) $existing['dostPremiumUntil']
-        : 0;
-    $hasBetterEntitlement = !empty($existing['dostPremiumLifetime']) || $existingExpiry > $introExpiry;
+    $existingExpiry = isset($existing['dostExplorePlusUntil']) && is_numeric($existing['dostExplorePlusUntil'])
+        ? (int) $existing['dostExplorePlusUntil']
+        : (isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
+            ? (int) $existing['dostPremiumUntil'] : 0);
+    $hasBetterEntitlement = !empty($existing['dostExplorePlusLifetime'])
+        || !empty($existing['dostPremiumLifetime']) || $existingExpiry > $introExpiry;
     if (!$hasBetterEntitlement) {
+        $existing['dostExplorePlusLifetime'] = false;
+        $existing['dostExplorePlusUntil'] = $introExpiry;
         $existing['dostPremiumLifetime'] = false;
         $existing['dostPremiumUntil'] = $introExpiry;
         $existing['dostPremiumSource'] = 'intro';
@@ -172,10 +484,12 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
 
 function dost_premium_intro_response($claims, $now)
 {
-    $lifetime = is_array($claims) && !empty($claims['dostPremiumLifetime']);
-    $until = is_array($claims) && isset($claims['dostPremiumUntil']) && is_numeric($claims['dostPremiumUntil'])
-        ? (int) $claims['dostPremiumUntil']
-        : null;
+    $lifetime = is_array($claims)
+        && (!empty($claims['dostExplorePlusLifetime']) || !empty($claims['dostPremiumLifetime']));
+    $until = is_array($claims) && isset($claims['dostExplorePlusUntil']) && is_numeric($claims['dostExplorePlusUntil'])
+        ? (int) $claims['dostExplorePlusUntil']
+        : (is_array($claims) && isset($claims['dostPremiumUntil']) && is_numeric($claims['dostPremiumUntil'])
+            ? (int) $claims['dostPremiumUntil'] : null);
     $source = is_array($claims) && isset($claims['dostPremiumSource']) && is_string($claims['dostPremiumSource'])
         ? $claims['dostPremiumSource']
         : (is_array($claims) && !empty($claims['dostPremiumProductId']) ? 'play' : null);

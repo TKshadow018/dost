@@ -78,9 +78,13 @@ if (!$validMessage) {
 $members = $chat['members'];
 $peerUid = $members[0] === $uid ? $members[1] : $members[0];
 $now = time();
-if (!dost_call_user_is_eligible($settings['project_id'], $serviceToken, $uid, $now)
-    || !dost_call_user_is_eligible($settings['project_id'], $serviceToken, $peerUid, $now)
-) {
+$eligibleUser = $isCipher
+    ? dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $uid)
+    : dost_call_user_is_eligible($settings['project_id'], $serviceToken, $uid, $now);
+$eligiblePeer = $isCipher
+    ? dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $peerUid)
+    : dost_call_user_is_eligible($settings['project_id'], $serviceToken, $peerUid, $now);
+if (!$eligibleUser || !$eligiblePeer) {
     dost_call_respond(403, array('error' => 'This message is not available'));
 }
 if ($isCipher) {

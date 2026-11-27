@@ -10,6 +10,8 @@ class PremiumEntitlementTest {
         val now = 1_790_000_000L
 
         assertTrue(premiumClaimIsActive(mapOf("dostPremiumLifetime" to true), now))
+        assertTrue(premiumClaimIsActive(mapOf("dostExplorePlusLifetime" to true), now))
+        assertTrue(premiumClaimIsActive(mapOf("dostExplorePlusUntil" to now + 1), now))
         assertTrue(premiumClaimIsActive(mapOf("dostPremiumUntil" to now + 1), now))
         assertFalse(premiumClaimIsActive(mapOf("dostPremiumUntil" to now), now))
         assertFalse(premiumClaimIsActive(mapOf("dostPremiumUntil" to (now - 1).toDouble()), now))
@@ -17,11 +19,37 @@ class PremiumEntitlementTest {
     }
 
     @Test
-    fun cipherClaimIsIndependentAndExpires() {
+    fun modeClaimsRespectExpiryAndShieldSeatCount() {
         val now = 1_790_000_000L
-        assertTrue(cipherClaimIsActive(mapOf("dostCipherUntil" to now + 1), now))
-        assertFalse(cipherClaimIsActive(mapOf("dostCipherUntil" to now), now))
-        assertFalse(cipherClaimIsActive(mapOf("dostCipherUntil" to (now + 1).toDouble()), now))
-        assertFalse(cipherClaimIsActive(mapOf("dostPremiumLifetime" to true), now))
+        assertTrue(planClaimIsActive(mapOf("dostCipherUntil" to now + 1), "cipher", now))
+        assertFalse(planClaimIsActive(mapOf("dostCipherUntil" to now), "cipher", now))
+        assertFalse(
+            planClaimIsActive(
+                mapOf("dostPremiumLifetime" to true),
+                "cipher",
+                now,
+            ),
+        )
+        assertFalse(
+            planClaimIsActive(
+                mapOf("dostCipherUntil" to now - 1),
+                "cipher",
+                now,
+            ),
+        )
+        assertTrue(
+            planClaimIsActive(
+                mapOf("dostShieldUntil" to now + 1, "dostShieldSeats" to 10),
+                "shield",
+                now,
+            ),
+        )
+        assertFalse(
+            planClaimIsActive(
+                mapOf("dostShieldUntil" to now + 1, "dostShieldSeats" to 0),
+                "shield",
+                now,
+            ),
+        )
     }
 }
