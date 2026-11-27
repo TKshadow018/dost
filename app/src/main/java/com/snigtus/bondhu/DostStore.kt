@@ -16,6 +16,7 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.Calendar
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -187,9 +188,17 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
         preferences.edit().putBoolean("language_setup_complete", true).apply()
     }
 
-    /** Saved profile whose age meets [MINIMUM_ACCOUNT_AGE]. Friends alone do not count. */
+    /** Saved profile whose age meets the 13+ account minimum. Friends alone do not count. */
     fun hasEligibleAccount(): Boolean =
         preferences.getBoolean("user_profile_saved", false) && accountAgeResult(userAge()) == AccountAgeResult.VALID
+
+    fun birthMonth(): String = preferences.getString(BIRTH_MONTH_KEY, "") ?: ""
+
+    fun birthYear(): String = preferences.getString(BIRTH_YEAR_KEY, "") ?: ""
+
+    fun ageCohort(): String = ageCohortForAge(userAge().toIntOrNull() ?: 0)
+        ?.name?.lowercase()
+        ?: preferences.getString(AGE_COHORT_KEY, "").orEmpty()
 
     fun authenticationRequired(): Boolean = preferences.getBoolean("authentication_required", false)
 
@@ -256,7 +265,21 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     }
     fun userName(): String = preferences.getString("user_name", "") ?: ""
     fun userEmail(): String = preferences.getString("user_email", "") ?: ""
-    fun userAge(): String = preferences.getString("user_age", "") ?: ""
+    fun userAge(): String {
+        val month = birthMonth()
+        val year = birthYear()
+        val today = Calendar.getInstance()
+        val derivedAge = birthMonthYearAge(
+            month,
+            year,
+            today.get(Calendar.MONTH) + 1,
+            today.get(Calendar.YEAR)
+        )
+        if (derivedAge != null) {
+            return derivedAge.toString()
+        }
+        return preferences.getString("user_age", "") ?: ""
+    }
     fun userGender(): String = preferences.getString("user_gender", "") ?: ""
     fun firebaseAccountId(): String = preferences.getString("firebase_account_id", "") ?: ""
     fun linkFirebaseAccount(uid: String) {

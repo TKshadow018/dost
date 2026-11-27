@@ -12,6 +12,21 @@ function dost_premium_product_type($productId)
     return isset($products[$productId]) ? $products[$productId] : false;
 }
 
+function dost_premium_user_adult_eligible($claims, $now)
+{
+    return is_array($claims)
+        && is_int($now)
+        && isset(
+            $claims['dostAgeCohort'],
+            $claims['dostAgeEligible'],
+            $claims['dostAgeEligibleUntil']
+        )
+        && $claims['dostAgeCohort'] === 'adult'
+        && $claims['dostAgeEligible'] === true
+        && is_int($claims['dostAgeEligibleUntil'])
+        && $claims['dostAgeEligibleUntil'] > $now;
+}
+
 function dost_premium_obfuscated_account_id($uid)
 {
     if (!is_string($uid) || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1) {
