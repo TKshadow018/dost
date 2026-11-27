@@ -16,11 +16,13 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.FirebaseUser
 import com.google.android.gms.tasks.Task
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class FirebaseAuthRepository(context: Context) {
-    private val auth: FirebaseAuth? = initializeAuth(context.applicationContext)
+    private val appContext = context.applicationContext
+    private val auth: FirebaseAuth? = initializeAuth(appContext)
 
     val emailSignInEnabled: Boolean
         get() = auth != null
@@ -30,6 +32,56 @@ class FirebaseAuthRepository(context: Context) {
 
     val currentAccount: AuthAccount?
         get() = auth?.currentUser?.toAuthAccount()
+
+    suspend fun currentIdToken(forceRefresh: Boolean = false): String {
+        val user = requireAuth().currentUser
+            ?: throw IllegalStateException("Sign in to manage Premium.")
+        return user.getIdToken(forceRefresh).awaitTask().token
+            ?: throw IOException("Firebase did not return an ID token.")
+    }
+
+    suspend fun hasPremiumEntitlement(forceRefresh: Boolean = false): Boolean {
+        val user = requireAuth().currentUser ?: return false
+        val claims = user.getIdToken(forceRefresh).awaitTask().claims
+        return premiumClaimIsActive(claims, System.currentTimeMillis() / 1000)
+    }
+
+    internal suspend fun premiumEntitlement(forceRefresh: Boolean = false): PremiumEntitlement {
+        val user = requireAuth().currentUser
+            ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
+        val claims = user.getIdToken(forceRefresh).awaitTask().claims
+        val isLifetime = claims["dostPremiumLifetime"] == true
+        val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong()
+        return PremiumEntitlement(
+            isActive = premiumClaimIsActive(claims, System.currentTimeMillis() / 1000),
+            isLifetime = isLifetime,
+            expiresAtEpochSeconds = expiresAt
+        )
+    }
+
+    suspend fun ensureAdultEligibility() {
+        val user = requireAuth().currentUser
+            ?: throw IllegalStateException("Sign in to Firebase before opening People.")
+        val currentToken = user.getIdToken(false).awaitTask()
+        val now = System.currentTimeMillis() / 1000
+        val currentExpiry = (currentToken.claims[AGE_ELIGIBILITY_EXPIRY_CLAIM] as? Number)?.toLong() ?: 0L
+        if (currentToken.claims[AGE_ELIGIBILITY_CLAIM] == true && currentExpiry > now + 60) {
+            return
+        }
+
+        val idToken = currentToken.token
+            ?: throw IOException("Firebase did not return an ID token.")
+        PlayIntegrityAgeEligibilityClient(appContext)
+            .attest(user.uid, idToken, eligible = true)
+
+        val refreshedToken = user.getIdToken(true).awaitTask()
+        val refreshedExpiry = (refreshedToken.claims[AGE_ELIGIBILITY_EXPIRY_CLAIM] as? Number)?.toLong() ?: 0L
+        if (refreshedToken.claims[AGE_ELIGIBILITY_CLAIM] != true
+            || refreshedExpiry <= System.currentTimeMillis() / 1000
+        ) {
+            throw IOException("Firebase did not return the verified age-eligibility claim.")
+        }
+    }
 
     suspend fun createAccount(email: String, password: String): AuthAccount =
         requireAuth().createUserWithEmailAndPassword(email.trim(), password).awaitTask().toAccount()
@@ -112,6 +164,11 @@ class FirebaseAuthRepository(context: Context) {
         emailVerified = isEmailVerified,
         googleAccount = providerData.any { it.providerId == GoogleAuthProvider.PROVIDER_ID }
     )
+
+    private companion object {
+        const val AGE_ELIGIBILITY_CLAIM = "dostAgeEligible"
+        const val AGE_ELIGIBILITY_EXPIRY_CLAIM = "dostAgeEligibleUntil"
+    }
 }
 
 fun authenticationAccountMismatchText(language: AppLanguage): String = when (language) {

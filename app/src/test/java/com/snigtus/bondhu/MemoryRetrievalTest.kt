@@ -54,6 +54,46 @@ class MemoryRetrievalTest {
     }
 
     @Test
+    fun coreProfileFactsAreIncludedWithoutQueryMatches() {
+        val profile = StructuredUserProfile(
+            name = "Asha",
+            people = listOf("Her brother Rafi studies medicine"),
+            preferences = listOf("She prefers green tea")
+        )
+
+        assertEquals(
+            listOf(
+                UserMemory("people", "Her brother Rafi studies medicine"),
+                UserMemory("preferences", "She prefers green tea")
+            ),
+            coreUserProfileMemories(profile)
+        )
+        assertEquals(
+            "- [people] Her brother Rafi studies medicine\n- [preferences] She prefers green tea",
+            coreUserProfileContext(profile)
+        )
+    }
+
+    @Test
+    fun retrievalOnlyUsesTheCurrentFriendsMemoryList() {
+        val rafiMemory = UserMemory("family", "User's brother Rafi is studying medicine")
+        val friendSpecificMemories = listOf(UserMemory("preferences", "User prefers green tea"))
+
+        val retrieved = retrieveRelevantUserMemories(
+            "What is Rafi studying?",
+            friendSpecificMemories,
+            StructuredUserProfile()
+        )
+
+        assertEquals(emptyList<UserMemory>(), retrieved)
+        assertEquals(listOf(rafiMemory), retrieveRelevantUserMemories(
+            "What is Rafi studying?",
+            listOf(rafiMemory),
+            StructuredUserProfile()
+        ))
+    }
+
+    @Test
     fun relevantEpisodicSummaryIsRetrievedInsteadOfTheNewestOne() {
         val summaries = listOf(
             SessionSummary("older", 1, 2, "User and Dost discussed Rafi's medical school plans."),
@@ -74,5 +114,17 @@ class MemoryRetrievalTest {
 
         assertEquals(MAX_RETRIEVED_USER_MEMORIES, retrieved.size)
         assertEquals((11 downTo 6).map { "Rafi fact $it" }, retrieved.map { it.fact })
+    }
+
+    @Test
+    fun promptContextIsCappedWithoutExceedingItsCharacterBudget() {
+        val context = boundedPromptContext(
+            listOf("first fact", "second fact", "third fact"),
+            maxCharacters = 20,
+            separator = "\n"
+        )
+
+        assertEquals(20, context.length)
+        assertEquals("first fact\nsecond...", context)
     }
 }

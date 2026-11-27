@@ -4,9 +4,16 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-enum class AppScreen { SPLASH, AUTH, REGISTER, HOME, CHAT, KNOWLEDGE }
+enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, PREMIUM, SYSTEM_FRIEND_PICKER, CHAT, PEOPLE, PEOPLE_CHAT, GAMES, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
 enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD, VERIFY_EMAIL }
+
+internal fun splashBrandLanguage(appLanguage: AppLanguage, chatLanguage: AppLanguage): AppLanguage =
+    when {
+        appLanguage != AppLanguage.ENGLISH -> appLanguage
+        chatLanguage != AppLanguage.ENGLISH -> chatLanguage
+        else -> AppLanguage.ENGLISH
+    }
 
 sealed interface AuthRequestState {
     data object Idle : AuthRequestState
@@ -46,6 +53,173 @@ fun authenticationStartScreen(
 internal const val MAX_CUSTOM_FRIENDS = 3
 internal const val MAX_SYSTEM_FRIENDS = 7
 internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
+internal const val GLOBAL_PROACTIVE_SPACING_MILLIS = 15 * 60_000L
+
+internal fun premiumClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
+    if (claims["dostPremiumLifetime"] == true) return true
+    val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong() ?: return false
+    return expiresAt > nowEpochSeconds
+}
+
+internal fun stableIdempotencyKey(value: String): String =
+    java.util.UUID.nameUUIDFromBytes(value.toByteArray(Charsets.UTF_8)).toString()
+
+enum class BusyReplyBehavior { WAIT, IMMEDIATE }
+enum class ProactiveTrigger { MORNING_GREETING, FOLLOW_UP, USER_REMINDER }
+enum class ProactiveDeliveryState { SCHEDULED, SENDING, COMPLETED, CANCELLED }
+enum class PlannedEventState { UPCOMING, COMPLETED, DISMISSED }
+
+internal fun staggerProactiveTime(candidateMillis: Long, reservedDueTimesMillis: List<Long>): Long {
+    var candidate = candidateMillis
+    reservedDueTimesMillis.sorted().forEach { reserved ->
+        if (kotlin.math.abs(reserved - candidate) < GLOBAL_PROACTIVE_SPACING_MILLIS) {
+            candidate = reserved + GLOBAL_PROACTIVE_SPACING_MILLIS
+        }
+    }
+    return candidate
+}
+
+internal fun proactiveStateAfterFinish(
+    current: ProactiveDeliveryState,
+    requested: ProactiveDeliveryState
+): ProactiveDeliveryState {
+    require(requested in setOf(
+        ProactiveDeliveryState.COMPLETED,
+        ProactiveDeliveryState.CANCELLED,
+        ProactiveDeliveryState.SCHEDULED
+    ))
+    return if (current in setOf(ProactiveDeliveryState.COMPLETED, ProactiveDeliveryState.CANCELLED)) current else requested
+}
+
+internal fun shouldApplyRelationshipOutcome(outcomeIds: Collection<String>, outcomeId: String): Boolean =
+    outcomeId.isNotBlank() && outcomeId !in outcomeIds
+
+internal fun shouldApplyRelationshipOutcome(
+    outcomeIds: Collection<String>,
+    outcomeFingerprints: Collection<String>,
+    outcomeId: String,
+    fingerprint: String?
+): Boolean = shouldApplyRelationshipOutcome(outcomeIds, outcomeId)
+    && (fingerprint == null || fingerprint !in outcomeFingerprints)
+
+internal fun relationshipOutcomeFingerprint(userMessage: String): String? {
+    val normalized = userMessage.trim().lowercase(java.util.Locale.ROOT).replace(Regex("\\s+"), " ")
+    if (normalized.isBlank()) return null
+    return stableIdempotencyKey("relationship-turn:$normalized")
+}
+
+data class RoutineBlock(
+    val id: String,
+    val reason: String,
+    val startMinute: Int,
+    val durationMinutes: Int,
+    val daysOfWeek: Set<Int>
+)
+
+fun conversationStarters(friend: Friend, language: AppLanguage): List<String> {
+    val interests = friend.interests
+        .split(',', ';', '\n')
+        .map { it.trim().trimEnd('.') }
+        .filter { it.length >= 2 }
+        .distinctBy { it.lowercase() }
+        .take(3)
+    if (interests.isEmpty()) {
+        return when (language) {
+            AppLanguage.BANGLA -> listOf("আজকের দিনের সেরা অংশ কী ছিল?", "সম্প্রতি কী শিখেছ?", "এখন কোন বিষয়টি নিয়ে ভাবছ?")
+            AppLanguage.HINDI -> listOf("आज के दिन का सबसे अच्छा हिस्सा क्या था?", "हाल में क्या नया सीखा?", "इन दिनों किस बारे में सोच रहे हो?")
+            AppLanguage.ENGLISH -> listOf("What was the best part of your day?", "What have you learned recently?", "What have you been thinking about lately?")
+        }
+    }
+    return interests.map { interest ->
+        when (language) {
+            AppLanguage.BANGLA -> "$interest নিয়ে তোমার সবচেয়ে ভালো লাগার বিষয় কী?"
+            AppLanguage.HINDI -> "$interest के बारे में तुम्हें सबसे ज़्यादा क्या पसंद है?"
+            AppLanguage.ENGLISH -> "What do you enjoy most about $interest?"
+        }
+    }
+}
+
+data class ProactiveMessage(
+    val id: String,
+    val friendId: String,
+    val trigger: ProactiveTrigger,
+    val sessionId: String,
+    val dueAtMillis: Long,
+    val reason: String,
+    val idempotencyKey: String,
+    val expectedUserMessageTimestamp: Long = 0L,
+    val eventId: String = "",
+    val state: ProactiveDeliveryState = ProactiveDeliveryState.SCHEDULED,
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class PlannedEvent(
+    val id: String,
+    val description: String,
+    val dueAtMillis: Long,
+    val confidence: String,
+    val followUpRequested: Boolean,
+    val state: PlannedEventState = PlannedEventState.UPCOMING
+)
+
+data class SharedMoment(
+    val id: String,
+    val title: String,
+    val detail: String,
+    val createdAtMillis: Long,
+    val kind: String,
+    val pinned: Boolean = false,
+    val stageIndex: Int? = null
+)
+
+internal fun completedEventMoment(event: PlannedEvent, completedAtMillis: Long = System.currentTimeMillis()): SharedMoment =
+    SharedMoment(
+        id = stableIdempotencyKey("completed-event:${event.id}"),
+        title = "Completed plan",
+        detail = event.description,
+        createdAtMillis = completedAtMillis,
+        kind = "completed_event"
+    )
+
+internal data class RelationshipApplication(val friend: Friend, val applied: Boolean)
+
+internal fun parseExplicitReminderRequest(
+    text: String,
+    nowMillis: Long,
+    timeZoneId: String
+): PlannedEvent? {
+    val match = Regex(
+        """^\s*(?:remind\s+me(?:\s+to)?|ask\s+me|check\s+in\s+with\s+me(?:\s+about)?)\s+(.+?)\s+(?:on\s+(\d{4}-\d{2}-\d{2})|(today|tomorrow))(?:\s+at\s+(\d{1,2}:\d{2}))?[.!?]?\s*$""",
+        RegexOption.IGNORE_CASE
+    ).matchEntire(text) ?: return null
+    val description = match.groupValues[1].trim().removePrefix("about ").removePrefix("About ")
+    if (description.isBlank() || description.length > 500) return null
+    val zone = validZoneId(timeZoneId)
+    val today = java.time.Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+    val date = when {
+        match.groupValues[2].isNotBlank() -> runCatching { java.time.LocalDate.parse(match.groupValues[2]) }.getOrNull()
+        match.groupValues[3].equals("today", ignoreCase = true) -> today
+        match.groupValues[3].equals("tomorrow", ignoreCase = true) -> today.plusDays(1)
+        else -> null
+    } ?: return null
+    val timeText = match.groupValues[4]
+    val time = if (timeText.isBlank()) {
+        java.time.LocalTime.of(9, 0)
+    } else {
+        val parts = timeText.split(':').mapNotNull(String::toIntOrNull)
+        if (parts.size != 2 || parts[0] !in 0..23 || parts[1] !in 0..59) return null
+        java.time.LocalTime.of(parts[0], parts[1])
+    }
+    val dueAtMillis = date.atTime(time).atZone(zone).toInstant().toEpochMilli()
+    if (dueAtMillis <= nowMillis) return null
+    return PlannedEvent(
+        id = java.util.UUID.randomUUID().toString(),
+        description = description,
+        dueAtMillis = dueAtMillis,
+        confidence = if (timeText.isBlank()) "uncertain" else "confirmed",
+        followUpRequested = true
+    )
+}
 
 data class Friend(
     val id: String,
@@ -55,28 +229,32 @@ data class Friend(
     val personality: String = "Friendly and curious",
     val interests: String = "",
     val memories: String = "",
-    val conversationStyle: String = "Warm, natural, and concise"
-    ,val family: String = ""
-    ,val familyMembers: String = ""
-    ,val familyActivities: String = ""
-    ,val financialCondition: String = ""
-    ,val address: String = ""
-    ,val height: String = ""
-    ,val weight: String = ""
-    ,val facialFeatures: String = ""
-    ,val bodyFeatures: String = ""
-    ,val friendshipScore: Int = 0
-    ,val loveScore: Int = 0
-    ,val mood: String = ""
-    ,val photoUri: String = ""
-    ,val busyStartHour: Int = if ((age.toIntOrNull() ?: 18) < 18) 8 else 9
-    ,val busyDurationHours: Int = if ((age.toIntOrNull() ?: 18) < 18) 6 else 8
-    ,val busyReason: String = if ((age.toIntOrNull() ?: 18) < 18) "School" else "Work"
-    ,val timeZoneId: String = ZoneId.systemDefault().id
-    ,val catalogId: String = ""
-    ,val profilePending: Boolean = false
-    ,val greeting: String = ""
-    ,val relationship: String = ""
+    val conversationStyle: String = "Warm, natural, and concise",
+    val family: String = "",
+    val familyMembers: String = "",
+    val familyActivities: String = "",
+    val financialCondition: String = "",
+    val address: String = "",
+    val height: String = "",
+    val weight: String = "",
+    val facialFeatures: String = "",
+    val bodyFeatures: String = "",
+    val friendshipScore: Int = 0,
+    val loveScore: Int = 0,
+    val mood: String = "",
+    val photoUri: String = "",
+    val busyStartHour: Int = if ((age.toIntOrNull() ?: 18) < 18) 8 else 9,
+    val busyDurationHours: Int = if ((age.toIntOrNull() ?: 18) < 18) 6 else 8,
+    val busyReason: String = if ((age.toIntOrNull() ?: 18) < 18) "School" else "Work",
+    val timeZoneId: String = ZoneId.systemDefault().id,
+    val catalogId: String = "",
+    val profilePending: Boolean = false,
+    val greeting: String = "",
+    val relationship: String = "",
+    val routineBlocks: List<RoutineBlock> = emptyList(),
+    val busyReplyBehavior: BusyReplyBehavior = BusyReplyBehavior.WAIT,
+    val busyReplyDelayMinutes: Int = 30,
+    val favorite: Boolean = false
 )
 
 data class ProfileFailure(val message: String, val detail: String?)
@@ -93,7 +271,7 @@ fun profileFailureText(language: AppLanguage, causeMessage: String?, detailLimit
 }
 
 fun Friend.withGeneratedProfile(profile: FriendProfile): Friend = copy(
-    personality = personality.ifBlank { profile.personality },
+    personality = if (personality.isBlank() || personality == "Friendly and curious") profile.personality else personality,
     interests = profile.interests,
     family = profile.family,
     familyMembers = profile.familyMembers,
@@ -118,11 +296,39 @@ data class SystemFriendListing(
     val tags: String,
     val relationship: String,
     val greeting: String,
-    val photoUrl: String
+    val photoUrl: String,
+    val personality: String = "",
+    val conversationStyle: String = "",
+    val conversationLanguage: AppLanguage = AppLanguage.ENGLISH
 )
 
-fun availableSystemFriendDeck(catalog: List<SystemFriendListing>, addedCatalogIds: Set<String>): List<SystemFriendListing> =
-    catalog.filterNot { it.id in addedCatalogIds }
+fun availableSystemFriendDeck(
+    catalog: List<SystemFriendListing>,
+    addedCatalogIds: Set<String>,
+    passedCatalogIds: Set<String> = emptySet()
+): List<SystemFriendListing> =
+    catalog.filterNot { it.id in addedCatalogIds || it.id in passedCatalogIds }
+
+fun filterSystemFriendCatalog(
+    catalog: List<SystemFriendListing>,
+    query: String
+): List<SystemFriendListing> {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) return catalog
+    return catalog.filter { listing ->
+        listOf(
+            listing.name,
+            listing.category,
+            listing.description,
+            listing.tags,
+            listing.personality,
+            listing.conversationStyle,
+            listing.relationship,
+            listing.greeting,
+            listing.conversationLanguage.name
+        ).any { it.contains(normalizedQuery, ignoreCase = true) }
+    }
+}
 
 fun initialGreetingMessage(friend: Friend, history: List<ChatMessage>, sessionId: String): ChatMessage? {
     val greeting = friend.greeting.trim()
@@ -132,16 +338,78 @@ fun initialGreetingMessage(friend: Friend, history: List<ChatMessage>, sessionId
 
 fun validZoneId(timeZoneId: String): ZoneId = runCatching { ZoneId.of(timeZoneId) }.getOrDefault(ZoneId.systemDefault())
 
+internal fun isQuietTime(time: LocalTime, quietStartMinute: Int, quietEndMinute: Int): Boolean {
+    val start = LocalTime.of(quietStartMinute.coerceIn(0, 1439) / 60, quietStartMinute.coerceIn(0, 1439) % 60)
+    val end = LocalTime.of(quietEndMinute.coerceIn(0, 1439) / 60, quietEndMinute.coerceIn(0, 1439) % 60)
+    return if (start < end) time >= start && time < end else time >= start || time < end
+}
+
+internal fun nextTimeAfterQuietHours(
+    now: ZonedDateTime,
+    quietStartMinute: Int,
+    quietEndMinute: Int
+): ZonedDateTime {
+    if (!isQuietTime(now.toLocalTime(), quietStartMinute, quietEndMinute)) return now
+    val endMinute = quietEndMinute.coerceIn(0, 1439)
+    var end = now.withHour(endMinute / 60).withMinute(endMinute % 60).withSecond(0).withNano(0)
+    if (!end.isAfter(now)) end = end.plusDays(1)
+    return end
+}
+
+internal fun Friend.effectiveRoutineBlocks(): List<RoutineBlock> =
+    routineBlocks.ifEmpty {
+        listOf(
+            RoutineBlock(
+                id = "legacy",
+                reason = busyReason,
+                startMinute = busyStartHour.coerceIn(0, 23) * 60,
+                durationMinutes = busyDurationHours.coerceIn(4, 8) * 60,
+                daysOfWeek = (1..7).toSet()
+            )
+        )
+    }
+
+internal fun Friend.busyRoutineAt(now: ZonedDateTime): RoutineBlock? {
+    val friendNow = now.withZoneSameInstant(validZoneId(timeZoneId))
+    return effectiveRoutineBlocks().firstOrNull { block ->
+        (0L..7L).any { daysBack ->
+            val date = friendNow.toLocalDate().minusDays(daysBack)
+            if (date.dayOfWeek.value !in block.daysOfWeek) {
+                false
+            } else {
+                    val startMinute = block.startMinute.coerceIn(0, 1439)
+                    val start = date.atStartOfDay().plusMinutes(startMinute.toLong()).atZone(friendNow.zone)
+                    val end = start.toLocalDateTime()
+                        .plusMinutes(block.durationMinutes.coerceIn(1, 24 * 60).toLong())
+                        .atZone(friendNow.zone)
+                    !friendNow.isBefore(start) && friendNow.isBefore(end)
+            }
+        }
+    }
+}
+
+internal fun shouldDelayBusyReply(friend: Friend, now: ZonedDateTime, sendImmediately: Boolean = false): Boolean =
+    !sendImmediately && friend.busyReplyBehavior == BusyReplyBehavior.WAIT && friend.replyAvailableAt(now) != null
+
 fun Friend.replyAvailableAt(now: ZonedDateTime): ZonedDateTime? {
     val friendNow = now.withZoneSameInstant(validZoneId(timeZoneId))
-    val startTime = LocalTime.of(busyStartHour.coerceIn(0, 23), 0)
-    val duration = busyDurationHours.coerceIn(4, 8).toLong()
-    return listOf(friendNow.toLocalDate().minusDays(1), friendNow.toLocalDate())
-        .firstNotNullOfOrNull { date ->
-            val start = date.atTime(startTime).atZone(friendNow.zone)
-            val release = start.plusHours(duration).plusMinutes(30)
-            release.takeIf { !friendNow.isBefore(start) && friendNow.isBefore(it) }
+    val delayMinutes = busyReplyDelayMinutes.coerceIn(0, 120).toLong()
+    return (0L..7L).asSequence()
+        .map { friendNow.toLocalDate().minusDays(it) }
+        .flatMap { date ->
+            effectiveRoutineBlocks().asSequence()
+                .filter { date.dayOfWeek.value in it.daysOfWeek }
+                .mapNotNull { block ->
+                    val startMinute = block.startMinute.coerceIn(0, 1439)
+                    val start = date.atStartOfDay().plusMinutes(startMinute.toLong()).atZone(friendNow.zone)
+                    val end = start.toLocalDateTime()
+                        .plusMinutes(block.durationMinutes.coerceIn(1, 24 * 60).toLong())
+                        .atZone(friendNow.zone)
+                    val release = end.plusMinutes(delayMinutes)
+                    release.takeIf { !friendNow.isBefore(start) && friendNow.isBefore(it) }
+                }
         }
+        .maxOrNull()
 }
 
 data class FriendProfile(
@@ -180,6 +448,8 @@ data class StructuredUserProfile(
 
 const val MAX_STORED_USER_MEMORIES = 1000
 const val MAX_PROFILE_FACTS = 20
+const val MAX_CORE_PROFILE_FACTS = 6
+const val MAX_CORE_PROFILE_CONTEXT_CHARACTERS = 720
 const val MAX_RETRIEVED_USER_MEMORIES = 6
 const val MAX_RETRIEVED_SESSION_SUMMARIES = 3
 
@@ -195,6 +465,19 @@ fun structuredProfileFromMemories(name: String, memories: List<UserMemory>): Str
 
     return StructuredUserProfile(name.trim(), facts(peopleCategories), facts(preferenceCategories))
 }
+
+fun coreUserProfileMemories(profile: StructuredUserProfile): List<UserMemory> =
+    (profile.people.takeLast(MAX_CORE_PROFILE_FACTS / 2).map { UserMemory("people", it) } +
+        profile.preferences.takeLast(MAX_CORE_PROFILE_FACTS / 2).map { UserMemory("preferences", it) })
+        .filter { it.fact.isNotBlank() }
+        .distinctBy { it.fact.trim().lowercase() }
+        .take(MAX_CORE_PROFILE_FACTS)
+
+fun coreUserProfileContext(profile: StructuredUserProfile): String =
+    boundedPromptContext(
+        coreUserProfileMemories(profile).map { "- [${it.category}] ${it.fact}" },
+        MAX_CORE_PROFILE_CONTEXT_CHARACTERS
+    )
 
 fun retrieveRelevantUserMemories(
     query: String,
@@ -236,6 +519,29 @@ fun retrieveRelevantSessionSummaries(
         .sortedWith(compareByDescending<Triple<Int, Int, SessionSummary>> { it.second }.thenByDescending { it.first })
         .take(limit)
         .map { it.third }
+}
+
+internal fun boundedPromptContext(items: List<String>, maxCharacters: Int, separator: String = "\n"): String {
+    require(maxCharacters >= 0) { "Prompt context budget cannot be negative." }
+    val result = StringBuilder()
+    items.filter { it.isNotBlank() }.forEach { item ->
+        if (result.length >= maxCharacters) return result.toString()
+        val delimiter = if (result.isEmpty()) "" else separator
+        val available = maxCharacters - result.length - delimiter.length
+        if (available <= 0) return result.toString()
+        result.append(delimiter)
+        if (item.length <= available) {
+            result.append(item)
+        } else {
+            if (available > 3) {
+                result.append(item.take(available - 3)).append("...")
+            } else {
+                result.append(item.take(available))
+            }
+            return result.toString()
+        }
+    }
+    return result.toString()
 }
 
 private val MEMORY_SEARCH_STOP_WORDS = setOf(
@@ -404,6 +710,16 @@ data class RelationshipScores(val friendship: Int, val love: Int)
 
 data class RelationshipUpdate(val friendId: String, val friendshipScore: Int, val loveScore: Int)
 
+internal const val DAILY_FRIENDSHIP_GAIN_CAP = 15
+
+internal fun cappedDailyFriendshipImpact(friendshipImpact: Int, pointsGainedToday: Int): Int {
+    val impact = friendshipImpact.coerceIn(-1, 2)
+    if (impact <= 0) return impact
+    val remaining = (DAILY_FRIENDSHIP_GAIN_CAP - pointsGainedToday.coerceIn(0, DAILY_FRIENDSHIP_GAIN_CAP))
+        .coerceAtLeast(0)
+    return impact.coerceAtMost(remaining)
+}
+
 /** Applies one reply's clamped delta (−1..2) to the scores currently stored for the friend. */
 fun applyRelationshipDelta(friendshipScore: Int, loveScore: Int, friendshipImpact: Int, loveImpact: Int): RelationshipScores {
     val friendship = (friendshipScore + friendshipImpact.coerceIn(-1, 2)).coerceIn(0, 100)
@@ -419,6 +735,22 @@ fun applyRegeneratedReply(
 ): RelationshipScores = current
 
 fun friendshipLevel(score: Int): String = friendshipLevel(score, AppLanguage.ENGLISH)
+
+fun friendshipStageIndex(score: Int): Int = when (score.coerceIn(0, 100)) {
+    in 0..10 -> 0
+    in 11..20 -> 1
+    in 21..30 -> 2
+    in 31..40 -> 3
+    in 41..50 -> 4
+    in 51..60 -> 5
+    in 61..70 -> 6
+    in 71..80 -> 7
+    in 81..90 -> 8
+    else -> 9
+}
+
+fun friendshipStageScore(stageIndex: Int): Int =
+    listOf(0, 11, 21, 31, 41, 51, 61, 71, 81, 91).getOrElse(stageIndex) { 0 }
 
 fun friendshipLevel(score: Int, language: AppLanguage): String = when (score.coerceIn(0, 100)) {
     in 0..10 -> when (language) { AppLanguage.ENGLISH -> "Complete stranger"; AppLanguage.BANGLA -> "সম্পূর্ণ অপরিচিত"; AppLanguage.HINDI -> "बिल्कुल अजनबी" }
@@ -447,10 +779,10 @@ fun loveLevel(score: Int): String = when (score.coerceIn(0, 100)) {
 }
 
 /**
- * Youngest self-reported age that may create an account.
- * Under 13 is refused (COPPA / Play Families). Ages 13–17 may use the app with romance locked.
+ * The app is for adults because real-person matchmaking is a core feature.
+ * Play Age Signals gates app access; this local age is only used for account setup.
  */
-const val MINIMUM_ACCOUNT_AGE = 13
+const val MINIMUM_ACCOUNT_AGE = 18
 
 /** Love meter and the romantic prompt ladder require both the user and the friend to be at least this age. */
 const val ROMANCE_MINIMUM_AGE = 18
@@ -465,9 +797,10 @@ fun accountAgeResult(age: String): AccountAgeResult {
     return AccountAgeResult.VALID
 }
 
-/** A friend may be under 18. The age still has to be a whole number from 1 to [MAX_PROFILE_AGE]. */
+/** New friend profiles must be adults; legacy underage profiles remain readable but cannot be messaged. */
 fun friendAgeResult(age: String): AccountAgeResult {
-    profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)
+    val years = profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)
+    if (years < MINIMUM_ACCOUNT_AGE) return AccountAgeResult.UNDER_MINIMUM
     return AccountAgeResult.VALID
 }
 
