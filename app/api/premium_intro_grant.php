@@ -79,6 +79,13 @@ if (preg_match('/\A[1-9][0-9]{0,3}\z/', $daysSetting) !== 1 || (int) $daysSettin
     dost_premium_intro_respond(503, array('error' => 'Premium intro grants are not configured'));
 }
 $days = (int) $daysSetting;
+$explorePlusEnabled = strtolower($setting('DOST_PLAN_EXPLORE_PLUS_ENABLED', 'plan_explore_plus_enabled'));
+if (!in_array($explorePlusEnabled, array('true', 'false'), true)) {
+    dost_premium_intro_respond(503, array('error' => 'Explore Plus is not configured'));
+}
+if ($explorePlusEnabled !== 'true') {
+    dost_premium_intro_respond(503, array('error' => 'Explore Plus is not enabled'));
+}
 $launchAtSetting = $setting('DOST_INTRO_PREMIUM_LAUNCH_AT', 'intro_premium_launch_at');
 $launchAt = null;
 if ($launchAtSetting !== '') {
