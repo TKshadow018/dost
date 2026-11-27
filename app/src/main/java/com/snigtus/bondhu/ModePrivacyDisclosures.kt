@@ -18,7 +18,7 @@ internal object ModePrivacyDisclosures {
         ModePrivacyDisclosure(
             PrivacyMode.EXPLORE,
             "Explore",
-            "AI characters are not real people. AI chats send your prompts, earlier turns, selected friend details, relevant saved memories, and optional attached images to Dost's API, OpenRouter, and the selected model provider. Dost's active archive is kept for up to 1,095 days; delete it in Settings. Provider retention is separate. People profiles, messages, and age-eligibility checks use Firebase. Teen restrictions apply only after the planned 13+ release; this build requires users to be 18 or older. Explore Plus is only for adults with server-verified 18+ eligibility."
+            "AI characters are not real people. AI chats send your prompts, earlier turns, selected friend details, relevant saved memories, and optional attached images to Dost's API, OpenRouter, and the selected model provider. Dost's active archive is kept for up to 1,095 days; delete it in Settings. Provider retention is separate. People profiles, messages, and age-eligibility checks use Firebase. Dost is for ages 13 and older. Teens can use teen-safe AI, but not stranger discovery or Explore Plus; both require server-verified 18+ eligibility."
         ),
         ModePrivacyDisclosure(
             PrivacyMode.SHIELD,

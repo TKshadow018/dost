@@ -207,6 +207,9 @@ For Google Play distribution, configure Play App Signing and follow Play Console
 - [ ] Update the Play IARC questionnaire and target audience to 13–15, 16–17, and 18+ (not under 13; not Designed for Families); switch **Restrict Minor Access** off for the whole app.
 - [ ] Publish the Child Safety Standards / CSAE page, add its Play Console link, and provide the designated child-safety contact and CSAM reporting process.
 - [ ] Ask counsel to decide regional signup restrictions or parental-consent handling under GDPR Article 8 (13–16 depending on country, including 16 in Germany and the Netherlands), the UK Age Appropriate Design Code, and Japan's APPI rules for minors.
+- [ ] Keep owner/counsel implementation decisions out of the public policy. Publish the privacy policy only after confirming its audience and data-practice statements match the shipped age controls and mode availability.
+- [ ] Before enabling Shield, confirm privacy, customer terms, DPA, Data safety, retention/deletion operations, and any export or customer-hosted migration commitments.
+- [ ] Before enabling Cipher, verify the end-to-end encryption design and confirm metadata categories, providers, retention, and deletion are described accurately.
 - [ ] Ask counsel to review local laws for AI companion services and minors, including AI disclosure and self-harm-response requirements.
 - [ ] Complete an encryption export classification review for US EAR mass-market treatment and Japan FEFTA before release; obtain owner/counsel approval and retain the determination.
 - [ ] Review store listing text, screenshots, and marketing: do not say “military grade,” “unbreakable,” or “spy”; do not describe Shield as end-to-end encrypted.

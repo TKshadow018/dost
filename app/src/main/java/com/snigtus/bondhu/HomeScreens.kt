@@ -1767,7 +1767,7 @@ internal fun SettingsScreen(
             item {
                 SettingsSection("Privacy") {
                     Text(
-                        "The disclosures describe the planned 13+ release. This build still requires users to be 18 or older; do not publish the policy until the updated age controls ship.",
+                        "Dost is for ages 13 and older. Teens can use teen-safe AI, but not stranger discovery or Explore Plus; both require server-verified 18+ eligibility.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedButton(onClick = onOpenPrivacy, modifier = Modifier.fillMaxWidth()) {
@@ -1920,7 +1920,7 @@ internal fun PrivacyScreen(onBack: () -> Unit, onOpenPrivacyPolicy: () -> Unit) 
             item {
                 SettingsSection("Age and audience") {
                     Text(
-                        "For the planned 13+ release, under-13 users cannot create an account. Teens aged 13–17 will have private-by-default settings, no stranger discovery, and teen-safe AI. Explore Plus is 18+ and requires server-verified eligibility. This build still requires users to be 18 or older; publish these disclosures only after the updated age controls ship."
+                        "Under-13 users cannot create an account. Teens aged 13–17 have private-by-default settings and can use teen-safe AI, but not stranger discovery or Explore Plus. Stranger discovery and Explore Plus require server-verified 18+ eligibility."
                     )
                 }
             }
