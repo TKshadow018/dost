@@ -189,7 +189,10 @@ function dost_premium_claims(
                 ? (int) $existing['dostExplorePlusUntil']
                 : (isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
                     ? (int) $existing['dostPremiumUntil'] : 0);
-            $lifetime = !empty($existing['dostExplorePlusLifetime']) || $newLifetime;
+            $existingLifetime = array_key_exists('dostExplorePlusLifetime', $existing)
+                ? $existing['dostExplorePlusLifetime'] === true
+                : !empty($existing['dostPremiumLifetime']);
+            $lifetime = $existingLifetime || $newLifetime;
             $existing['dostExplorePlusLifetime'] = $lifetime;
             $existing['dostExplorePlusUntil'] = $lifetime ? 0 : max($oldExpiry, $newExpiry);
             $existing['dostPremiumLifetime'] = $lifetime;
@@ -468,8 +471,10 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
         ? (int) $existing['dostExplorePlusUntil']
         : (isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
             ? (int) $existing['dostPremiumUntil'] : 0);
-    $hasBetterEntitlement = !empty($existing['dostExplorePlusLifetime'])
-        || !empty($existing['dostPremiumLifetime']) || $existingExpiry > $introExpiry;
+    $hasLifetime = array_key_exists('dostExplorePlusLifetime', $existing)
+        ? $existing['dostExplorePlusLifetime'] === true
+        : !empty($existing['dostPremiumLifetime']);
+    $hasBetterEntitlement = $hasLifetime || $existingExpiry > $introExpiry;
     if (!$hasBetterEntitlement) {
         $existing['dostExplorePlusLifetime'] = false;
         $existing['dostExplorePlusUntil'] = $introExpiry;
@@ -479,13 +484,41 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
     }
     $existing['dostPremiumIntroGranted'] = true;
     $existing['dostPremiumIntroGrantedAt'] = $now;
+    $lifetime = array_key_exists('dostExplorePlusLifetime', $existing)
+        ? $existing['dostExplorePlusLifetime'] === true
+        : !empty($existing['dostPremiumLifetime']);
+    $until = $lifetime ? 0 : max($existingExpiry, $hasBetterEntitlement ? 0 : $introExpiry);
+    $existing['dostPremiumLifetime'] = $lifetime;
+    $existing['dostPremiumUntil'] = $until;
+    $existing['dostExplorePlusLifetime'] = $lifetime;
+    $existing['dostExplorePlusUntil'] = $until;
     return $existing;
+}
+
+function dost_explore_plus_claim_active($claims, $now)
+{
+    if (!is_array($claims) || !is_int($now)) {
+        return false;
+    }
+    $hasLifetimeClaim = array_key_exists('dostExplorePlusLifetime', $claims)
+        ? $claims['dostExplorePlusLifetime'] === true
+        : (!empty($claims['dostPremiumLifetime']));
+    if ($hasLifetimeClaim) {
+        return true;
+    }
+    $expiresAt = isset($claims['dostExplorePlusUntil']) && is_numeric($claims['dostExplorePlusUntil'])
+        ? (int) $claims['dostExplorePlusUntil']
+        : (isset($claims['dostPremiumUntil']) && is_numeric($claims['dostPremiumUntil'])
+            ? (int) $claims['dostPremiumUntil'] : 0);
+    return $expiresAt > $now;
 }
 
 function dost_premium_intro_response($claims, $now)
 {
     $lifetime = is_array($claims)
-        && (!empty($claims['dostExplorePlusLifetime']) || !empty($claims['dostPremiumLifetime']));
+        && (array_key_exists('dostExplorePlusLifetime', $claims)
+            ? $claims['dostExplorePlusLifetime'] === true
+            : !empty($claims['dostPremiumLifetime']));
     $until = is_array($claims) && isset($claims['dostExplorePlusUntil']) && is_numeric($claims['dostExplorePlusUntil'])
         ? (int) $claims['dostExplorePlusUntil']
         : (is_array($claims) && isset($claims['dostPremiumUntil']) && is_numeric($claims['dostPremiumUntil'])
@@ -493,8 +526,10 @@ function dost_premium_intro_response($claims, $now)
     $source = is_array($claims) && isset($claims['dostPremiumSource']) && is_string($claims['dostPremiumSource'])
         ? $claims['dostPremiumSource']
         : (is_array($claims) && !empty($claims['dostPremiumProductId']) ? 'play' : null);
+    $active = $lifetime || ($until !== null && $until > $now);
     return array(
-        'premium' => $lifetime || ($until !== null && $until > $now),
+        'premium' => $active,
+        'explore_plus' => $active,
         'source' => $source,
         'lifetime' => $lifetime,
         'premium_until' => $until,

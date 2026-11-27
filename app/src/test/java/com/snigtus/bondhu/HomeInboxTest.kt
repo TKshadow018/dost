@@ -17,6 +17,13 @@ class HomeInboxTest {
     }
 
     @Test
+    fun circleInboxRemainsAvailableWhenExploreIsOff() {
+        assertEquals(false, shouldShowExploreDisabledState(exploreEnabled = false, circleOnly = true))
+        assertEquals(true, shouldShowExploreDisabledState(exploreEnabled = false, circleOnly = false))
+        assertEquals(false, shouldShowExploreDisabledState(exploreEnabled = true, circleOnly = false))
+    }
+
+    @Test
     fun circleInboxPreservesArchivedFilter() {
         assertEquals(HomeInboxFilter.PEOPLE, circleInboxFilter(HomeInboxFilter.ALL))
         assertEquals(HomeInboxFilter.ARCHIVED, circleInboxFilter(HomeInboxFilter.ARCHIVED))

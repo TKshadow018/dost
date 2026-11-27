@@ -4,6 +4,7 @@ require_once __DIR__ . '/app_credential.php';
 require_once __DIR__ . '/archive_store.php';
 require_once __DIR__ . '/age_eligibility_support.php';
 require_once __DIR__ . '/romance_safety.php';
+require_once __DIR__ . '/explore_support.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -113,83 +114,6 @@ function enforce_rate_limit($bucket, $maximum)
     }
 }
 
-function dost_ai_verified_age_cohort($config)
-{
-    $authorization = isset($_SERVER['HTTP_AUTHORIZATION']) && is_string($_SERVER['HTTP_AUTHORIZATION'])
-        ? trim($_SERVER['HTTP_AUTHORIZATION'])
-        : (isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION']) && is_string($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])
-            ? trim($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])
-            : '');
-    if (preg_match('/\ABearer\s+(\S+)\z/i', $authorization, $matches) !== 1 || strlen($matches[1]) > 8192) {
-        return 'unknown';
-    }
-    $setting = function ($environmentKey, $configKey) use ($config) {
-        $value = getenv($environmentKey);
-        if (is_string($value) && trim($value) !== '') {
-            return trim($value);
-        }
-        return isset($config[$configKey]) && is_string($config[$configKey]) ? trim($config[$configKey]) : '';
-    };
-    $apiKey = $setting('DOST_FIREBASE_WEB_API_KEY', 'firebase_web_api_key');
-    $projectId = $setting('DOST_FIREBASE_PROJECT_ID', 'firebase_project_id');
-    $serviceAccountPath = $setting('DOST_FIREBASE_SERVICE_ACCOUNT_PATH', 'firebase_service_account_path');
-    if ($apiKey === '' || $projectId === '' || $serviceAccountPath === '' || !is_file($serviceAccountPath)
-        || !is_readable($serviceAccountPath)
-    ) {
-        return 'unknown';
-    }
-    $resolvedPath = realpath($serviceAccountPath);
-    $documentRoot = isset($_SERVER['DOCUMENT_ROOT']) && is_string($_SERVER['DOCUMENT_ROOT'])
-        ? realpath($_SERVER['DOCUMENT_ROOT'])
-        : false;
-    if (!is_string($resolvedPath)
-        || ($documentRoot !== false
-            && ($resolvedPath === $documentRoot
-                || strpos($resolvedPath, rtrim($documentRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR) === 0))
-    ) {
-        return 'unknown';
-    }
-    $credentialContents = file_get_contents($resolvedPath);
-    $credentials = is_string($credentialContents) ? json_decode($credentialContents, true) : null;
-    if (!is_array($credentials)
-        || !isset($credentials['project_id'], $credentials['client_email'], $credentials['private_key'])
-        || $credentials['project_id'] !== $projectId
-    ) {
-        return 'unknown';
-    }
-    $identity = dost_age_http_json(
-        'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' . rawurlencode($apiKey),
-        array(),
-        array('idToken' => $matches[1])
-    );
-    if ($identity === false || $identity['status'] !== 200
-        || !isset($identity['body']['users'][0]['localId'])
-        || !is_string($identity['body']['users'][0]['localId'])
-    ) {
-        return 'unknown';
-    }
-    $serviceToken = dost_age_service_account_token($credentials);
-    if (!is_string($serviceToken)) {
-        return 'unknown';
-    }
-    $adminLookup = dost_age_http_json(
-        'https://identitytoolkit.googleapis.com/v1/projects/' . rawurlencode($projectId) . '/accounts:lookup',
-        array('Authorization: Bearer ' . $serviceToken),
-        array('localId' => array($identity['body']['users'][0]['localId']))
-    );
-    if ($adminLookup === false || $adminLookup['status'] !== 200
-        || !isset($adminLookup['body']['users'][0]['customAttributes'])
-        || !is_string($adminLookup['body']['users'][0]['customAttributes'])
-    ) {
-        return 'unknown';
-    }
-    $claims = json_decode($adminLookup['body']['users'][0]['customAttributes'], true);
-    if (!is_array($claims)) {
-        return 'unknown';
-    }
-    return dost_ai_age_cohort_from_claims($claims, (int) gmdate('n'), (int) gmdate('Y'));
-}
-
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Allow: POST');
     respond(405, array('error' => 'POST requests only'));
@@ -238,6 +162,9 @@ if ($operation === 'log_message') {
     );
     if ($credentialDecision !== null) {
         respond($credentialDecision['status'], array('error' => $credentialDecision['error']));
+    }
+    if (!dost_explore_enabled($config)) {
+        respond(503, array('error' => 'Explore is not enabled'));
     }
     $userName = isset($request['user_name']) && is_string($request['user_name']) ? $request['user_name'] : '';
     $friendName = isset($request['friend_name']) && is_string($request['friend_name']) ? $request['friend_name'] : '';
@@ -295,6 +222,23 @@ if ($serverKeyDecision !== null) {
     }
     respond($serverKeyDecision['status'], array('error' => $serverKeyDecision['error']));
 }
+$authorizationHeader = dost_explore_authorization_header($_SERVER);
+$exploreAuthorization = null;
+if (in_array($operation, array('profile_generation', 'chat_reply', 'session_summary'), true)) {
+    $exploreAuthorization = dost_explore_authorize($authorizationHeader, $config, time());
+    if ($exploreAuthorization['status'] !== 200) {
+        respond($exploreAuthorization['status'], array('error' => $exploreAuthorization['error']));
+    }
+}
+if (!dost_explore_enabled($config)) {
+    respond(503, array('error' => 'Explore is not enabled'));
+}
+if (!is_array($exploreAuthorization) && trim($authorizationHeader) !== '') {
+    $exploreAuthorization = dost_explore_authorize($authorizationHeader, $config, time());
+    if ($exploreAuthorization['status'] !== 200) {
+        respond($exploreAuthorization['status'], array('error' => $exploreAuthorization['error']));
+    }
+}
 $apiKey = $usesClientKey ? $clientApiKey : $serverApiKey;
 if (!is_string($apiKey) || trim($apiKey) === '') {
     write_ai_error_log('missing_api_key', array('model' => bounded_log_text($request['model'] ?? '')));
@@ -333,7 +277,67 @@ foreach ($messages as $message) {
     }
 }
 
-$ageCohort = dost_ai_verified_age_cohort($config);
+$ageCohort = dost_ai_age_cohort_from_claims(
+    is_array($exploreAuthorization) ? $exploreAuthorization['claims'] : array(),
+    (int) gmdate('n'),
+    (int) gmdate('Y')
+);
+if ($operation === 'profile_generation') {
+    $installationId = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) && is_string($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+        ? trim($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+        : '';
+    $friendId = isset($_SERVER['HTTP_X_DOST_FRIEND_ID']) && is_string($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        ? trim($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        : '';
+    if (!valid_uuid($installationId) || !valid_uuid($friendId)) {
+        respond(400, array('error' => 'A valid custom friend ID is required'));
+    }
+    $storageDirectory = dost_explore_storage_directory($config);
+    if ($storageDirectory === false) {
+        respond(503, array('error' => 'Explore friend storage is unavailable'));
+    }
+    $registration = dost_explore_registry_change(
+        $storageDirectory,
+        $exploreAuthorization['uid'],
+        $friendId,
+        'custom',
+        'add',
+        dost_explore_plus_active($exploreAuthorization['claims'], time())
+    );
+    if ($registration['status'] !== 200) {
+        respond($registration['status'], array('error' => $registration['error']));
+    }
+} elseif (in_array($operation, array('chat_reply', 'session_summary'), true)) {
+    $friendId = isset($_SERVER['HTTP_X_DOST_FRIEND_ID']) && is_string($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        ? trim($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        : '';
+    $friendKind = isset($request['friend_kind']) && is_string($request['friend_kind'])
+        ? $request['friend_kind']
+        : '';
+    if ($friendKind === 'catalog') {
+        $catalogId = isset($request['catalog_id']) && is_string($request['catalog_id'])
+            ? trim($request['catalog_id'])
+            : '';
+        $registeredFriendId = preg_match('/\A[A-Za-z0-9][A-Za-z0-9_-]{0,79}\z/', $catalogId) === 1
+            ? $catalogId
+            : '';
+    } elseif ($friendKind === 'custom' && valid_uuid($friendId)) {
+        $registeredFriendId = $friendId;
+    } else {
+        $registeredFriendId = '';
+    }
+    $storageDirectory = dost_explore_storage_directory($config);
+    if ($registeredFriendId === '' || $storageDirectory === false
+        || !dost_explore_registry_contains(
+            $storageDirectory,
+            $exploreAuthorization['uid'],
+            $registeredFriendId,
+            $friendKind
+        )
+    ) {
+        respond(403, array('error' => 'The AI friend is not registered for this account'));
+    }
+}
 $romanceAllowed = $ageCohort === 'adult' && (
     $operation === 'profile_generation'
         ? true
