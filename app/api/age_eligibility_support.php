@@ -18,10 +18,59 @@ function dost_age_request_hash($uid, $eligible, $nonce)
     return dost_age_base64url(hash('sha256', $payload, true));
 }
 
-function dost_age_integrity_allows($payload, $uid, $eligible, $nonce, $now)
+function dost_age_test_mode_enabled($environmentValue, $configValue)
+{
+    if ($environmentValue !== false) {
+        return $environmentValue === 'true';
+    }
+
+    return $configValue === true || $configValue === 'true';
+}
+
+function dost_age_test_uids($environmentValue, $configValue)
+{
+    if ($environmentValue !== false) {
+        $uids = explode(',', $environmentValue);
+    } elseif (is_array($configValue)) {
+        $uids = $configValue;
+    } else {
+        return array();
+    }
+
+    return array_values(array_filter(array_map(function ($uid) {
+        return is_string($uid) ? trim($uid) : '';
+    }, $uids), function ($uid) {
+        return $uid !== '';
+    }));
+}
+
+function dost_age_test_uid_is_allowlisted($uid, $testUids)
+{
+    if (!is_string($uid) || !is_array($testUids)) {
+        return false;
+    }
+
+    foreach ($testUids as $testUid) {
+        if (is_string($testUid) && hash_equals($testUid, $uid)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function dost_age_authenticated_uid_matches($requestUid, $authenticatedUid)
+{
+    return is_string($requestUid)
+        && $requestUid !== ''
+        && is_string($authenticatedUid)
+        && hash_equals($requestUid, $authenticatedUid);
+}
+
+function dost_age_integrity_failure_field($payload, $uid, $eligible, $nonce, $now, $allowTestAppVerdicts = false)
 {
     if (!is_array($payload) || !isset($payload['tokenPayloadExternal']) || !is_array($payload['tokenPayloadExternal'])) {
-        return false;
+        return 'payload';
     }
     $external = $payload['tokenPayloadExternal'];
     $request = isset($external['requestDetails']) && is_array($external['requestDetails'])
@@ -45,19 +94,77 @@ function dost_age_integrity_allows($payload, $uid, $eligible, $nonce, $now)
         : 0;
     $expectedHash = dost_age_request_hash($uid, $eligible, $nonce);
 
-    return $expectedHash !== ''
-        && isset($request['requestPackageName'])
-        && $request['requestPackageName'] === 'com.snigtus.dost'
-        && isset($request['requestHash'])
-        && is_string($request['requestHash'])
-        && hash_equals($expectedHash, $request['requestHash'])
-        && $timestamp > 0
-        && abs(($now * 1000) - $timestamp) <= 300000
-        && isset($app['appRecognitionVerdict'])
-        && $app['appRecognitionVerdict'] === 'PLAY_RECOGNIZED'
-        && isset($account['appLicensingVerdict'])
-        && $account['appLicensingVerdict'] === 'LICENSED'
-        && in_array('MEETS_DEVICE_INTEGRITY', $deviceVerdicts, true);
+    if (!isset($request['requestPackageName']) || $request['requestPackageName'] !== 'com.snigtus.dost') {
+        return 'package';
+    }
+    if ($expectedHash === '' || !isset($request['requestHash'])
+        || !is_string($request['requestHash'])
+        || !hash_equals($expectedHash, $request['requestHash'])
+    ) {
+        return 'hash';
+    }
+    if ($timestamp <= 0 || abs(($now * 1000) - $timestamp) > 300000) {
+        return 'timestamp';
+    }
+    if (!isset($app['appRecognitionVerdict'])
+        || ($app['appRecognitionVerdict'] !== 'PLAY_RECOGNIZED'
+            && !($allowTestAppVerdicts && $app['appRecognitionVerdict'] === 'UNRECOGNIZED_VERSION'))
+    ) {
+        return 'app_recognition';
+    }
+    if (!isset($account['appLicensingVerdict'])
+        || ($account['appLicensingVerdict'] !== 'LICENSED'
+            && !($allowTestAppVerdicts && $account['appLicensingVerdict'] === 'UNLICENSED'))
+    ) {
+        return 'licensing';
+    }
+    if (!in_array('MEETS_DEVICE_INTEGRITY', $deviceVerdicts, true)) {
+        return 'device';
+    }
+
+    return '';
+}
+
+function dost_age_integrity_allows($payload, $uid, $eligible, $nonce, $now, $allowTestAppVerdicts = false, &$failureField = null)
+{
+    $failureField = dost_age_integrity_failure_field(
+        $payload,
+        $uid,
+        $eligible,
+        $nonce,
+        $now,
+        $allowTestAppVerdicts
+    );
+
+    return $failureField === '';
+}
+
+function dost_age_integrity_reason_code($failureField, $payload)
+{
+    if ($failureField === 'app_recognition'
+        && isset($payload['tokenPayloadExternal']['appIntegrity']['appRecognitionVerdict'])
+        && $payload['tokenPayloadExternal']['appIntegrity']['appRecognitionVerdict'] === 'UNRECOGNIZED_VERSION'
+    ) {
+        return 'integrity_unrecognized_app';
+    }
+    if ($failureField === 'licensing'
+        && isset($payload['tokenPayloadExternal']['accountDetails']['appLicensingVerdict'])
+        && $payload['tokenPayloadExternal']['accountDetails']['appLicensingVerdict'] === 'UNLICENSED'
+    ) {
+        return 'integrity_unlicensed_app';
+    }
+
+    $reasonCodes = array(
+        'payload' => 'integrity_payload',
+        'package' => 'integrity_package',
+        'hash' => 'integrity_request_hash',
+        'timestamp' => 'integrity_timestamp',
+        'app_recognition' => 'integrity_app_recognition',
+        'licensing' => 'integrity_app_licensing',
+        'device' => 'integrity_device'
+    );
+
+    return isset($reasonCodes[$failureField]) ? $reasonCodes[$failureField] : 'integrity_verification';
 }
 
 function dost_age_custom_attributes($eligible, $now, $ttlSeconds)

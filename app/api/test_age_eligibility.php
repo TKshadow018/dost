@@ -33,6 +33,37 @@ dost_age_test_assert(
     dost_age_request_hash($uid, true, 'not-a-nonce') === '',
     'Malformed request nonce must be rejected.'
 );
+dost_age_test_assert(
+    !dost_age_test_mode_enabled(false, false)
+    && !dost_age_test_mode_enabled('TRUE', false)
+    && !dost_age_test_mode_enabled('1', true),
+    'Test mode must remain off unless its configured value is exactly true.'
+);
+dost_age_test_assert(
+    dost_age_test_mode_enabled('true', false)
+    && dost_age_test_mode_enabled(false, true),
+    'Test mode must accept the exact environment or server-config true value.'
+);
+dost_age_test_assert(
+    dost_age_test_uids('', array()) === array()
+    && !dost_age_test_uid_is_allowlisted($uid, dost_age_test_uids('', array())),
+    'An empty test UID list must not allow anyone.'
+);
+dost_age_test_assert(
+    dost_age_test_uid_is_allowlisted($uid, dost_age_test_uids(false, array($uid)))
+    && !dost_age_test_uid_is_allowlisted($uid, dost_age_test_uids(false, array($uid . '-other'))),
+    'Allowlist matching must use exact Firebase UIDs.'
+);
+dost_age_test_assert(
+    dost_age_test_uid_is_allowlisted($uid, dost_age_test_uids($uid . ', another-user', array()))
+    && !dost_age_test_uid_is_allowlisted($uid . '-other', array($uid)),
+    'Environment allowlists must parse comma-separated UIDs without partial matches.'
+);
+dost_age_test_assert(
+    dost_age_authenticated_uid_matches($uid, $uid)
+    && !dost_age_authenticated_uid_matches($uid, 'different-user'),
+    'A request UID must match the authenticated Firebase UID.'
+);
 
 $integrityPayload = array(
     'tokenPayloadExternal' => array(
@@ -50,6 +81,91 @@ $integrityPayload = array(
 dost_age_test_assert(
     dost_age_integrity_allows($integrityPayload, $uid, true, $nonce, $now),
     'A fresh, licensed, recognized app/device with the matching hash should pass.'
+);
+
+$unrecognizedApp = $integrityPayload;
+$unrecognizedApp['tokenPayloadExternal']['appIntegrity']['appRecognitionVerdict'] = 'UNRECOGNIZED_VERSION';
+$unlicensedApp = $integrityPayload;
+$unlicensedApp['tokenPayloadExternal']['accountDetails']['appLicensingVerdict'] = 'UNLICENSED';
+$testVerdictPayload = $unrecognizedApp;
+$testVerdictPayload['tokenPayloadExternal']['accountDetails']['appLicensingVerdict'] = 'UNLICENSED';
+$testerAllowed = dost_age_test_mode_enabled('true', false)
+    && dost_age_test_uid_is_allowlisted($uid, array($uid));
+dost_age_test_assert(
+    !dost_age_integrity_allows($testVerdictPayload, 'different-user', true, $nonce, $now, $testerAllowed),
+    'A mismatched authenticated UID must not use the tester path.'
+);
+dost_age_test_assert(
+    !dost_age_integrity_allows($unrecognizedApp, $uid, true, $nonce, $now)
+    && !dost_age_integrity_allows($unlicensedApp, $uid, true, $nonce, $now),
+    'UNRECOGNIZED_VERSION and UNLICENSED must fail when test mode is off.'
+);
+dost_age_test_assert(
+    !dost_age_integrity_allows(
+        $unrecognizedApp,
+        $uid,
+        true,
+        $nonce,
+        $now,
+        dost_age_test_mode_enabled('true', false)
+            && dost_age_test_uid_is_allowlisted($uid, array())
+    )
+    && !dost_age_integrity_allows(
+        $unlicensedApp,
+        $uid,
+        true,
+        $nonce,
+        $now,
+        dost_age_test_mode_enabled('true', false)
+            && dost_age_test_uid_is_allowlisted($uid, array())
+    ),
+    'An empty allowlist must not relax app recognition or licensing.'
+);
+dost_age_test_assert(
+    dost_age_integrity_allows($unrecognizedApp, $uid, true, $nonce, $now, $testerAllowed)
+    && dost_age_integrity_allows($unlicensedApp, $uid, true, $nonce, $now, $testerAllowed),
+    'Allowlisted testers may pass UNRECOGNIZED_VERSION and UNLICENSED verdicts.'
+);
+dost_age_test_assert(
+    !dost_age_integrity_allows(
+        $testVerdictPayload,
+        $uid,
+        true,
+        $nonce,
+        $now,
+        dost_age_test_mode_enabled('true', false)
+            && dost_age_test_uid_is_allowlisted($uid, array('different-user'))
+    ),
+    'A UID outside the allowlist must still fail with test mode enabled.'
+);
+
+$integrityFailure = '';
+$unknownAppVerdict = $testVerdictPayload;
+$unknownAppVerdict['tokenPayloadExternal']['appIntegrity']['appRecognitionVerdict'] = 'UNEVALUATED';
+$unknownLicensingVerdict = $integrityPayload;
+$unknownLicensingVerdict['tokenPayloadExternal']['accountDetails']['appLicensingVerdict'] = 'UNEVALUATED';
+dost_age_test_assert(
+    !dost_age_integrity_allows($unknownAppVerdict, $uid, true, $nonce, $now, $testerAllowed, $integrityFailure)
+    && $integrityFailure === 'app_recognition',
+    'Test mode must relax only UNRECOGNIZED_VERSION, not other app verdicts.'
+);
+dost_age_test_assert(
+    !dost_age_integrity_allows(
+        $unknownLicensingVerdict,
+        $uid,
+        true,
+        $nonce,
+        $now,
+        $testerAllowed,
+        $integrityFailure
+    ) && $integrityFailure === 'licensing',
+    'Test mode must relax only UNLICENSED, not other licensing verdicts.'
+);
+dost_age_test_assert(
+    dost_age_integrity_reason_code('app_recognition', $testVerdictPayload) === 'integrity_unrecognized_app'
+    && dost_age_integrity_reason_code('licensing', $testVerdictPayload) === 'integrity_unlicensed_app'
+    && dost_age_integrity_reason_code('device', $integrityPayload) === 'integrity_device',
+    'Tester reason codes must be stable, non-sensitive, and tied to the failed check.'
 );
 dost_age_test_assert(
     !dost_age_integrity_allows($integrityPayload, 'different-user', true, $nonce, $now),
@@ -70,12 +186,30 @@ dost_age_test_assert(
     !dost_age_integrity_allows($wrongPackage, $uid, true, $nonce, $now),
     'Unrecognized package must fail verification.'
 );
+dost_age_test_assert(
+    !dost_age_integrity_allows($wrongPackage, $uid, true, $nonce, $now, true, $integrityFailure)
+    && $integrityFailure === 'package',
+    'The package check must remain mandatory in test mode and identify its failure field.'
+);
+
+$wrongHash = $testVerdictPayload;
+$wrongHash['tokenPayloadExternal']['requestDetails']['requestHash'] = 'not-the-request-hash';
+dost_age_test_assert(
+    !dost_age_integrity_allows($wrongHash, $uid, true, $nonce, $now, true, $integrityFailure)
+    && $integrityFailure === 'hash',
+    'The request hash check must remain mandatory in test mode and identify its failure field.'
+);
 
 $expiredToken = $integrityPayload;
 $expiredToken['tokenPayloadExternal']['requestDetails']['timestampMillis'] = (string) (($now - 301) * 1000);
 dost_age_test_assert(
     !dost_age_integrity_allows($expiredToken, $uid, true, $nonce, $now),
     'Integrity token outside the accepted five-minute window must fail.'
+);
+dost_age_test_assert(
+    !dost_age_integrity_allows($expiredToken, $uid, true, $nonce, $now, true, $integrityFailure)
+    && $integrityFailure === 'timestamp',
+    'The fresh timestamp check must remain mandatory in test mode and identify its failure field.'
 );
 
 $unlicensed = $integrityPayload;
@@ -90,6 +224,11 @@ $unrecognizedDevice['tokenPayloadExternal']['deviceIntegrity']['deviceRecognitio
 dost_age_test_assert(
     !dost_age_integrity_allows($unrecognizedDevice, $uid, true, $nonce, $now),
     'Device without the required integrity verdict must fail verification.'
+);
+dost_age_test_assert(
+    !dost_age_integrity_allows($unrecognizedDevice, $uid, true, $nonce, $now, true, $integrityFailure)
+    && $integrityFailure === 'device',
+    'Device integrity must remain mandatory in test mode and identify its failure field.'
 );
 
 $attributes = json_decode(dost_age_custom_attributes(true, $now, 21600), true);

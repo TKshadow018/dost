@@ -19,5 +19,8 @@ return array(
     'premium_enabled' => 'false',
     'intro_premium_enabled' => 'true',
     'intro_premium_days' => '90',
-    'intro_premium_launch_at' => ''
+    'intro_premium_launch_at' => '',
+    // Optional debug-build People testing; keep disabled unless you explicitly add tester UIDs.
+    // 'age_eligibility_test_mode' => false,
+    // 'age_eligibility_test_uids' => array()
 );
