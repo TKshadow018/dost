@@ -7,10 +7,12 @@ import org.junit.Test
 class PromptMessageTest {
 
     @Test
-    fun errorBubblesAreLeftOutOfPromptHistory() {
+    fun noticesAreLeftOutOfPromptHistory() {
         val history = listOf(
             ChatMessage("user", "hi"),
             ChatMessage("assistant", "I couldn't read that reply.", category = ERROR_MESSAGE_CATEGORY),
+            ChatMessage("system", "A system notice"),
+            ChatMessage("assistant", "Another notice", category = "system"),
             ChatMessage("user", "try again")
         )
         val prompt = messagesForPrompt(history)

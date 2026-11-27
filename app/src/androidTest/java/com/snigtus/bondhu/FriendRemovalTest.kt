@@ -36,6 +36,27 @@ class FriendRemovalTest {
                 friendId,
                 listOf(ChatMessage(role = "user", content = "Photo", imagePath = chatPhoto.absolutePath))
             )
+            val store = DostStore(context)
+            val event = PlannedEvent(
+                id = UUID.randomUUID().toString(),
+                description = "Interview",
+                dueAtMillis = System.currentTimeMillis() + 60_000L,
+                confidence = "confirmed",
+                followUpRequested = true
+            )
+            val proactive = ProactiveMessage(
+                id = UUID.randomUUID().toString(),
+                friendId = friendId,
+                trigger = ProactiveTrigger.USER_REMINDER,
+                sessionId = UUID.randomUUID().toString(),
+                dueAtMillis = event.dueAtMillis,
+                reason = "user_requested_reminder",
+                idempotencyKey = event.id,
+                eventId = event.id
+            )
+            store.savePlannedEvent(friendId, event)
+            store.saveProactiveMessage(proactive)
+            store.pauseProactive(friendId, Long.MAX_VALUE)
             assertTrue(transcript.isFile)
             assertTrue(chatPhoto.isFile)
             assertTrue(profilePhoto.isFile)
@@ -47,6 +68,9 @@ class FriendRemovalTest {
             assertFalse(chatPhoto.exists())
             assertFalse(profilePhoto.exists())
             assertFalse(catalogPhoto.exists())
+            assertTrue(store.loadPlannedEvents(friendId).isEmpty())
+            assertTrue(store.proactiveMessage(proactive.id) == null)
+            assertFalse(store.isProactivePaused(friendId))
         } finally {
             DostStore(context).deleteFriendData(friend)
         }

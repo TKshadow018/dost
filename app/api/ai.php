@@ -134,8 +134,28 @@ if (!is_array($request) || json_last_error() !== JSON_ERROR_NONE) {
 
 $operation = isset($request['operation']) && is_string($request['operation']) ? $request['operation'] : 'completion';
 enforce_rate_limit($operation === 'log_message' ? 'logs' : 'ai', $operation === 'log_message' ? 120 : 30);
+$config = array();
+$configPath = __DIR__ . '/config.php';
+if (is_file($configPath)) {
+    $loadedConfig = require $configPath;
+    if (is_array($loadedConfig)) {
+        $config = $loadedConfig;
+    }
+}
 if ($operation === 'log_message') {
     $installationId = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) ? $_SERVER['HTTP_X_DOST_INSTALL_ID'] : '';
+    $credentialPresented = isset($_SERVER['HTTP_X_DOST_APP_CREDENTIAL']) && is_string($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+        ? trim($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
+        : '';
+    $credentialDecision = dost_required_app_credential_decision(
+        $credentialPresented,
+        $installationId,
+        time(),
+        $config
+    );
+    if ($credentialDecision !== null) {
+        respond($credentialDecision['status'], array('error' => $credentialDecision['error']));
+    }
     $userName = isset($request['user_name']) && is_string($request['user_name']) ? $request['user_name'] : '';
     $friendName = isset($request['friend_name']) && is_string($request['friend_name']) ? $request['friend_name'] : '';
     $clientIp = isset($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
@@ -165,14 +185,6 @@ if ($operation === 'log_message') {
     respond(200, array('saved' => true));
 }
 
-$config = array();
-$configPath = __DIR__ . '/config.php';
-if (is_file($configPath)) {
-    $loadedConfig = require $configPath;
-    if (is_array($loadedConfig)) {
-        $config = $loadedConfig;
-    }
-}
 $clientApiKey = isset($_SERVER['HTTP_X_OPENROUTER_KEY']) && is_string($_SERVER['HTTP_X_OPENROUTER_KEY'])
     ? trim($_SERVER['HTTP_X_OPENROUTER_KEY'])
     : '';
@@ -242,6 +254,11 @@ $romanceAllowed = dost_romance_allowed_by_age(
     isset($request['user_age']) ? $request['user_age'] : null,
     isset($request['friend_age']) ? $request['friend_age'] : null
 );
+$chatLanguage = isset($request['chat_language'])
+    && is_string($request['chat_language'])
+    && in_array($request['chat_language'], array('en', 'bn', 'hi'), true)
+    ? $request['chat_language']
+    : 'en';
 $safetyBlockedInput = $operation === 'chat_reply'
     && dost_conversation_requires_safety_block($messages, $romanceAllowed);
 
@@ -287,7 +304,10 @@ $temperature = isset($request['temperature']) && is_numeric($request['temperatur
     ? max(0, min(2, (float) $request['temperature']))
     : 0.7;
 $providerMessages = array();
-foreach ($messages as $message) {
+$messagesForProvider = $operation === 'chat_reply' && !$safetyBlockedInput
+    ? dost_filter_unsafe_conversation_history($messages, $romanceAllowed)
+    : $messages;
+foreach ($messagesForProvider as $message) {
     $providerMessage = array('role' => $message['role']);
     if (isset($message['image_data'])) {
         $mime = isset($message['image_mime']) ? $message['image_mime'] : '';
@@ -322,7 +342,7 @@ $upstreamBody = json_encode(array(
 if ($safetyBlockedInput) {
     $upstreamStatus = 200;
     $upstreamResponse = json_encode(array(
-        'choices' => array(array('message' => array('content' => dost_safety_fallback($romanceAllowed))))
+        'choices' => array(array('message' => array('content' => dost_safety_fallback($romanceAllowed, $chatLanguage))))
     ), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
     $requestDurationMs = 0;
 } else {
@@ -427,7 +447,7 @@ if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300)
         $safetyBlockedOutput = true;
     }
     if ($safetyBlockedOutput) {
-        $visibleContent = dost_safety_fallback($romanceAllowed);
+        $visibleContent = dost_safety_fallback($romanceAllowed, $chatLanguage);
         $decodedResponse['choices'][0]['message']['content'] = $visibleContent;
         $upstreamResponse = json_encode($decodedResponse, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         if (!is_string($upstreamResponse)) {
