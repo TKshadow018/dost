@@ -242,10 +242,25 @@ fun DostApp(
     var peopleInboxRefreshKey by remember { mutableIntStateOf(0) }
     val activeFirebaseUid = authRepository.currentAccount?.uid.orEmpty()
     var isPremium by remember(activeFirebaseUid) { mutableStateOf(false) }
+    var shieldEnabled by remember(activeFirebaseUid) { mutableStateOf(false) }
     var pendingModeDisclosure by remember { mutableStateOf<ModePrivacyDisclosure?>(null) }
     var pendingModeAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val disclosurePreferences = remember(context) {
         context.getSharedPreferences("dost_mode_disclosures", Context.MODE_PRIVATE)
+    }
+
+    LaunchedEffect(activeFirebaseUid, BuildConfig.DOST_SUPER_SECURE_ENABLED) {
+        shieldEnabled = if (BuildConfig.DOST_SUPER_SECURE_ENABLED && activeFirebaseUid.isNotBlank()) {
+            try {
+                SuperSecureRepository(context).isShieldEnabled()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     LaunchedEffect(activeFirebaseUid, store.birthMonth(), store.birthYear()) {
@@ -318,8 +333,9 @@ fun DostApp(
                 action()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                peopleEligibilityError = error.message?.take(160)
-                    ?: "The age-eligibility check failed."
+                val message = error.message?.take(160) ?: "The age-eligibility check failed."
+                peopleEligibilityError = message
+                settingsNotice = message
             } finally {
                 checkingPeopleEligibility = false
             }
@@ -338,13 +354,26 @@ fun DostApp(
     }
 
     fun openSuperSecure() {
-        if (!BuildConfig.DOST_SUPER_SECURE_ENABLED) return
+        if (!BuildConfig.DOST_SUPER_SECURE_ENABLED || !shieldEnabled) return
         withModeDisclosure(PrivacyMode.SHIELD) {
-            withAdultEligibility {
+            scope.launch {
+                try {
+                    authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    settingsNotice = error.message?.take(160) ?: "Shield eligibility could not be checked."
+                    return@launch
+                }
                 SuperSecureSession.active = true
                 screen = AppScreen.SUPER_SECURE
             }
         }
+    }
+
+    fun openShieldPlans() {
+        if (!BuildConfig.DOST_SUPER_SECURE_ENABLED || !shieldEnabled) return
+        withAdultEligibility { screen = AppScreen.PREMIUM }
     }
 
     fun openExplorePlus() {
@@ -1320,7 +1349,7 @@ fun DostApp(
                     language = language,
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
                     email = authRepository.currentAccount?.email.orEmpty(),
-                    superSecureEnabled = BuildConfig.DOST_SUPER_SECURE_ENABLED,
+                    superSecureEnabled = BuildConfig.DOST_SUPER_SECURE_ENABLED && shieldEnabled,
                     onOpenSuperSecure = ::openSuperSecure,
                     onOpenSettings = {
                         settingsReturnScreen = AppScreen.HOME
@@ -1351,6 +1380,7 @@ fun DostApp(
             quietHoursStartMinute = quietHoursStartMinute,
             quietHoursEndMinute = quietHoursEndMinute,
             settingsNotice = settingsNotice,
+            shieldEnabled = BuildConfig.DOST_SUPER_SECURE_ENABLED && shieldEnabled,
             onBack = { screen = settingsReturnScreen },
             onOpenPremium = ::openExplorePlus,
             onExploreEnabledChange = {
@@ -1373,6 +1403,8 @@ fun DostApp(
                 }
             },
             onExploreDisclosureAccepted = store::setExploreDisclosureAccepted,
+            onOpenShield = ::openSuperSecure,
+            onOpenShieldPlans = ::openShieldPlans,
             onDeleteFriend = ::removeFriendPermanently,
             onLanguageChange = {
                 language = it
@@ -1589,7 +1621,7 @@ fun DostApp(
             selectedPeopleConversation = null
             screen = AppScreen.HOME
         }
-        AppScreen.SUPER_SECURE -> if (BuildConfig.DOST_SUPER_SECURE_ENABLED && hasLocalAccountAccess()) {
+        AppScreen.SUPER_SECURE -> if (BuildConfig.DOST_SUPER_SECURE_ENABLED && shieldEnabled && hasLocalAccountAccess()) {
             SuperSecureScreen(
                 context = context,
                 language = language,

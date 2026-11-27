@@ -265,8 +265,14 @@ $attributes = json_decode(dost_age_custom_attributes(true, $now, 21600), true);
 dost_age_test_assert(
     is_array($attributes)
     && $attributes['dostAgeEligible'] === true
-    && $attributes['dostAgeEligibleUntil'] === $now + 21600,
-    'Custom claim must carry the eligibility result and bounded expiry.'
+    && $attributes['dostAgeEligibleUntil'] === $now + 21600
+    && $attributes['dostAgeCohort'] === 'adult',
+    'Verified adult claims must carry the cohort, eligibility result, and bounded expiry.'
+);
+$ineligibleAttributes = json_decode(dost_age_custom_attributes(false, $now, 21600), true);
+dost_age_test_assert(
+    is_array($ineligibleAttributes) && !isset($ineligibleAttributes['dostAgeCohort']),
+    'A failed adult-eligibility check must not issue an adult cohort.'
 );
 dost_age_test_assert(
     dost_age_custom_attributes(true, $now, 90000) === '',

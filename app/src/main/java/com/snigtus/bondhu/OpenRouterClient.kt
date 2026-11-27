@@ -59,7 +59,7 @@ class OpenRouterClient(
 
     suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile = structuredProfileFromMemories(userName, userMemories), firebaseIdToken: String = ""): AiReply = withContext(Dispatchers.IO) {
         check(requestAllowed()) { "Explore mode is turned off." }
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         require(friendAgeResult(friend.age) == AccountAgeResult.VALID) {
             "Messaging is disabled for friend profiles under 18."
         }
@@ -69,7 +69,7 @@ class OpenRouterClient(
 
     suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, firebaseIdToken: String = "", friendId: String? = null, installationId: String? = null): FriendProfile = withContext(Dispatchers.IO) {
         check(requestAllowed()) { "Explore mode is turned off." }
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         require(friendAgeResult(age) == AccountAgeResult.VALID) {
             "Generated friend profiles must be 18 or older."
         }
@@ -83,7 +83,7 @@ class OpenRouterClient(
 
     suspend fun summarizeSession(apiKey: String, model: String, friend: Friend, installationId: String, messages: List<ChatMessage>, language: AppLanguage, firebaseIdToken: String = ""): String = withContext(Dispatchers.IO) {
         check(requestAllowed()) { "Explore mode is turned off." }
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         requestSessionSummary(model, apiKey, friend, installationId, messages, language, firebaseIdToken.ifBlank { authTokenProvider().orEmpty() })
     }
 
@@ -118,7 +118,7 @@ class OpenRouterClient(
 
     suspend fun deleteServerArchive(installationId: String): Int = withContext(Dispatchers.IO) {
         check(requestAllowed()) { "Explore mode is turned off." }
-        check(superSecureSessionAllowsAi()) { "AI archives are unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI archives are unavailable in Shield." }
         require(installationId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
             "The installation id is invalid."
         }
@@ -159,7 +159,7 @@ class OpenRouterClient(
     }
 
     private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile, firebaseIdToken: String = ""): AiReply {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
@@ -287,7 +287,7 @@ class OpenRouterClient(
     }
 
     private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, firebaseIdToken: String, friendId: String?, installationId: String?): FriendProfile {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         val system = """
             Create a complete fictional friend character for a social chat app. The user provided this personality and it must remain consistent: $personality. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
             Return only valid JSON with these exact string fields: personality, interests, family, familyMembers, familyActivities, financialCondition, address, height, weight, facialFeatures, bodyFeatures, conversationStyle.
@@ -319,7 +319,7 @@ class OpenRouterClient(
     }
 
     private fun requestSessionSummary(model: String, apiKey: String, friend: Friend, installationId: String, messages: List<ChatMessage>, language: AppLanguage, firebaseIdToken: String): String {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         val transcript = summaryMessages(messages).joinToString("\n") { message ->
             "${if (message.role == "user") "User" else friend.name}: ${message.content}"
         }
@@ -381,7 +381,7 @@ class OpenRouterClient(
 
     private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null, nowEpochSeconds: Long = System.currentTimeMillis() / 1000, firebaseIdToken: String = ""): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
         check(requestAllowed()) { "Explore mode is turned off." }
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         requestMethod = "POST"
         doOutput = true
         connectTimeout = 15_000

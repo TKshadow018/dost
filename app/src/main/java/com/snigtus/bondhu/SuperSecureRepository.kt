@@ -10,11 +10,15 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Source
+import com.google.firebase.firestore.Timestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.io.OutputStream
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -38,9 +42,16 @@ internal object SuperSecureSession {
 }
 
 internal const val MAX_SECURE_ORG_MEMBERS = 25
+internal const val SHIELD_GRACE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
-internal fun secureCanAddMembers(memberCount: Int): Boolean =
-    memberCount in 1 until MAX_SECURE_ORG_MEMBERS
+internal fun secureCanAddMembers(memberCount: Int, seatLimit: Int = MAX_SECURE_ORG_MEMBERS): Boolean =
+    memberCount >= 1 && memberCount < seatLimit && seatLimit in listOf(10, 25)
+
+internal fun secureOrganizationExceedsSeatLimit(memberCount: Int, seatLimit: Int): Boolean =
+    seatLimit in listOf(10, 25) && memberCount > seatLimit
+
+internal fun secureOrganizationIsReadOnly(activeUntilMillis: Long?, nowMillis: Long = System.currentTimeMillis()): Boolean =
+    activeUntilMillis == null || activeUntilMillis <= 0L || nowMillis >= activeUntilMillis + SHIELD_GRACE_MILLIS
 
 internal fun superSecureSessionAllowsAi(): Boolean = !SuperSecureSession.active
 internal fun superSecureSessionAllowsTelemetry(): Boolean = !SuperSecureSession.active
@@ -49,7 +60,9 @@ internal data class SecureOrgSummary(
     val id: String,
     val name: String,
     val role: SecureOrgRole,
-    val memberCount: Int
+    val memberCount: Int,
+    val seatLimit: Int,
+    val activeUntilMillis: Long
 )
 
 internal data class SecureOrgMember(
@@ -105,7 +118,13 @@ internal class SuperSecureRepository(context: Context) {
 
     private fun requireSignedIn(uid: String) {
         val currentUid = app?.let { FirebaseAuth.getInstance(it).currentUser?.uid }
-        check(uid.isNotBlank() && uid == currentUid) { "Sign in to use Super Secure." }
+        check(uid.isNotBlank() && uid == currentUid) { "Sign in to use Shield." }
+    }
+
+    suspend fun isShieldEnabled(): Boolean {
+        val snapshot = database().collection(SHIELD_CONFIG).document(SHIELD_CONFIG_DOC)
+            .get(Source.SERVER).await()
+        return snapshot.getBoolean("enabled") == true
     }
 
     suspend fun openOrganization(uid: String, organizationId: String): SecureOrgSummary {
@@ -116,8 +135,6 @@ internal class SuperSecureRepository(context: Context) {
         check(member.exists() && member.getString("status") == ACTIVE) {
             "You are not an active member of this organization."
         }
-        val orgSnapshot = organization.get(Source.SERVER).await()
-        check(orgSnapshot.exists()) { "This organization is unavailable." }
         val role = SecureOrgRole.parse(member.getString("role"))
         if (role == SecureOrgRole.OWNER) {
             try {
@@ -128,14 +145,9 @@ internal class SuperSecureRepository(context: Context) {
                 // Firestore rules still enforce the last server-synchronized plan and grace period.
             }
         }
-        return SecureOrgSummary(
-            id = organizationId,
-            name = orgSnapshot.getString("name") ?: error("Organization name is unavailable."),
-            role = role,
-            memberCount = orgSnapshot.getLong("memberCount")?.toInt()
-                ?.takeIf { it in 1..MAX_SECURE_ORG_MEMBERS }
-                ?: error("Organization membership is unavailable.")
-        )
+        val orgSnapshot = organization.get(Source.SERVER).await()
+        check(orgSnapshot.exists()) { "This organization is unavailable." }
+        return orgSnapshot.toSecureSummary(organizationId, role)
     }
 
     suspend fun createOrganization(uid: String, name: String, ownerName: String): SecureOrgSummary {
@@ -181,7 +193,8 @@ internal class SuperSecureRepository(context: Context) {
         } catch (_: Exception) {
             // Opening the committed organization retries sync; Firestore rules block plan-dependent writes.
         }
-        return SecureOrgSummary(organization.id, trimmedName, SecureOrgRole.OWNER, 1)
+        val snapshot = organization.get(Source.SERVER).await()
+        return snapshot.toSecureSummary(organization.id, SecureOrgRole.OWNER)
     }
 
     private suspend fun syncShieldPlan(uid: String, organizationId: String) {
@@ -199,7 +212,7 @@ internal class SuperSecureRepository(context: Context) {
                 doOutput = true
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("Authorization", "******")
+                setRequestProperty("Authorization", "Bearer " + idToken)
             }
             try {
                 val body = JSONObject()
@@ -218,6 +231,87 @@ internal class SuperSecureRepository(context: Context) {
                 connection.disconnect()
             }
         }
+    }
+
+    suspend fun exportOrganization(uid: String, organizationId: String, output: OutputStream) {
+        requireSignedIn(uid)
+        require(organizationId.matches(ORG_ID_PATTERN)) { "Enter a valid organization ID." }
+        val organization = organizationRef(organizationId)
+        val ownerMembership = organization.collection(MEMBERS).document(uid).get(Source.SERVER).await()
+        check(ownerMembership.getString("status") == ACTIVE
+            && ownerMembership.getString("role") == SecureOrgRole.OWNER.value
+        ) { "Only the organization owner can export Shield data." }
+        val orgSnapshot = organization.get(Source.SERVER).await()
+        check(orgSnapshot.exists() && orgSnapshot.getString("ownerUid") == uid) {
+            "This organization is unavailable."
+        }
+
+        val writer = OutputStreamWriter(output, Charsets.UTF_8)
+        writer.write(
+            JSONObject()
+                .put("format", "dost-shield-export")
+                .put("version", 1)
+                .put("organization", JSONObject()
+                    .put("id", organizationId)
+                    .put("name", orgSnapshot.getString("name"))
+                    .put("ownerUid", uid))
+                .toString()
+                .dropLast(1)
+        )
+        writer.write(",\"members\":[")
+        val members = organization.collection(MEMBERS).get(Source.SERVER).await()
+        members.documents.forEachIndexed { index, member ->
+            if (index > 0) writer.write(",")
+            writer.write(JSONObject()
+                .put("uid", member.getString("uid") ?: member.id)
+                .put("displayName", member.getString("displayName").orEmpty())
+                .put("role", member.getString("role").orEmpty())
+                .put("status", member.getString("status").orEmpty())
+                .toString())
+        }
+        writer.write("],\"groupMessages\":")
+        writeExportMessages(
+            writer,
+            organization.collection(GROUP_CHATS).document(MAIN_GROUP_CHAT).collection(MESSAGES)
+        )
+        writer.write(",\"directConversations\":[")
+        val directChats = organization.collection(DIRECT_CHATS).get(Source.SERVER).await().documents
+        directChats.forEachIndexed { index, chat ->
+            if (index > 0) writer.write(",")
+            writer.write(JSONObject()
+                .put("id", chat.id)
+                .put("members", JSONArray(chat.get("members") as? Collection<*> ?: emptyList<String>()))
+                .toString().dropLast(1))
+            writer.write(",\"messages\":")
+            writeExportMessages(writer, chat.reference.collection(MESSAGES))
+            writer.write("}")
+        }
+        writer.write("]}")
+        writer.flush()
+    }
+
+    private suspend fun writeExportMessages(writer: OutputStreamWriter, messages: Query) {
+        writer.write("[")
+        var lastDocument: DocumentSnapshot? = null
+        var first = true
+        while (true) {
+            var pageQuery = messages.orderBy("createdAt").limit(EXPORT_PAGE_SIZE.toLong())
+            if (lastDocument != null) pageQuery = pageQuery.startAfter(lastDocument)
+            val page = pageQuery.get(Source.SERVER).await()
+            page.documents.forEach { message ->
+                if (!first) writer.write(",")
+                first = false
+                writer.write(JSONObject()
+                    .put("id", message.id)
+                    .put("senderUid", message.getString("senderUid").orEmpty())
+                    .put("text", message.getString("text").orEmpty())
+                    .put("createdAtMillis", message.getTimestamp("createdAt")?.toDate()?.time ?: 0L)
+                    .toString())
+            }
+            if (page.documents.isEmpty()) break
+            lastDocument = page.documents.last()
+        }
+        writer.write("]")
     }
 
     fun listenMembership(
@@ -499,6 +593,23 @@ internal class SuperSecureRepository(context: Context) {
     private fun organizationRef(organizationId: String) =
         database().collection(ORGS).document(organizationId)
 
+    private fun DocumentSnapshot.toSecureSummary(id: String, role: SecureOrgRole): SecureOrgSummary {
+        val plan = get("plan") as? Map<*, *>
+        val seatLimit = (plan?.get("seatLimit") as? Number)?.toInt()
+            ?.takeIf { it in listOf(10, 25) } ?: MAX_SECURE_ORG_MEMBERS
+        val activeUntilMillis = (plan?.get("activeUntil") as? Timestamp)?.toDate()?.time ?: 0L
+        return SecureOrgSummary(
+            id = id,
+            name = getString("name") ?: error("Organization name is unavailable."),
+            role = role,
+            memberCount = getLong("memberCount")?.toInt()
+                ?.takeIf { it in 1..MAX_SECURE_ORG_MEMBERS }
+                ?: error("Organization membership is unavailable."),
+            seatLimit = seatLimit,
+            activeUntilMillis = activeUntilMillis
+        )
+    }
+
     private fun memberFields(
         uid: String,
         displayName: String,
@@ -550,6 +661,8 @@ internal class SuperSecureRepository(context: Context) {
 
     private companion object {
         const val PREMIUM_API_ROOT = "https://bisque-bear-900175.hostingersite.com/api"
+        const val SHIELD_CONFIG = "secureOrgConfig"
+        const val SHIELD_CONFIG_DOC = "superSecure"
         const val MAX_RESPONSE_CHARS = 32_768
         const val ORGS = "secureOrgs"
         const val MEMBERS = "members"
@@ -565,6 +678,7 @@ internal class SuperSecureRepository(context: Context) {
         const val MAX_MESSAGE_LENGTH = 4_000
         const val MAX_VISIBLE_MESSAGES = 100
         const val MAX_AUDIT_ENTRIES = 100
+        const val EXPORT_PAGE_SIZE = 200
         val ORG_ID_PATTERN = Regex("[A-Za-z0-9_-]{1,128}")
         val UID_PATTERN = Regex("[A-Za-z0-9_-]{1,128}")
     }

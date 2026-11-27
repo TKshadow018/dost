@@ -1215,7 +1215,7 @@ internal fun ProfileHomeScreen(
                 OutlinedButton(onClick = onOpenSuperSecure, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Lock, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Super Secure")
+                    Text("Shield")
                 }
             }
         }
@@ -1518,8 +1518,11 @@ internal fun SettingsScreen(
     quietHoursStartMinute: Int,
     quietHoursEndMinute: Int,
     settingsNotice: String,
+    shieldEnabled: Boolean = false,
     onBack: () -> Unit,
     onOpenPremium: () -> Unit,
+    onOpenShield: () -> Unit = {},
+    onOpenShieldPlans: () -> Unit = onOpenPremium,
     onExploreEnabledChange: (Boolean) -> Unit,
     onExploreDisclosureAccepted: () -> Unit,
     onDeleteFriend: (Friend) -> Unit,
@@ -1597,6 +1600,20 @@ internal fun SettingsScreen(
                 item {
                     TextButton(onClick = onOpenPremium) {
                         Text("Explore Plus")
+                    }
+                }
+            }
+            if (shieldEnabled) item {
+                SettingsSection("Modes") {
+                    Text(
+                        "Shield is closed, admin-controlled organisation messaging, isolated from AI and analytics.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onOpenShield, modifier = Modifier.fillMaxWidth()) {
+                        Text("Open Shield")
+                    }
+                    OutlinedButton(onClick = onOpenShieldPlans, modifier = Modifier.fillMaxWidth()) {
+                        Text("View Shield plans")
                     }
                 }
             }

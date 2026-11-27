@@ -10,7 +10,7 @@ service cloud.firestore {
         && request.auth.token.dostAgeCohort == 'adult'
         && request.auth.token.dostAgeEligible == true
         && request.auth.token.dostAgeEligibleUntil is int
-        && request.auth.token.dostAgeEligibleUntil > request.time.seconds();
+        && request.auth.token.dostAgeEligibleUntil * 1000 > request.time.toMillis();
     }
 
     function profilePath(uid) {
@@ -613,6 +613,11 @@ service cloud.firestore {
       allow get, list, update, delete: if false;
     }
 
+    match /secureOrgConfig/superSecure {
+      allow get: if signedIn();
+      allow list, create, update, delete: if false;
+    }
+
     match /secureOrgs/{orgId} {
       function featureConfigPath() {
         return /databases/$(database)/documents/secureOrgConfig/superSecure;
@@ -625,8 +630,12 @@ service cloud.firestore {
 
       function shieldOwnerEntitled() {
         return signedIn()
+          && request.auth.token.dostAgeCohort == 'adult'
+          && request.auth.token.dostAgeEligible == true
+          && request.auth.token.dostAgeEligibleUntil is int
+          && request.auth.token.dostAgeEligibleUntil * 1000 > request.time.toMillis()
           && request.auth.token.dostShieldUntil is int
-          && request.auth.token.dostShieldUntil > request.time.seconds()
+          && request.auth.token.dostShieldUntil * 1000 > request.time.toMillis()
           && request.auth.token.dostShieldSeats in [10, 25];
       }
 
@@ -651,6 +660,15 @@ service cloud.firestore {
           && plan.activeUntil + duration.value(14, 'd') > request.time;
       }
 
+      function shieldSeatsWithinLimit() {
+        let organization = get(orgPath()).data;
+        let plan = organization.get('plan', {});
+        return organization.memberCount is int
+          && plan is map
+          && plan.get('seatLimit', 0) in [10, 25]
+          && organization.memberCount <= plan.seatLimit;
+      }
+
       function orgPath() {
         return /databases/$(database)/documents/secureOrgs/$(orgId);
       }
@@ -670,10 +688,12 @@ service cloud.firestore {
         let orgAfter = getAfter(orgPath()).data;
         return existsAfter(targetPath)
           && existsAfter(eventPath)
+          && (shieldPlanActive() || (delta == -1 && shieldPlanWithinGrace()))
           && orgBefore.memberCount is int
           && orgAfter.memberCount == orgBefore.memberCount + delta
           && orgAfter.memberCount >= 1
-          && orgAfter.memberCount <= 25
+          && orgAfter.plan.seatLimit in [10, 25]
+          && (orgAfter.memberCount <= orgAfter.plan.seatLimit || delta == -1)
           && orgAfter.memberCountAuditEventId == auditId
           && getAfter(targetPath).data.auditEventId == auditId
           && getAfter(targetPath).data.actorUid == request.auth.uid
@@ -770,7 +790,7 @@ service cloud.firestore {
         let delta = data.memberCount - resource.data.memberCount;
         let plan = resource.data.get('plan', {});
         return actorRole in ['owner', 'manager']
-          && shieldPlanActive()
+          && (shieldPlanActive() || (delta == -1 && shieldPlanWithinGrace()))
           && changed.hasOnly(['memberCount', 'memberCountAuditEventId'])
           && changed.hasAll(['memberCount', 'memberCountAuditEventId'])
           && resource.data.memberCount is int
@@ -779,7 +799,7 @@ service cloud.firestore {
           && auditId.matches('^[A-Za-z0-9_-]{1,128}$')
           && data.memberCount >= 1
           && plan is map
-          && data.memberCount <= plan.seatLimit
+          && (data.memberCount <= plan.seatLimit || delta == -1)
           && data.memberCountAuditEventId == auditId
           && validCountAudit(auditId, delta, actorRole, resource.data.ownerUid);
       }
@@ -1086,6 +1106,7 @@ service cloud.firestore {
           allow get, list: if chatId == 'main' && isMember();
           allow create: if chatId == 'main' && isMember()
             && shieldPlanWithinGrace()
+            && shieldSeatsWithinLimit()
             && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/groupChats/main)
             && validTextMessage();
           allow update, delete: if false;
@@ -1104,13 +1125,15 @@ service cloud.firestore {
             && activeMember(members[1]);
         }
 
-        allow get, list: if isMember()
-          && resource.data.members is list
-          && request.auth.uid in resource.data.members
-          && activeMember(resource.data.members[0])
-          && activeMember(resource.data.members[1]);
+        allow get, list: if isOwner()
+          || (isMember()
+            && resource.data.members is list
+            && request.auth.uid in resource.data.members
+            && activeMember(resource.data.members[0])
+            && activeMember(resource.data.members[1]));
         allow create: if isMember()
           && shieldPlanWithinGrace()
+          && shieldSeatsWithinLimit()
           && request.resource.data.keys().hasAll(['members', 'createdBy', 'createdAt'])
           && request.resource.data.keys().hasOnly(['members', 'createdBy', 'createdAt'])
           && validDirectMembers(request.resource.data.members)
@@ -1141,12 +1164,16 @@ service cloud.firestore {
               && activeMember(members[1]);
           }
 
-          allow get, list: if isMember()
-            && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId))
-            && request.auth.uid in get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members
-            && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[0])
-            && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[1]);
-          allow create: if isMember() && shieldPlanWithinGrace() && validDirectTextMessage();
+          allow get, list: if isOwner()
+            || (isMember()
+              && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId))
+              && request.auth.uid in get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members
+              && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[0])
+              && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[1]));
+          allow create: if isMember()
+            && shieldPlanWithinGrace()
+            && shieldSeatsWithinLimit()
+            && validDirectTextMessage();
           allow update, delete: if false;
         }
       }

@@ -17,7 +17,7 @@ internal class SystemFriendClient(
 ) {
     suspend fun getCatalog(chatLanguage: AppLanguage): List<SystemFriendListing> = withContext(Dispatchers.IO) {
         check(exploreRequestAllowed(requestAllowed())) { "Explore mode is turned off." }
-        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Shield." }
         val languageCode = chatLanguageCode(chatLanguage)
         val authToken = requireAuthToken()
         val profiles = getJson("chat_language=$languageCode", authToken).getJSONArray("profiles")
@@ -46,7 +46,7 @@ internal class SystemFriendClient(
 
     suspend fun getProfile(catalogId: String, chatLanguage: AppLanguage): Friend = withContext(Dispatchers.IO) {
         check(exploreRequestAllowed(requestAllowed())) { "Explore mode is turned off." }
-        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Super Secure mode." }
+        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Shield." }
         val authToken = requireAuthToken()
         val query = "id=${URLEncoder.encode(catalogId, "UTF-8")}&chat_language=${chatLanguageCode(chatLanguage)}"
         val profile = getJson(query, authToken).getJSONObject("profile")
