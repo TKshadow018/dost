@@ -18,6 +18,20 @@ function dost_romance_allowed_by_age($userAge, $friendAge)
     return true;
 }
 
+function dost_ai_friend_age_allowed($userAge, $friendAge)
+{
+    foreach (array($userAge, $friendAge) as $age) {
+        if (!is_string($age) || preg_match('/\A[0-9]{1,3}\z/', trim($age)) !== 1) {
+            return false;
+        }
+        $years = (int) trim($age);
+        if ($years < 13 || $years > 120) {
+            return false;
+        }
+    }
+    return (int) trim($userAge) >= 18 || (int) trim($friendAge) < 18;
+}
+
 function dost_classify_romance_safety($text)
 {
     if (!is_string($text)) {

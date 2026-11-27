@@ -509,7 +509,7 @@ fun accountAgeError(age: String, language: AppLanguage): String? = when (account
     AccountAgeResult.UNDER_MINIMUM -> when (language) {
         AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি করতে কমপক্ষে ১৮ বছর বয়স লাগবে।"
         AppLanguage.HINDI -> "खाता बनाने के लिए कम से कम 18 साल की उम्र होनी चाहिए।"
-        AppLanguage.ENGLISH -> "You need to be 18 or older to create an account."
+        AppLanguage.ENGLISH -> "You need to be 13 or older to create an account."
     }
     AccountAgeResult.NOT_A_WHOLE_NUMBER -> when (language) {
         AppLanguage.BANGLA -> "বয়স পুরো সংখ্যায় লিখুন।"

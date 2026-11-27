@@ -102,7 +102,7 @@ object ConversationManager {
     }
 
     private fun isAdultFriend(friend: Friend): Boolean =
-        friendAgeResult(friend.age) == AccountAgeResult.VALID
+        aiFriendAgeAllowed(store.userAge(), friend.age)
 
     fun messagesFor(friendId: String): List<ChatMessage> = messageState.value[friendId] ?: store.loadMessages(friendId)
 
@@ -141,6 +141,7 @@ object ConversationManager {
         }
 
     fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "", sendImmediately: Boolean = false) {
+        if (!store.exploreEnabled()) return
         if (text.isBlank() && imagePath.isBlank()) return
         if (friend.profilePending || !isAdultFriend(friend)) return
         val requestGeneration = dataImportGeneration
@@ -295,6 +296,13 @@ object ConversationManager {
     fun refreshProactiveWork() {
         if (!::store.isInitialized || !::appContext.isInitialized) return
         store.loadFriends().forEach { friend ->
+            if (!store.exploreEnabled()) {
+                ConversationWorkScheduler.cancelAllForFriend(appContext, friend.id)
+                store.setScheduledReply(friend.id, false)
+                waitingForScheduleState.update { it - friend.id }
+                sendingState.update { it - friend.id }
+                return@forEach
+            }
             if (!isAdultFriend(friend)) {
                 ConversationWorkScheduler.cancelProactiveForFriend(appContext, friend.id)
                 store.setScheduledReply(friend.id, false)
@@ -471,8 +479,12 @@ object ConversationManager {
     }
 
     private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null, ephemeralInstruction: String = ""): AiReply {
-        check(isAdultFriend(friend)) { "Messaging is disabled for friend profiles under 18." }
-        val client = OpenRouterClient()
+        check(store.exploreEnabled()) { "Explore mode is turned off." }
+        check(isAdultFriend(friend)) { "Messaging is disabled for friend profiles under 13." }
+        val client = OpenRouterClient(
+            requestAllowed = { store.exploreEnabled() },
+            authTokenProvider = { FirebaseAuthRepository(appContext).currentIdToken() }
+        )
         val selectedModel = store.aiModel()
         val apiKey = store.openRouterApiKey()
         val history = synchronized(sendGuard(friend.id)) {
@@ -645,7 +657,15 @@ object ConversationManager {
             }
             return true
         }
-        val summary = OpenRouterClient().summarizeSession(store.openRouterApiKey(), store.aiModel(), friendName, summaryInput, store.language())
+        if (!store.exploreEnabled()) return false
+        val summary = OpenRouterClient(
+            requestAllowed = { store.exploreEnabled() },
+            authTokenProvider = { FirebaseAuthRepository(appContext).currentIdToken() }
+        )
+            .summarizeSession(
+                store.openRouterApiKey(), store.aiModel(), friendName, summaryInput, store.language(),
+                store.userAge(), friend.age
+            )
         var shouldRetry = false
         val imported = !withCurrentImportGeneration(requestGeneration) {
             val latestAfterSummary = messagesFor(friendId).lastOrNull { it.sessionId == sessionId }

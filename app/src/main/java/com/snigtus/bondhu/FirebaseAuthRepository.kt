@@ -50,8 +50,11 @@ class FirebaseAuthRepository(context: Context) {
         val user = requireAuth().currentUser
             ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
         val claims = user.getIdToken(forceRefresh).awaitTask().claims
-        val isLifetime = claims["dostPremiumLifetime"] == true
-        val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong()
+        val isLifetime = claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true
+        val expiresAt = maxOf(
+            (claims["dostExplorePlusUntil"] as? Number)?.toLong() ?: 0L,
+            (claims["dostPremiumUntil"] as? Number)?.toLong() ?: 0L
+        ).takeIf { it > 0L }
         return PremiumEntitlement(
             isActive = premiumClaimIsActive(claims, System.currentTimeMillis() / 1000),
             isLifetime = isLifetime,

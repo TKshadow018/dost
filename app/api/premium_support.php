@@ -86,17 +86,26 @@ function dost_premium_claims($existing, $productId, $entitlement, $now)
     if (!is_array($existing) || !is_string($productId) || !is_array($entitlement) || !is_int($now)) {
         return false;
     }
-    $existingExpiry = isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
-        ? (int) $existing['dostPremiumUntil']
-        : 0;
+    $existingExpiry = max(
+        isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
+            ? (int) $existing['dostPremiumUntil']
+            : 0,
+        isset($existing['dostExplorePlusUntil']) && is_numeric($existing['dostExplorePlusUntil'])
+            ? (int) $existing['dostExplorePlusUntil']
+            : 0
+    );
     $newLifetime = !empty($entitlement['lifetime']);
     $newExpiry = $newLifetime ? 0 : (isset($entitlement['expires_at']) ? (int) $entitlement['expires_at'] : 0);
     if (!$newLifetime && ($newExpiry <= 0 || $newExpiry <= $now)) {
         return false;
     }
-    $lifetime = !empty($existing['dostPremiumLifetime']) || $newLifetime;
+    $lifetime = !empty($existing['dostPremiumLifetime'])
+        || !empty($existing['dostExplorePlusLifetime'])
+        || $newLifetime;
     $existing['dostPremiumLifetime'] = $lifetime;
     $existing['dostPremiumUntil'] = $lifetime ? 0 : max($existingExpiry, $newExpiry);
+    $existing['dostExplorePlusLifetime'] = $existing['dostPremiumLifetime'];
+    $existing['dostExplorePlusUntil'] = $existing['dostPremiumUntil'];
     $existing['dostPremiumProductId'] = $productId;
     $existing['dostPremiumSource'] = 'play';
     return $existing;
@@ -136,10 +145,17 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
         $start = $createdAt >= $now - 86400 ? $createdAt : $now;
     }
     $introExpiry = $start + ($days * 86400);
-    $existingExpiry = isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
-        ? (int) $existing['dostPremiumUntil']
-        : 0;
-    $hasBetterEntitlement = !empty($existing['dostPremiumLifetime']) || $existingExpiry > $introExpiry;
+    $existingExpiry = max(
+        isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
+            ? (int) $existing['dostPremiumUntil']
+            : 0,
+        isset($existing['dostExplorePlusUntil']) && is_numeric($existing['dostExplorePlusUntil'])
+            ? (int) $existing['dostExplorePlusUntil']
+            : 0
+    );
+    $hasBetterEntitlement = !empty($existing['dostPremiumLifetime'])
+        || !empty($existing['dostExplorePlusLifetime'])
+        || $existingExpiry > $introExpiry;
     if (!$hasBetterEntitlement) {
         $existing['dostPremiumLifetime'] = false;
         $existing['dostPremiumUntil'] = $introExpiry;
@@ -147,7 +163,32 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
     }
     $existing['dostPremiumIntroGranted'] = true;
     $existing['dostPremiumIntroGrantedAt'] = $now;
+    $lifetime = !empty($existing['dostPremiumLifetime']) || !empty($existing['dostExplorePlusLifetime']);
+    $until = $lifetime ? 0 : $existingExpiry;
+    $existing['dostPremiumLifetime'] = $lifetime;
+    $existing['dostPremiumUntil'] = $until;
+    $existing['dostExplorePlusLifetime'] = $lifetime;
+    $existing['dostExplorePlusUntil'] = $until;
     return $existing;
+}
+
+function dost_explore_plus_claim_active($claims, $now)
+{
+    if (!is_array($claims) || !is_int($now)) {
+        return false;
+    }
+    if (!empty($claims['dostExplorePlusLifetime']) || !empty($claims['dostPremiumLifetime'])) {
+        return true;
+    }
+    $expiresAt = max(
+        isset($claims['dostExplorePlusUntil']) && is_numeric($claims['dostExplorePlusUntil'])
+            ? (int) $claims['dostExplorePlusUntil']
+            : 0,
+        isset($claims['dostPremiumUntil']) && is_numeric($claims['dostPremiumUntil'])
+            ? (int) $claims['dostPremiumUntil']
+            : 0
+    );
+    return $expiresAt > $now;
 }
 
 function dost_premium_intro_response($claims, $now)

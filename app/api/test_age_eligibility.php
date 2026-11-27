@@ -64,6 +64,21 @@ dost_age_test_assert(
     && !dost_age_authenticated_uid_matches($uid, 'different-user'),
     'A request UID must match the authenticated Firebase UID.'
 );
+dost_age_test_assert(
+    dost_age_eligibility_claim_active(
+        array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => $now + 1),
+        $now
+    )
+    && !dost_age_eligibility_claim_active(
+        array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => $now),
+        $now
+    )
+    && !dost_age_eligibility_claim_active(
+        array('dostAgeEligible' => false, 'dostAgeEligibleUntil' => $now + 1),
+        $now
+    ),
+    'Only an unexpired adult-eligibility claim may unlock age-restricted Explore Plus.'
+);
 
 $integrityPayload = array(
     'tokenPayloadExternal' => array(

@@ -6,7 +6,17 @@ import org.junit.Test
 
 class PlayAgeSignalsGateTest {
     @Test
-    fun appRequiresSharedAdultAgeRange() {
+    fun appRequiresSharedAgeRangeOfAtLeastThirteen() {
+        assertTrue(appAgeSignalAllowsAccess(true, 13, 17))
+        assertTrue(appAgeSignalAllowsAccess(true, 17, 18))
+        assertFalse(appAgeSignalAllowsAccess(true, 12, 17))
+        assertFalse(appAgeSignalAllowsAccess(false, 18, null))
+        assertFalse(appAgeSignalAllowsAccess(true, null, null))
+        assertFalse(appAgeSignalAllowsAccess(true, 21, 18))
+    }
+
+    @Test
+    fun plusAgeSignalStillRequiresAnAdultRange() {
         assertTrue(adultAgeSignalAllowsAccess(true, 18, null))
         assertTrue(adultAgeSignalAllowsAccess(true, 18, 18))
         assertTrue(adultAgeSignalAllowsAccess(true, 21, null))

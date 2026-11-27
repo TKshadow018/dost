@@ -185,6 +185,9 @@ if (!is_array($customClaims)) {
     dost_premium_intro_respond(503, array('error' => 'Premium intro grants are unavailable'));
 }
 $now = time();
+if (!dost_age_eligibility_claim_active($customClaims, $now)) {
+    dost_premium_intro_respond(403, array('error' => 'Explore Plus is available only to age-eligible adults'));
+}
 if (empty($customClaims['dostPremiumIntroGranted'])) {
     $updatedClaims = dost_premium_intro_claims($customClaims, $createdAt, $days, $now, $launchAt);
     $customAttributes = is_array($updatedClaims)

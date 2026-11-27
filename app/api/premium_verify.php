@@ -188,6 +188,9 @@ if (!is_array($customClaims)) {
     error_log('Dost Premium custom claims are malformed.');
     dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
 }
+if (!dost_age_eligibility_claim_active($customClaims, time())) {
+    dost_premium_respond(403, array('error' => 'Explore Plus is available only to age-eligible adults'));
+}
 $updatedClaims = dost_premium_claims($customClaims, $request['product_id'], $entitlement, time());
 $customAttributes = is_array($updatedClaims)
     ? json_encode($updatedClaims, JSON_UNESCAPED_SLASHES)
@@ -209,6 +212,7 @@ dost_firebase_claim_unlock($claimLock);
 
 dost_premium_respond(200, array(
     'premium' => true,
+    'explore_plus' => true,
     'source' => 'play',
     'lifetime' => !empty($updatedClaims['dostPremiumLifetime']),
     'premium_until' => isset($updatedClaims['dostPremiumUntil']) ? (int) $updatedClaims['dostPremiumUntil'] : null,

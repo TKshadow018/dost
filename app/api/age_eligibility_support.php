@@ -67,6 +67,15 @@ function dost_age_authenticated_uid_matches($requestUid, $authenticatedUid)
         && hash_equals($requestUid, $authenticatedUid);
 }
 
+function dost_age_eligibility_claim_active($claims, $now)
+{
+    return is_array($claims)
+        && isset($claims['dostAgeEligible'], $claims['dostAgeEligibleUntil'])
+        && $claims['dostAgeEligible'] === true
+        && is_numeric($claims['dostAgeEligibleUntil'])
+        && (int) $claims['dostAgeEligibleUntil'] > $now;
+}
+
 function dost_age_integrity_failure_field($payload, $uid, $eligible, $nonce, $now, $allowTestAppVerdicts = false)
 {
     if (!is_array($payload) || !isset($payload['tokenPayloadExternal']) || !is_array($payload['tokenPayloadExternal'])) {

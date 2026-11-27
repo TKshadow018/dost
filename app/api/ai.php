@@ -156,6 +156,7 @@ if ($operation === 'log_message') {
     if ($credentialDecision !== null) {
         respond($credentialDecision['status'], array('error' => $credentialDecision['error']));
     }
+
     $userName = isset($request['user_name']) && is_string($request['user_name']) ? $request['user_name'] : '';
     $friendName = isset($request['friend_name']) && is_string($request['friend_name']) ? $request['friend_name'] : '';
     $clientIp = isset($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
@@ -183,6 +184,13 @@ if ($operation === 'log_message') {
         respond(503, array('error' => 'Could not persist conversation message'));
     }
     respond(200, array('saved' => true));
+}
+
+if (!dost_ai_friend_age_allowed(
+    isset($request['user_age']) ? $request['user_age'] : null,
+    isset($request['friend_age']) ? $request['friend_age'] : null
+)) {
+    respond(403, array('error' => 'This AI character is not available for your age group'));
 }
 
 $clientApiKey = isset($_SERVER['HTTP_X_OPENROUTER_KEY']) && is_string($_SERVER['HTTP_X_OPENROUTER_KEY'])
@@ -254,6 +262,14 @@ $romanceAllowed = dost_romance_allowed_by_age(
     isset($request['user_age']) ? $request['user_age'] : null,
     isset($request['friend_age']) ? $request['friend_age'] : null
 );
+if ($operation !== 'log_message' && isset($request['user_age'])
+    && is_string($request['user_age']) && (int) $request['user_age'] >= 13 && (int) $request['user_age'] < 18
+) {
+    array_unshift($messages, array(
+        'role' => 'system',
+        'content' => 'The user is a teenager. Keep the character clearly fictional and age-appropriate. Never create or engage in romance, flirting, sexual content, sexualized personas, or adult topics. Encourage healthy boundaries and breaks. Do not claim to be a real person.'
+    ));
+}
 $chatLanguage = isset($request['chat_language'])
     && is_string($request['chat_language'])
     && in_array($request['chat_language'], array('en', 'bn', 'hi'), true)

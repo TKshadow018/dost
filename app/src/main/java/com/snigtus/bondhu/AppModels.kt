@@ -56,8 +56,12 @@ internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 internal const val GLOBAL_PROACTIVE_SPACING_MILLIS = 15 * 60_000L
 
 internal fun premiumClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
-    if (claims["dostPremiumLifetime"] == true) return true
-    val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong() ?: return false
+    if (claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true) return true
+    val expiresAt = maxOf(
+        (claims["dostExplorePlusUntil"] as? Number)?.toLong() ?: 0L,
+        (claims["dostPremiumUntil"] as? Number)?.toLong() ?: 0L
+    )
+    if (expiresAt == 0L) return false
     return expiresAt > nowEpochSeconds
 }
 
@@ -778,11 +782,8 @@ fun loveLevel(score: Int): String = when (score.coerceIn(0, 100)) {
     else -> "Beloved"
 }
 
-/**
- * The app is for adults because real-person matchmaking is a core feature.
- * Play Age Signals gates app access; this local age is only used for account setup.
- */
-const val MINIMUM_ACCOUNT_AGE = 18
+/** The app is for people aged 13 and older; adult-only Explore features use a separate gate. */
+const val MINIMUM_ACCOUNT_AGE = 13
 
 /** Love meter and the romantic prompt ladder require both the user and the friend to be at least this age. */
 const val ROMANCE_MINIMUM_AGE = 18
@@ -797,7 +798,7 @@ fun accountAgeResult(age: String): AccountAgeResult {
     return AccountAgeResult.VALID
 }
 
-/** New friend profiles must be adults; legacy underage profiles remain readable but cannot be messaged. */
+/** New AI friend profiles must be at least 13; legacy underage profiles remain readable but cannot be messaged. */
 fun friendAgeResult(age: String): AccountAgeResult {
     val years = profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)
     if (years < MINIMUM_ACCOUNT_AGE) return AccountAgeResult.UNDER_MINIMUM
@@ -817,6 +818,25 @@ fun isUnderRomanceAge(age: String): Boolean {
 
 fun romanceAllowed(userAge: String, friendAge: String): Boolean =
     !isUnderRomanceAge(userAge) && !isUnderRomanceAge(friendAge)
+
+internal fun exploreRequestAllowed(exploreEnabled: Boolean): Boolean = exploreEnabled
+
+internal fun exploreDisclosureRequired(exploreEnabled: Boolean, disclosureAccepted: Boolean): Boolean =
+    exploreEnabled && !disclosureAccepted
+
+internal fun adultExploreFeatureAllowed(exploreEnabled: Boolean, userAge: String): Boolean =
+    exploreEnabled && (profileAgeOrNull(userAge) ?: 0) >= ROMANCE_MINIMUM_AGE
+
+internal fun teenAiSafetyRequired(userAge: String): Boolean =
+    (profileAgeOrNull(userAge) ?: 0) in MINIMUM_ACCOUNT_AGE until ROMANCE_MINIMUM_AGE
+
+internal fun aiFriendAgeAllowed(userAge: String, friendAge: String): Boolean {
+    val age = profileAgeOrNull(friendAge) ?: return false
+    return friendAgeResult(friendAge) == AccountAgeResult.VALID
+        && (!teenAiSafetyRequired(userAge) || age < ROMANCE_MINIMUM_AGE)
+}
+
+internal const val TEEN_LONG_SESSION_REMINDER_MILLIS = 30L * 60L * 1000L
 
 fun Friend.withLoveMeterGated(userAge: String): Friend =
     if (romanceAllowed(userAge, age)) this else copy(loveScore = 0)
