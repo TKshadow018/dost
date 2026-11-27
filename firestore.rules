@@ -7,6 +7,7 @@ service cloud.firestore {
 
     function ageEligible() {
       return signedIn()
+        && request.auth.token.dostAgeCohort == 'adult'
         && request.auth.token.dostAgeEligible == true
         && request.auth.token.dostAgeEligibleUntil is int
         && request.auth.token.dostAgeEligibleUntil > request.time.seconds();

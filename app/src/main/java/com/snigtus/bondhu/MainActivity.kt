@@ -226,6 +226,17 @@ fun DostApp(
     val activeFirebaseUid = authRepository.currentAccount?.uid.orEmpty()
     var isPremium by remember(activeFirebaseUid) { mutableStateOf(false) }
 
+    LaunchedEffect(activeFirebaseUid, store.birthMonth(), store.birthYear()) {
+        if (activeFirebaseUid.isBlank()) return@LaunchedEffect
+        try {
+            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            Unit
+        }
+    }
+
     LaunchedEffect(activeFirebaseUid, isPremium) {
         if (activeFirebaseUid.isBlank()) {
             isPremium = false
@@ -278,6 +289,7 @@ fun DostApp(
             checkingPeopleEligibility = true
             peopleEligibilityError = null
             try {
+                authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
                 authRepository.ensureAdultEligibility()
                 peopleInboxEligibleUid = authRepository.currentAccount?.uid.orEmpty()
                 action()
@@ -350,6 +362,7 @@ fun DostApp(
         peopleInboxLoading = true
         peopleInboxError = null
         try {
+            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
             authRepository.ensureAdultEligibility()
             peopleInboxEligibleUid = activeFirebaseUid
         } catch (error: Exception) {
@@ -781,8 +794,16 @@ fun DostApp(
         generatingProfileIds = generatingProfileIds + friendId
         scope.launch {
             try {
+                val firebaseIdToken = try {
+                    authRepository.currentIdToken()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    ""
+                }
                 val profile = OpenRouterClient().generateFriendProfile(
-                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, friend.personality, requestLanguage
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender,
+                    friend.personality, requestLanguage, firebaseIdToken
                 )
                 val index = friends.indexOfFirst { it.id == friendId }
                 if (index >= 0 && friends[index].profilePending) {
@@ -1054,19 +1075,39 @@ fun DostApp(
             language = language,
             name = name,
             email = email,
-            age = age,
             gender = gender,
             onNameChange = { name = it },
             onEmailChange = { email = it },
-            onAgeChange = { age = it },
             onGenderChange = { gender = it },
             onFinish = finish@{
-                if (name.isBlank() || email.isBlank() || accountAgeResult(age) != AccountAgeResult.VALID || gender.isBlank()) return@finish
-                store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
-                screen = AppScreen.HOME
+                if (name.isBlank() || email.isBlank()
+                    || ageCohortForAge(age.toIntOrNull() ?: 0) == null
+                    || gender.isBlank()
+                    || authRequestState == AuthRequestState.Loading
+                ) return@finish
+                scope.launch {
+                    authRequestState = AuthRequestState.Loading
+                    try {
+                        authRepository.currentAccount?.let {
+                            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+                        }
+                        store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
+                        authRequestState = AuthRequestState.Idle
+                        screen = AppScreen.HOME
+                    } catch (error: CancellationException) {
+                        authRequestState = AuthRequestState.Idle
+                        throw error
+                    } catch (error: Exception) {
+                        authRequestState = AuthRequestState.Error(
+                            error.message?.take(160) ?: "Could not save your age cohort."
+                        )
+                    }
+                }
             },
             onBack = { screen = AppScreen.AUTH },
-            emailEditable = false
+            emailEditable = false,
+            requestMessage = (authRequestState as? AuthRequestState.Error)?.message,
+            loading = authRequestState == AuthRequestState.Loading
         )
         AppScreen.HOME -> if (hasLocalAccountAccess()) MainNavigationScaffold(
             language = language,
@@ -1341,7 +1382,9 @@ fun DostApp(
             },
             onBack = { screen = AppScreen.HOME }
         )
-        AppScreen.PEOPLE -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) PeopleScreen(
+        AppScreen.PEOPLE -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
+        ) PeopleScreen(
             language = language,
             uid = authRepository.currentAccount?.uid.orEmpty(),
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
@@ -1361,7 +1404,9 @@ fun DostApp(
             selectedPeopleConversation = null
             screen = AppScreen.HOME
         }
-        AppScreen.PEOPLE_CHAT -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) selectedPeopleConversation?.let { conversation ->
+        AppScreen.PEOPLE_CHAT -> if (BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
+        ) selectedPeopleConversation?.let { conversation ->
             PeopleChatScreen(
                 language = language,
                 uid = authRepository.currentAccount?.uid.orEmpty(),

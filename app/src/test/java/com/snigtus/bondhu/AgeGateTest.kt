@@ -7,18 +7,33 @@ import org.junit.Test
 
 class AgeGateTest {
     @Test
-    fun registrationAcceptsAdultsAndRefusesMinorsOrUnusableAges() {
+    fun registrationAcceptsTeensAndAdultsAndRefusesUnderThirteensOrUnusableAges() {
         assertEquals(AccountAgeResult.VALID, accountAgeResult("18"))
         assertEquals(AccountAgeResult.VALID, accountAgeResult(" 18 "))
+        assertEquals(AccountAgeResult.VALID, accountAgeResult("13"))
+        assertEquals(AccountAgeResult.VALID, accountAgeResult("17"))
         assertEquals(AccountAgeResult.VALID, accountAgeResult("120"))
-        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("17"))
-        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("13"))
+        assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("12"))
         assertEquals(AccountAgeResult.UNDER_MINIMUM, accountAgeResult("1"))
         assertEquals(AccountAgeResult.EMPTY, accountAgeResult("  "))
         assertEquals(AccountAgeResult.NOT_A_WHOLE_NUMBER, accountAgeResult("13abc"))
         assertEquals(AccountAgeResult.NOT_A_WHOLE_NUMBER, accountAgeResult("0"))
         assertEquals(AccountAgeResult.NOT_A_WHOLE_NUMBER, accountAgeResult("-4"))
         assertEquals(AccountAgeResult.ABOVE_MAXIMUM, accountAgeResult("121"))
+    }
+
+    @Test
+    fun birthMonthAndYearUseConservativeCompletedMonthAge() {
+        assertEquals(12, birthMonthYearAge("11", "2013", 11, 2026))
+        assertEquals(13, birthMonthYearAge("10", "2013", 11, 2026))
+        assertEquals(17, birthMonthYearAge("10", "2009", 11, 2026))
+        assertEquals(18, birthMonthYearAge("10", "2008", 11, 2026))
+        assertEquals(null, birthMonthYearAge("13", "2010", 11, 2026))
+        assertEquals(null, birthMonthYearAge("1", "2027", 11, 2026))
+        assertEquals(DostAgeCohort.TEEN, ageCohortForAge(13))
+        assertEquals(DostAgeCohort.TEEN, ageCohortForAge(17))
+        assertEquals(DostAgeCohort.ADULT, ageCohortForAge(18))
+        assertEquals(null, ageCohortForAge(12))
     }
 
     @Test
