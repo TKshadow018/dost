@@ -82,6 +82,7 @@ function snapshot({
 
 function user(uid, claims = {}) {
   return testEnv.authenticatedContext(uid, {
+    dostAgeCohort: "adult",
     dostAgeEligible: true,
     dostAgeEligibleUntil: Math.floor(Date.now() / 1000) + 3600,
     ...claims,
@@ -573,6 +574,17 @@ test("People data requires an unexpired server age-eligibility claim", async () 
   await assertFails(
     setDoc(doc(unverified, "publicProfiles/another-user"), profile()),
   );
+});
+
+test("teen and cohort-less claims cannot access People discovery or chats", async () => {
+  await seedProfile("adult");
+  await seedChat({ members: ["teen", "adult"] });
+  const teen = user("teen", { dostAgeCohort: "teen" });
+  const missingCohort = user("adult", { dostAgeCohort: null });
+
+  await assertFails(getDoc(doc(teen, "publicProfiles/adult")));
+  await assertFails(getDoc(doc(teen, "peopleChats/alice-bob")));
+  await assertFails(getDoc(doc(missingCohort, "publicProfiles/adult")));
 });
 
 test("profile creation rejects under-18 age bands and cohorts", async () => {

@@ -789,11 +789,8 @@ fun loveLevel(score: Int): String = when (score.coerceIn(0, 100)) {
     else -> "Beloved"
 }
 
-/**
- * The app is for adults because real-person matchmaking is a core feature.
- * Play Age Signals gates app access; this local age is only used for account setup.
- */
-const val MINIMUM_ACCOUNT_AGE = 18
+/** Users under 13 cannot create an account. People and romance keep their own adult-only gates. */
+const val MINIMUM_ACCOUNT_AGE = 13
 
 /** Love meter and the romantic prompt ladder require both the user and the friend to be at least this age. */
 const val ROMANCE_MINIMUM_AGE = 18
@@ -801,6 +798,22 @@ const val ROMANCE_MINIMUM_AGE = 18
 const val MAX_PROFILE_AGE = 120
 
 enum class AccountAgeResult { VALID, EMPTY, NOT_A_WHOLE_NUMBER, UNDER_MINIMUM, ABOVE_MAXIMUM }
+
+enum class DostAgeCohort { TEEN, ADULT }
+
+fun birthMonthYearAge(month: String, year: String, currentMonth: Int, currentYear: Int): Int? {
+    val birthMonth = month.trim().toIntOrNull() ?: return null
+    val birthYear = year.trim().toIntOrNull() ?: return null
+    if (birthMonth !in 1..12 || birthYear !in 1900..currentYear || currentMonth !in 1..12) return null
+    val completedYears = currentYear - birthYear - if (birthMonth >= currentMonth) 1 else 0
+    return completedYears.takeIf { it in 0..MAX_PROFILE_AGE }
+}
+
+fun ageCohortForAge(age: Int): DostAgeCohort? = when {
+    age in MINIMUM_ACCOUNT_AGE until ROMANCE_MINIMUM_AGE -> DostAgeCohort.TEEN
+    age in ROMANCE_MINIMUM_AGE..MAX_PROFILE_AGE -> DostAgeCohort.ADULT
+    else -> null
+}
 
 fun accountAgeResult(age: String): AccountAgeResult {
     val years = profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)

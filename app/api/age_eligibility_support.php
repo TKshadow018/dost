@@ -179,6 +179,52 @@ function dost_age_custom_attributes($eligible, $now, $ttlSeconds)
     return is_string($attributes) ? $attributes : '';
 }
 
+function dost_age_from_birth_month_year($birthMonth, $birthYear, $currentMonth, $currentYear)
+{
+    if (!is_int($birthMonth) || $birthMonth < 1 || $birthMonth > 12
+        || !is_int($birthYear) || !is_int($currentMonth) || $currentMonth < 1 || $currentMonth > 12
+        || !is_int($currentYear) || $birthYear < 1900 || $birthYear > $currentYear
+    ) {
+        return false;
+    }
+    $age = $currentYear - $birthYear - ($birthMonth >= $currentMonth ? 1 : 0);
+    return $age >= 0 && $age <= 120 ? $age : false;
+}
+
+function dost_age_cohort_claims($existing, $birthMonth, $birthYear, $currentMonth, $currentYear)
+{
+    if (!is_array($existing)) {
+        return false;
+    }
+    $age = dost_age_from_birth_month_year($birthMonth, $birthYear, $currentMonth, $currentYear);
+    if ($age === false || $age < 13) {
+        return false;
+    }
+    if (isset($existing['dostAgeCohort'])
+        && (!isset($existing['dostBirthMonth'], $existing['dostBirthYear'])
+            || !is_int($existing['dostBirthMonth']) || !is_int($existing['dostBirthYear']))
+    ) {
+        return false;
+    }
+    if (isset($existing['dostBirthMonth']) || isset($existing['dostBirthYear'])) {
+        if (!isset($existing['dostBirthMonth'], $existing['dostBirthYear'])
+            || !is_int($existing['dostBirthMonth']) || !is_int($existing['dostBirthYear'])
+            || $existing['dostBirthMonth'] !== $birthMonth || $existing['dostBirthYear'] !== $birthYear
+        ) return false;
+    }
+    $cohort = $age >= 18 ? 'adult' : 'teen';
+    if (isset($existing['dostAgeCohort'])
+        && (!in_array($existing['dostAgeCohort'], array('teen', 'adult'), true)
+            || ($existing['dostAgeCohort'] === 'adult' && $cohort !== 'adult'))
+    ) {
+        return false;
+    }
+    $existing['dostAgeCohort'] = $cohort;
+    $existing['dostBirthMonth'] = $birthMonth;
+    $existing['dostBirthYear'] = $birthYear;
+    return $existing;
+}
+
 function dost_firebase_claim_lock($uid)
 {
     if (!is_string($uid) || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1) {

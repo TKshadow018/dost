@@ -192,7 +192,7 @@ if (!is_array($customClaims)) {
     dost_premium_intro_respond(503, array('error' => 'Premium intro grants are unavailable'));
 }
 $now = time();
-if (!dost_premium_has_adult_eligibility($customClaims, $now)) {
+if (!dost_premium_user_adult_eligible($customClaims, $now)) {
     dost_firebase_claim_unlock($claimLock);
     dost_premium_intro_respond(403, array('error' => 'Explore Plus requires verified adult eligibility'));
 }

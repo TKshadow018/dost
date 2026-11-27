@@ -408,7 +408,9 @@ internal class PremiumBillingManager(
         val ADULT_ONLY_PRODUCT_IDS = setOf(
             EXPLORE_PLUS_PRODUCT_ID,
             EXPLORE_PLUS_LIFETIME_PRODUCT_ID,
-            PLUS_BUNDLE_PRODUCT_ID
+            PLUS_BUNDLE_PRODUCT_ID,
+            SHIELD_TEAM_PRODUCT_ID,
+            SHIELD_BUSINESS_PRODUCT_ID
         )
         val PREMIUM_PRODUCT_IDS = setOf(
             EXPLORE_PLUS_PRODUCT_ID,

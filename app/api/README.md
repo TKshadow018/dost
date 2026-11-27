@@ -1,6 +1,6 @@
 # Dost AI API (Hostinger)
 
-Upload `ai.php`, `app_credential.php`, `age_eligibility.php`, `age_eligibility_support.php`, `archive_store.php`, `delete_archive.php`, `romance_safety.php`, `telemetry_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. The PHP endpoints load helper files from the same directory; uploading an endpoint alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
+Upload `ai.php`, `app_credential.php`, `age_cohort.php`, `age_eligibility.php`, `age_eligibility_support.php`, `archive_store.php`, `delete_archive.php`, `romance_safety.php`, `telemetry_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. The PHP endpoints load helper files from the same directory; uploading an endpoint alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
 
 `https://bisque-bear-900175.hostingersite.com/api/ai.php`
 
@@ -8,16 +8,18 @@ For optional anonymous usage analytics, also upload `telemetry.php` and `telemet
 
 The server needs PHP with the cURL extension and outbound HTTPS access.
 
-## Trusted People age eligibility
+## Trusted age cohorts and People eligibility
 
-The app's Play Age Signals gate remains the first check. When the short-lived eligibility claim is missing or nearly expired, the app requests a Play Integrity Standard token whose request hash binds the Firebase UID, eligibility result, and a fresh random nonce. The Hostinger endpoint verifies the Firebase ID token, asks Google to decode the Integrity token, checks the package, request hash, token age, Play licensing, app recognition, and device integrity, then sets a server-side Firebase custom claim that expires after six hours. Firestore rules require this unexpired claim for People reads and writes. The exact Play Age Signals range is not sent to or stored by Dost's server.
+The app first asks for birth month/year on a neutral age screen; under-13 users are blocked locally before account creation. Play Age Signals supplies an age band and can block a shared range below 13, but does not block teens from the app. After Firebase sign-in, `age_cohort.php` validates the submitted month/year, stores it with a server-issued `dostAgeCohort` (`teen` or `adult`) custom claim, and rejects later date changes. A teen cohort becomes adult only when the stored birth month/year reaches 18.
+
+People remains adults-only. When the short-lived eligibility claim is missing or nearly expired, the app requests a Play Integrity Standard token whose request hash binds the Firebase UID, eligibility result, and a fresh random nonce. The Hostinger endpoint verifies the Firebase ID token, asks Google to decode the Integrity token, checks the package, request hash, token age, Play licensing, app recognition, and device integrity, then sets an adult-only server-side Firebase eligibility claim that expires after six hours. Firestore rules require both the adult cohort and this unexpired claim for People reads and writes. The exact Play Age Signals range is not sent to or stored by Dost's server.
 
 Before deploying this endpoint:
 
 1. Link the Google Cloud project to `com.snigtus.dost` in Play Console and enable the Play Integrity API. Enable Identity Toolkit API for the Firebase project as well.
 2. Create a dedicated service account and grant only `firebaseauth.users.get` and `firebaseauth.users.update` on the Firebase project. Keep its JSON key outside `public_html` and outside source control.
 3. Configure `DOST_FIREBASE_PROJECT_ID`, `DOST_FIREBASE_WEB_API_KEY`, and `DOST_FIREBASE_SERVICE_ACCOUNT_PATH` for PHP, or use the corresponding fields in server-only `config.php`. The project ID must match the service account and Firebase app. Never place the service-account JSON in `config.php`, the repository, or the web root.
-4. Upload the two age-eligibility PHP files with the endpoint, deploy the matching Firestore rules, and run `php.exe test_age_eligibility.php` plus `npm run test:rules` before release.
+4. Upload `age_cohort.php`, `age_eligibility.php`, and `age_eligibility_support.php`; the cohort endpoint writes immutable server-side birth month/year and `dostAgeCohort` claims. Deploy the matching Firestore rules, and run `php.exe test_age_eligibility.php` plus `npm run test:rules` before release.
 5. Test using a Play-installed build and a Play license tester. A sideloaded debug build normally cannot satisfy the licensing verdict.
 
 For QA on a debug or sideloaded build, the server can optionally allow specific Firebase UIDs to pass only the app-recognition and licensing checks. Configure `DOST_AGE_ELIGIBILITY_TEST_MODE=true` (or `age_eligibility_test_mode => true` in server-only `config.php`) and set `DOST_AGE_ELIGIBILITY_TEST_UIDS` to a comma-separated list of Firebase UIDs (or `age_eligibility_test_uids` to an array in `config.php`). Test mode defaults off; only the exact value `true` enables it, and an empty UID list allows nobody. When both are enabled, only `UNRECOGNIZED_VERSION` and `UNLICENSED` are accepted in place of `PLAY_RECOGNIZED` and `LICENSED`.
@@ -59,7 +61,7 @@ Upload `premium_verify.php`, `premium_intro_grant.php`, `premium_support.php`, `
 
 Purchases are independently disabled by default: set `DOST_PREMIUM_ENABLED=false`, `DOST_PLAN_EXPLORE_PLUS_ENABLED=false`, `DOST_PLAN_CIPHER_ENABLED=false`, and `DOST_PLAN_SHIELD_ENABLED=false`. The `dost_plus` bundle requires both Explore Plus and Cipher switches. Do not enable billing, paid modes, or Play products without the owner's explicit approval.
 
-`premium_verify.php` verifies Play's subscription/product response, account binding, base plan, purchase state, and expiry. Explore Plus, its lifetime product, Dost Plus, and the 90-day intro grant additionally require a current server-verified adult-eligibility claim. Cipher and Shield purchases are not age-restricted; creating a Shield organization requires adult eligibility, while invited members may be 13 or older. Shield member access is governed by the server-backed org plan and Firestore rules. Claims include `dostExplorePlusUntil` (with the temporary `dostPremiumUntil` alias), `dostExplorePlusLifetime`, `dostCipherUntil`, and `dostShieldUntil`/`dostShieldSeats`. The bundle sets Explore Plus and Cipher. The app acknowledges only server-verified purchases; pending purchases do not grant access.
+`premium_verify.php` verifies Play's subscription/product response, account binding, base plan, purchase state, and expiry. Explore Plus, its lifetime product, Dost Plus, Shield plans, and the 90-day intro grant require a current server-verified adult-eligibility claim. Cipher is available to teens; invited Shield members may be 13 or older, while the owner must be an adult. Shield member access is governed by the server-backed org plan and Firestore rules. Claims include `dostExplorePlusUntil` (with the temporary `dostPremiumUntil` alias), `dostExplorePlusLifetime`, `dostCipherUntil`, and `dostShieldUntil`/`dostShieldSeats`. The bundle sets Explore Plus and Cipher. The app acknowledges only server-verified purchases; pending purchases do not grant access.
 
 `premium_intro_grant.php` remains separate from Play. Configure `DOST_INTRO_PREMIUM_ENABLED=true`, `DOST_INTRO_PREMIUM_DAYS=90`, and `DOST_PLAN_EXPLORE_PLUS_ENABLED=true` only after owner approval. Grants are one-time, independently age-checked, and use Firebase Auth `createdAt` plus the optional launch timestamp as described below. An expired or missing adult-eligibility claim is rejected.
 

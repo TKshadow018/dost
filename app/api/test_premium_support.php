@@ -23,8 +23,8 @@ $productPlans = array(
     'dost_explore_plus' => array('explore_plus', 'subscription', true),
     'dost_explore_plus_lifetime' => array('explore_plus', 'inapp', true),
     'dost_cipher' => array('cipher', 'subscription', false),
-    'dost_shield_team' => array('shield_team', 'subscription', false),
-    'dost_shield_business' => array('shield_business', 'subscription', false),
+    'dost_shield_team' => array('shield_team', 'subscription', true),
+    'dost_shield_business' => array('shield_business', 'subscription', true),
     'dost_plus' => array('plus_bundle', 'subscription', true)
 );
 foreach ($productPlans as $productId => $expected) {
@@ -67,16 +67,21 @@ dost_premium_test_assert(
     'A canceled subscription remains active through its verified expiry.'
 );
 dost_premium_test_assert(
-    dost_premium_has_adult_eligibility($adultClaims, $now)
+    dost_premium_user_adult_eligible($adultClaims, $now)
         && dost_premium_claims(array('dostAgeCohort' => 'teen'), 'dost_explore_plus', $entitlement, $now) === false
-        && !dost_premium_has_adult_eligibility(array(
+        && !dost_premium_user_adult_eligible(array(
             'dostAgeEligible' => true,
             'dostAgeEligibleUntil' => $now + 3600,
             'dostAgeCohort' => 'teen'
         ), $now)
-        && !dost_premium_has_adult_eligibility(array(
+        && !dost_premium_user_adult_eligible(array(
             'dostAgeEligible' => true,
-            'dostAgeEligibleUntil' => $now
+            'dostAgeEligibleUntil' => $now + 3600
+        ), $now)
+        && !dost_premium_user_adult_eligible(array(
+            'dostAgeEligible' => true,
+            'dostAgeEligibleUntil' => $now,
+            'dostAgeCohort' => 'adult'
         ), $now),
     'Only current adult eligibility authorizes age-restricted plans.'
 );
@@ -108,7 +113,12 @@ $cipherPurchase = $subscription;
 $cipherPurchase['lineItems'][0]['productId'] = 'dost_cipher';
 $cipherPurchase['lineItems'][0]['offerDetails']['basePlanId'] = 'annual';
 $cipherEntitlement = dost_premium_purchase_entitlement('dost_cipher', 'subscription', $cipherPurchase, $uid, $now);
-$teenCipherClaims = dost_premium_claims(array(), 'dost_cipher', $cipherEntitlement, $now);
+$teenClaims = array(
+    'dostAgeCohort' => 'teen',
+    'dostAgeEligible' => true,
+    'dostAgeEligibleUntil' => $now + 3600
+);
+$teenCipherClaims = dost_premium_claims($teenClaims, 'dost_cipher', $cipherEntitlement, $now);
 dost_premium_test_assert(
     is_array($teenCipherClaims) && $teenCipherClaims['dostCipherUntil'] === $now + 3600,
     'Cipher grants to a teen account without adult eligibility.'
@@ -116,18 +126,6 @@ dost_premium_test_assert(
 $teamPurchase = $subscription;
 $teamPurchase['lineItems'][0]['productId'] = 'dost_shield_team';
 $teamEntitlement = dost_premium_purchase_entitlement('dost_shield_team', 'subscription', $teamPurchase, $uid, $now);
-$teenShieldClaims = dost_premium_claims(
-    array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => $now + 3600, 'dostAgeCohort' => 'teen'),
-    'dost_shield_team',
-    $teamEntitlement,
-    $now,
-    'teen-shield-token'
-);
-dost_premium_test_assert(
-    is_array($teenShieldClaims) && $teenShieldClaims['dostShieldSeats'] === 10,
-    'Shield subscription claims are not adult-gated; org creation remains separately adult-gated.'
-);
-$teamClaims = dost_premium_claims($adultClaims, 'dost_shield_team', $teamEntitlement, $now, 'team-token');
 $businessPurchase = $subscription;
 $businessPurchase['lineItems'][0]['productId'] = 'dost_shield_business';
 $businessEntitlement = dost_premium_purchase_entitlement(
@@ -137,6 +135,33 @@ $businessEntitlement = dost_premium_purchase_entitlement(
     $uid,
     $now
 );
+$teenShieldClaims = dost_premium_claims(
+    $teenClaims,
+    'dost_shield_team',
+    $teamEntitlement,
+    $now,
+    'teen-shield-token'
+);
+dost_premium_test_assert(
+    $teenShieldClaims === false,
+    'Teen accounts cannot receive Shield Team entitlements.'
+);
+$businessTeenClaims = dost_premium_claims(
+    $teenClaims,
+    'dost_shield_business',
+    $businessEntitlement,
+    $now,
+    'teen-business-token'
+);
+$bundlePurchase = $subscription;
+$bundlePurchase['lineItems'][0]['productId'] = 'dost_plus';
+$bundleEntitlement = dost_premium_purchase_entitlement('dost_plus', 'subscription', $bundlePurchase, $uid, $now);
+$teenBundleClaims = dost_premium_claims($teenClaims, 'dost_plus', $bundleEntitlement, $now, 'teen-bundle-token');
+dost_premium_test_assert(
+    $businessTeenClaims === false && $teenBundleClaims === false,
+    'Teen accounts cannot receive Shield Business or Dost Plus entitlements.'
+);
+$teamClaims = dost_premium_claims($adultClaims, 'dost_shield_team', $teamEntitlement, $now, 'team-token');
 $businessClaims = dost_premium_claims($teamClaims, 'dost_shield_business', $businessEntitlement, $now, 'business-token');
 $downgradedClaims = dost_premium_claims($businessClaims, 'dost_shield_team', $teamEntitlement, $now, 'team-token');
 dost_premium_test_assert(
@@ -243,9 +268,39 @@ $claimLock = dost_firebase_claim_lock($uid);
 dost_premium_test_assert(is_resource($claimLock), 'Custom-claim updates acquire a per-user lock.');
 dost_firebase_claim_unlock($claimLock);
 dost_premium_test_assert(dost_firebase_claim_lock('invalid uid') === false, 'Custom-claim locks reject invalid user identifiers.');
+dost_premium_test_assert(
+    dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'adult',
+        'dostAgeEligible' => true,
+        'dostAgeEligibleUntil' => $now + 60
+    ), $now),
+    'Explore Plus eligibility requires a current server-issued adult eligibility claim.'
+);
+dost_premium_test_assert(
+    !dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'teen',
+        'dostAgeEligible' => true,
+        'dostAgeEligibleUntil' => $now + 60
+    ), $now)
+    && !dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'adult',
+        'dostAgeEligible' => false,
+        'dostAgeEligibleUntil' => $now + 60
+    ), $now)
+    && !dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'adult',
+        'dostAgeEligible' => true,
+        'dostAgeEligibleUntil' => $now
+    ), $now),
+    'Teen, unverified adult, and expired eligibility claims must not activate Explore Plus.'
+);
 
 $claims = dost_premium_claims(
-    array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => $now + 21600),
+    array(
+        'dostAgeCohort' => 'adult',
+        'dostAgeEligible' => true,
+        'dostAgeEligibleUntil' => $now + 21600
+    ),
     'dost_explore_plus',
     $entitlement,
     $now
@@ -307,6 +362,7 @@ dost_premium_test_assert(
     'An older account without a configured launch time receives the full window from its first grant.'
 );
 $existingPaidClaims = array(
+    'dostAgeCohort' => 'adult',
     'dostAgeEligible' => true,
     'dostAgeEligibleUntil' => $now + 21600,
     'dostPremiumUntil' => $now + (120 * 86400),

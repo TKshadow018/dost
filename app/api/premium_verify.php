@@ -224,7 +224,7 @@ if (!is_array($customClaims)) {
     error_log('Dost Premium custom claims are malformed.');
     dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
 }
-if (!empty($product['adult']) && !dost_premium_has_adult_eligibility($customClaims, time())) {
+if (!empty($product['adult']) && !dost_premium_user_adult_eligible($customClaims, time())) {
     if (!dost_premium_store_purchase_owner(
         $request['purchase_token'],
         $request['uid'],

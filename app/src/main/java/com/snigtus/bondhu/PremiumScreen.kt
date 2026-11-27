@@ -109,9 +109,9 @@ internal fun PremiumScreen(
                         )
                         Text(premiumText(
                             language,
-                            "Choose an optional plan for each mode. Explore Plus and Dost Plus require verified 18+ eligibility. Creating a Shield organization requires an adult owner; invited members may be 13 or older. Cipher is available to teens.",
-                            "প্রতিটি মোডের জন্য ঐচ্ছিক প্ল্যান বেছে নিন। Explore Plus ও Dost Plus-এর জন্য যাচাইকৃত ১৮+ যোগ্যতা দরকার। Shield সংস্থা তৈরি করতে মালিককে প্রাপ্তবয়স্ক হতে হবে; আমন্ত্রিত সদস্যদের বয়স ১৩ বা তার বেশি হতে পারে। কিশোরদের জন্য Cipher উপলভ্য।",
-                            "हर मोड के लिए वैकल्पिक प्लान चुनें। Explore Plus और Dost Plus के लिए सत्यापित 18+ पात्रता चाहिए। Shield संगठन बनाने के लिए मालिक का वयस्क होना ज़रूरी है; आमंत्रित सदस्य 13 वर्ष या उससे अधिक आयु के हो सकते हैं। Cipher किशोरों के लिए उपलब्ध है।"
+                            "Choose an optional plan for each mode. Explore Plus, Dost Plus, and Shield owner plans require verified 18+ eligibility. Invited Shield members may be 13 or older. Cipher is available to teens.",
+                            "প্রতিটি মোডের জন্য ঐচ্ছিক প্ল্যান বেছে নিন। Explore Plus, Dost Plus এবং Shield মালিকের প্ল্যানের জন্য যাচাইকৃত ১৮+ যোগ্যতা দরকার। আমন্ত্রিত Shield সদস্যদের বয়স ১৩ বা তার বেশি হতে পারে। কিশোরদের জন্য Cipher উপলভ্য।",
+                            "हर मोड के लिए वैकल्पिक प्लान चुनें। Explore Plus, Dost Plus और Shield मालिक प्लान के लिए सत्यापित 18+ पात्रता चाहिए। आमंत्रित Shield सदस्य 13 वर्ष या उससे अधिक आयु के हो सकते हैं। Cipher किशोरों के लिए उपलब्ध है।"
                         ))
                     }
                 }

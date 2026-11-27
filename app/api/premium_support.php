@@ -8,8 +8,8 @@ function dost_premium_product($productId)
         'dost_explore_plus' => array('plan' => 'explore_plus', 'type' => 'subscription', 'adult' => true),
         'dost_explore_plus_lifetime' => array('plan' => 'explore_plus', 'type' => 'inapp', 'adult' => true),
         'dost_cipher' => array('plan' => 'cipher', 'type' => 'subscription', 'adult' => false),
-        'dost_shield_team' => array('plan' => 'shield_team', 'type' => 'subscription', 'adult' => false),
-        'dost_shield_business' => array('plan' => 'shield_business', 'type' => 'subscription', 'adult' => false),
+        'dost_shield_team' => array('plan' => 'shield_team', 'type' => 'subscription', 'adult' => true),
+        'dost_shield_business' => array('plan' => 'shield_business', 'type' => 'subscription', 'adult' => true),
         'dost_plus' => array('plan' => 'plus_bundle', 'type' => 'subscription', 'adult' => true)
     );
     return isset($products[$productId]) ? $products[$productId] : false;
@@ -43,17 +43,19 @@ function dost_premium_plan_enabled($plan, $config)
     return $enabled;
 }
 
-function dost_premium_has_adult_eligibility($claims, $now)
+function dost_premium_user_adult_eligible($claims, $now)
 {
-    if (!is_array($claims) || !is_int($now)
-        || (isset($claims['dostAgeCohort']) && $claims['dostAgeCohort'] !== 'adult')
-    ) {
-        return false;
-    }
-    return !empty($claims['dostAgeEligible'])
-        && isset($claims['dostAgeEligibleUntil'])
-        && is_numeric($claims['dostAgeEligibleUntil'])
-        && (int) $claims['dostAgeEligibleUntil'] > $now;
+    return is_array($claims)
+        && is_int($now)
+        && isset(
+            $claims['dostAgeCohort'],
+            $claims['dostAgeEligible'],
+            $claims['dostAgeEligibleUntil']
+        )
+        && $claims['dostAgeCohort'] === 'adult'
+        && $claims['dostAgeEligible'] === true
+        && is_int($claims['dostAgeEligibleUntil'])
+        && $claims['dostAgeEligibleUntil'] > $now;
 }
 
 function dost_premium_obfuscated_account_id($uid)
@@ -156,7 +158,7 @@ function dost_premium_claims(
         || !is_array($product) || !isset($entitlement['plan'])
         || $entitlement['plan'] !== $product['plan']
         || (!empty($product['adult']) && $requireAdult
-            && !dost_premium_has_adult_eligibility($existing, $now))
+            && !dost_premium_user_adult_eligible($existing, $now))
     ) {
         return false;
     }
@@ -448,7 +450,7 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
     if (!is_array($existing) || !is_int($createdAt) || $createdAt <= 0
         || !is_int($days) || $days < 1 || $days > 3650
         || !is_int($now) || ($launchAt !== null && !is_int($launchAt))
-        || !dost_premium_has_adult_eligibility($existing, $now)
+        || !dost_premium_user_adult_eligible($existing, $now)
     ) {
         return false;
     }
