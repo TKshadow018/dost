@@ -46,12 +46,35 @@ class FirebaseAuthRepository(context: Context) {
         return premiumClaimIsActive(claims, System.currentTimeMillis() / 1000)
     }
 
+    internal suspend fun hasPlanEntitlement(productId: String, forceRefresh: Boolean = false): Boolean {
+        val user = requireAuth().currentUser ?: return false
+        val claims = user.getIdToken(forceRefresh).awaitTask().claims
+        val now = System.currentTimeMillis() / 1000
+        return when (productId) {
+            "dost_cipher" -> planClaimIsActive(claims, "cipher", now)
+            "dost_shield_team", "dost_shield_business" -> planClaimIsActive(claims, "shield", now)
+            "dost_plus" -> premiumClaimIsActive(claims, now) && planClaimIsActive(claims, "cipher", now)
+            "dost_explore_plus", "dost_explore_plus_lifetime" -> premiumClaimIsActive(claims, now)
+            else -> false
+        }
+    }
+
+    internal suspend fun hasAdultEligibility(): Boolean {
+        val user = auth?.currentUser ?: return false
+        val claims = user.getIdToken(false).awaitTask().claims
+        val now = System.currentTimeMillis() / 1000
+        val expiry = (claims[AGE_ELIGIBILITY_EXPIRY_CLAIM] as? Number)?.toLong() ?: return false
+        return claims[AGE_ELIGIBILITY_CLAIM] == true
+            && claims["dostAgeCohort"] != "teen"
+            && expiry > now
+    }
+
     internal suspend fun premiumEntitlement(forceRefresh: Boolean = false): PremiumEntitlement {
         val user = requireAuth().currentUser
             ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
         val claims = user.getIdToken(forceRefresh).awaitTask().claims
-        val isLifetime = claims["dostPremiumLifetime"] == true
-        val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong()
+        val isLifetime = claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true
+        val expiresAt = ((claims["dostExplorePlusUntil"] ?: claims["dostPremiumUntil"]) as? Number)?.toLong()
         return PremiumEntitlement(
             isActive = premiumClaimIsActive(claims, System.currentTimeMillis() / 1000),
             isLifetime = isLifetime,

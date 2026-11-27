@@ -79,6 +79,13 @@ if (preg_match('/\A[1-9][0-9]{0,3}\z/', $daysSetting) !== 1 || (int) $daysSettin
     dost_premium_intro_respond(503, array('error' => 'Premium intro grants are not configured'));
 }
 $days = (int) $daysSetting;
+$explorePlusEnabled = strtolower($setting('DOST_PLAN_EXPLORE_PLUS_ENABLED', 'plan_explore_plus_enabled'));
+if (!in_array($explorePlusEnabled, array('true', 'false'), true)) {
+    dost_premium_intro_respond(503, array('error' => 'Explore Plus is not configured'));
+}
+if ($explorePlusEnabled !== 'true') {
+    dost_premium_intro_respond(503, array('error' => 'Explore Plus is not enabled'));
+}
 $launchAtSetting = $setting('DOST_INTRO_PREMIUM_LAUNCH_AT', 'intro_premium_launch_at');
 $launchAt = null;
 if ($launchAtSetting !== '') {
@@ -185,6 +192,10 @@ if (!is_array($customClaims)) {
     dost_premium_intro_respond(503, array('error' => 'Premium intro grants are unavailable'));
 }
 $now = time();
+if (!dost_premium_has_adult_eligibility($customClaims, $now)) {
+    dost_firebase_claim_unlock($claimLock);
+    dost_premium_intro_respond(403, array('error' => 'Explore Plus requires verified adult eligibility'));
+}
 if (empty($customClaims['dostPremiumIntroGranted'])) {
     $updatedClaims = dost_premium_intro_claims($customClaims, $createdAt, $days, $now, $launchAt);
     $customAttributes = is_array($updatedClaims)
