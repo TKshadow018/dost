@@ -58,6 +58,10 @@ Debug builds can compile without `google-services.json`, but Firebase authentica
 
 The app's Play Age Signals gate and Play Console restriction are separate from the server claim. A sideloaded debug build normally cannot satisfy Play licensing checks; verify age eligibility with a Play-installed build and a registered Play license tester.
 
+For QA on a debug or sideloaded build, the server-only tester allowlist is disabled by default. Set `DOST_AGE_ELIGIBILITY_TEST_MODE=true` (or `age_eligibility_test_mode => true` in server-only `config.php`) and set `DOST_AGE_ELIGIBILITY_TEST_UIDS` to a comma-separated list of Firebase UIDs (or `age_eligibility_test_uids` to an array). Only the exact value `true` enables test mode, and an empty allowlist enables nobody. For allowlisted UIDs only, the server may accept `UNRECOGNIZED_VERSION` and `UNLICENSED`; Firebase token/UID verification, the Google Integrity decode call, package name, request hash and nonce, fresh timestamp, and `MEETS_DEVICE_INTEGRITY` remain required. Device integrity is not relaxed. Successful checks still issue the normal six-hour claim. Rejections are logged by failed check without tokens or raw payloads, and only allowlisted testers receive a non-sensitive reason code; production callers keep the generic error. Never add a client-side debug bypass.
+
+Play Console [Play Integrity API test responses](https://developer.android.com/google/play/integrity/setup#test) and license testers can exercise verdict combinations on Play-installed builds (for example, Internal testing). They do not reliably make a debug-key sideloaded APK `PLAY_RECOGNIZED`, because the signing certificate differs from Play App Signing. Use the server allowlist for People testing on debug APKs, and a Play-installed build for the production Integrity path.
+
 ## 3. Deploy the Hostinger backend
 
 ### Upload runtime files
@@ -130,7 +134,7 @@ Confirm that the file exists and check its size:
 Get-Item app\build\outputs\apk\debug\app-debug.apk | Select-Object FullName, Length
 ```
 
-Install this APK on a test device to check ordinary sign-in, permissions, chat, and calling flows. Debug builds are signed with the Android debug key and are not a substitute for testing Play Integrity from a Play-installed build.
+Install this APK on a test device to check ordinary sign-in, permissions, chat, and calling flows. Debug builds are signed with the Android debug key and are not a substitute for testing Play Integrity from a Play-installed build. To test People on this APK, configure the server-only tester allowlist described above; the app still calls the server and never skips Integrity. Play Console test responses are for Play-installed builds and do not reliably grant `PLAY_RECOGNIZED` to debug-key sideloads.
 
 ## 5. Create a signed release APK
 

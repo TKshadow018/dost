@@ -104,10 +104,22 @@ if ($userLookup === false) {
 }
 if ($userLookup['status'] !== 200 || !isset($userLookup['body']['users'][0]['localId'])
     || !is_string($userLookup['body']['users'][0]['localId'])
-    || !hash_equals($request['uid'], $userLookup['body']['users'][0]['localId'])
+    || !dost_age_authenticated_uid_matches($request['uid'], $userLookup['body']['users'][0]['localId'])
 ) {
     dost_age_respond(401, array('error' => 'Sign-in required'));
 }
+
+$testModeEnvironment = getenv('DOST_AGE_ELIGIBILITY_TEST_MODE');
+$testMode = dost_age_test_mode_enabled(
+    $testModeEnvironment,
+    isset($config['age_eligibility_test_mode']) ? $config['age_eligibility_test_mode'] : false
+);
+$testUidsEnvironment = getenv('DOST_AGE_ELIGIBILITY_TEST_UIDS');
+$testUids = dost_age_test_uids(
+    $testUidsEnvironment,
+    isset($config['age_eligibility_test_uids']) ? $config['age_eligibility_test_uids'] : array()
+);
+$allowlistedTester = $testMode && dost_age_test_uid_is_allowlisted($request['uid'], $testUids);
 
 $serviceToken = dost_age_service_account_token($credentials);
 if (!is_string($serviceToken)) {
@@ -123,14 +135,26 @@ if ($integrityResponse === false || $integrityResponse['status'] !== 200) {
     error_log('Dost age eligibility Play Integrity decode failed.');
     dost_age_respond(503, array('error' => 'Age eligibility service is unavailable'));
 }
+$integrityFailureField = '';
 if (!dost_age_integrity_allows(
     $integrityResponse['body'],
     $request['uid'],
     $request['eligible'],
     $request['nonce'],
-    time()
+    time(),
+    $allowlistedTester,
+    $integrityFailureField
 )) {
-    dost_age_respond(403, array('error' => 'Play integrity verification failed'));
+    error_log(
+        'Dost age eligibility integrity failure field=' . $integrityFailureField
+        . ' tester=' . ($allowlistedTester ? 'yes' : 'no')
+        . ' uid=' . substr(hash('sha256', $request['uid']), 0, 12)
+    );
+    $failure = array('error' => 'Play integrity verification failed');
+    if ($allowlistedTester) {
+        $failure['reason'] = dost_age_integrity_reason_code($integrityFailureField, $integrityResponse['body']);
+    }
+    dost_age_respond(403, $failure);
 }
 
 $adminLookup = dost_age_http_json(
