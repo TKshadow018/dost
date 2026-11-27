@@ -48,15 +48,13 @@ if (!is_string($serviceToken)) {
     error_log('Dost People message push service account token exchange failed.');
     dost_call_respond(503, array('error' => 'People messaging is unavailable'));
 }
-$chatResponse = dost_call_firestore_get(
-    $settings['project_id'],
-    $serviceToken,
-    'peopleChats/' . $request['chat_id']
-);
+$isCipher = isset($request['cipher']) && $request['cipher'] === true;
+$chatPath = $isCipher ? 'cipherChats/' . $request['chat_id'] : 'peopleChats/' . $request['chat_id'];
+$chatResponse = dost_call_firestore_get($settings['project_id'], $serviceToken, $chatPath);
 $messageResponse = dost_call_firestore_get(
     $settings['project_id'],
     $serviceToken,
-    'peopleChats/' . $request['chat_id'] . '/messages/' . $request['message_id']
+    $chatPath . '/messages/' . $request['message_id']
 );
 if ($chatResponse === false || $messageResponse === false) {
     error_log('Dost People message push could not read the conversation or message.');
@@ -71,7 +69,10 @@ if ($chatResponse['status'] !== 200 || $messageResponse['status'] !== 200) {
 }
 $chat = dost_call_document_fields($chatResponse);
 $messageFields = dost_call_document_fields($messageResponse);
-if (!dost_message_push_context_is_valid($chat, $messageFields, $uid)) {
+$validMessage = $isCipher
+    ? dost_cipher_message_push_context_is_valid($chat, $messageFields, $uid, $request['chat_id'])
+    : dost_message_push_context_is_valid($chat, $messageFields, $uid);
+if (!$validMessage) {
     dost_call_respond(403, array('error' => 'This message is not available'));
 }
 $members = $chat['members'];
@@ -81,6 +82,32 @@ if (!dost_call_user_is_eligible($settings['project_id'], $serviceToken, $uid, $n
     || !dost_call_user_is_eligible($settings['project_id'], $serviceToken, $peerUid, $now)
 ) {
     dost_call_respond(403, array('error' => 'This message is not available'));
+}
+if ($isCipher) {
+    if ($settings['cipher_enabled'] !== 'true') {
+        dost_call_respond(403, array('error' => 'Cipher messaging is not enabled'));
+    }
+    $cipherConfigResponse = dost_call_firestore_get($settings['project_id'], $serviceToken, 'cipherConfig/cipher');
+    $sourceChatResponse = dost_call_firestore_get(
+        $settings['project_id'],
+        $serviceToken,
+        'peopleChats/' . $request['chat_id']
+    );
+    if ($cipherConfigResponse === false || $sourceChatResponse === false) {
+        error_log('Dost Cipher message push could not validate feature or source chat.');
+        dost_call_respond(503, array('error' => 'Cipher messaging is unavailable'));
+    }
+    if ($cipherConfigResponse['status'] !== 200 || $sourceChatResponse['status'] !== 200) {
+        dost_call_respond(403, array('error' => 'This message is not available'));
+    }
+    $cipherConfig = dost_call_document_fields($cipherConfigResponse);
+    $sourceChat = dost_call_document_fields($sourceChatResponse);
+    if (($cipherConfig['enabled'] ?? false) !== true
+        || !isset($sourceChat['members'])
+        || $sourceChat['members'] !== $members
+    ) {
+        dost_call_respond(403, array('error' => 'This message is not available'));
+    }
 }
 foreach (array(
     'peopleBlocks/' . $uid . '/blockedUsers/' . $peerUid,
@@ -136,7 +163,7 @@ foreach ($documents as $document) {
             'message' => array(
                 'token' => $token,
                 'data' => array(
-                    'type' => 'people_message',
+                    'type' => $isCipher ? 'cipher_message' : 'people_message',
                     'chat_id' => $request['chat_id'],
                     'message_id' => $request['message_id'],
                     'sender_uid' => $uid,

@@ -100,7 +100,7 @@ internal fun PremiumScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            if (state.isPremium) {
+                            if (state.isPremium || state.isCipher) {
                                 premiumText(language, "Premium is active", "প্রিমিয়াম চালু আছে", "प्रीमियम सक्रिय है")
                             } else {
                                 premiumText(language, "More room for real and AI friendships", "বাস্তব ও AI বন্ধুত্বের জন্য আরও সুযোগ", "असली और AI दोस्ती के लिए अधिक सुविधाएँ")
@@ -113,6 +113,13 @@ internal fun PremiumScreen(
                             "সীমাহীন AI বন্ধু ও People লাইক, প্রতিদিন ৩০ মিনিটের একটি প্রোফাইল বুস্ট, চ্যাট থিম এবং AI বন্ধুকে আরও কাস্টমাইজ করার সুবিধা।",
                             "असीमित AI दोस्त और People लाइक, रोज़ एक 30-मिनट प्रोफ़ाइल बूस्ट, चैट थीम और AI दोस्त को अधिक कस्टमाइज़ करने की सुविधा।"
                         ))
+                        if (BuildConfig.DOST_CIPHER_ENABLED) {
+                            Text(if (state.isCipher) {
+                                premiumText(language, "Cipher subscription is active. Only the chat creator needs it.", "Cipher সাবস্ক্রিপশন চালু আছে। শুধু চ্যাটের নির্মাতার এটি দরকার।", "Cipher सदस्यता सक्रिय है। केवल चैट बनाने वाले को इसकी आवश्यकता है।")
+                            } else {
+                                premiumText(language, "Cipher encrypts chat messages on your device. The creator pays; invited participants join for free.", "Cipher আপনার ডিভাইসে বার্তা এনক্রিপ্ট করে। নির্মাতা মূল্য দেন; আমন্ত্রিতরা বিনামূল্যে যোগ দেন।", "Cipher आपके डिवाइस पर संदेश एन्क्रिप्ट करता है। निर्माता भुगतान करता है; आमंत्रित लोग मुफ़्त में शामिल होते हैं।")
+                            })
+                        }
                     }
                 }
             }
@@ -189,6 +196,8 @@ private fun PremiumPlanCard(
     val title = when (product.productId) {
         "dost_premium_monthly" -> premiumText(language, "Monthly", "মাসিক", "मासिक")
         "dost_premium_annual" -> premiumText(language, "Annual", "বার্ষিক", "वार्षिक")
+        "dost_cipher_monthly" -> premiumText(language, "Cipher monthly", "Cipher মাসিক", "Cipher मासिक")
+        "dost_cipher_annual" -> premiumText(language, "Cipher annual", "Cipher বার্ষিক", "Cipher वार्षिक")
         else -> premiumText(language, "Lifetime", "লাইফটাইম", "लाइफटाइम")
     }
     val price = if (product.productType == BillingClient.ProductType.SUBS) {

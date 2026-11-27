@@ -68,6 +68,20 @@ $setting = function ($environmentKey, $configKey) use ($config) {
     }
     return isset($config[$configKey]) && is_string($config[$configKey]) ? trim($config[$configKey]) : '';
 };
+$cipherPurchase = dost_premium_is_cipher_product($request['product_id']);
+if ($cipherPurchase) {
+    $cipherEnabled = strtolower($setting('DOST_CIPHER_ENABLED', 'cipher_enabled'));
+    if ($cipherEnabled === '') {
+        $cipherEnabled = 'false';
+    }
+    if (!in_array($cipherEnabled, array('true', 'false'), true)) {
+        error_log('Dost Cipher enabled setting must be true or false.');
+        dost_premium_respond(503, array('error' => 'Cipher purchase verification is not configured'));
+    }
+    if ($cipherEnabled !== 'true') {
+        dost_premium_respond(503, array('error' => 'Cipher purchases are not enabled'));
+    }
+}
 $projectId = $setting('DOST_FIREBASE_PROJECT_ID', 'firebase_project_id');
 $apiKey = $setting('DOST_FIREBASE_WEB_API_KEY', 'firebase_web_api_key');
 $serviceAccountPath = $setting('DOST_PREMIUM_SERVICE_ACCOUNT_PATH', 'premium_service_account_path');
@@ -208,9 +222,11 @@ if ($claimUpdate === false || $claimUpdate['status'] !== 200) {
 dost_firebase_claim_unlock($claimLock);
 
 dost_premium_respond(200, array(
-    'premium' => true,
+    'premium' => !$cipherPurchase,
+    'cipher' => $cipherPurchase,
     'source' => 'play',
     'lifetime' => !empty($updatedClaims['dostPremiumLifetime']),
     'premium_until' => isset($updatedClaims['dostPremiumUntil']) ? (int) $updatedClaims['dostPremiumUntil'] : null,
+    'cipher_until' => isset($updatedClaims['dostCipherUntil']) ? (int) $updatedClaims['dostCipherUntil'] : null,
     'intro_granted' => !empty($updatedClaims['dostPremiumIntroGranted'])
 ));

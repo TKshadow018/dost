@@ -58,9 +58,14 @@ android {
     if (!dostSuperSecureEnabledValue.equalsIgnoreCase("true") && !dostSuperSecureEnabledValue.equalsIgnoreCase("false")) {
         throw new GradleException("DOST_SUPER_SECURE_ENABLED must be either true or false.")
     }
+    def dostCipherEnabledValue = System.getenv("DOST_CIPHER_ENABLED") ?: providers.gradleProperty("DOST_CIPHER_ENABLED").orNull ?: "false"
+    if (!dostCipherEnabledValue.equalsIgnoreCase("true") && !dostCipherEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_CIPHER_ENABLED must be either true or false.")
+    }
     def dostPeopleEnabled = dostPeopleEnabledValue.equalsIgnoreCase("true")
     def dostPremiumEnabled = dostPremiumEnabledValue.equalsIgnoreCase("true")
     def dostSuperSecureEnabled = dostSuperSecureEnabledValue.equalsIgnoreCase("true")
+    def dostCipherEnabled = dostCipherEnabledValue.equalsIgnoreCase("true")
     def escapedDostAppCredentialSecret = dostAppCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")
 
     signingConfigs {
@@ -84,6 +89,7 @@ android {
         buildConfigField "boolean", "DOST_PEOPLE_ENABLED", dostPeopleEnabled.toString()
         buildConfigField "boolean", "DOST_PREMIUM_ENABLED", dostPremiumEnabled.toString()
         buildConfigField "boolean", "DOST_SUPER_SECURE_ENABLED", dostSuperSecureEnabled.toString()
+        buildConfigField "boolean", "DOST_CIPHER_ENABLED", dostCipherEnabled.toString()
         buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseApiKey)
         buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseAppId)
         buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseProjectId)
@@ -139,6 +145,8 @@ dependencies {
     implementation libs.play.age.signals
     implementation libs.play.integrity
     implementation libs.play.billing
+    implementation libs.tink.android
+    implementation libs.bouncycastle
     testImplementation libs.junit
     testImplementation libs.kotlinx.coroutines.test
     // Unit tests run against the Android SDK stubs, whose org.json throws. Use the real parser in tests only.

@@ -1869,7 +1869,8 @@ internal fun PeopleChatScreen(
     language: AppLanguage,
     uid: String,
     conversation: SocialConversation,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenCipher: () -> Unit
 ) {
     val context = LocalContext.current
     val repository = remember(context) { PeopleRepository(context) }
@@ -2196,6 +2197,11 @@ internal fun PeopleChatScreen(
                 },
                 navigationIcon = { DostBackButton(language, onBack) },
                 actions = {
+                    if (BuildConfig.DOST_CIPHER_ENABLED) {
+                        TextButton(onClick = onOpenCipher) {
+                            Text("Cipher")
+                        }
+                    }
                     IconButton(onClick = {
                         context.startActivity(
                             Intent(context, PeopleCallActivity::class.java).apply {

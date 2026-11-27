@@ -86,6 +86,27 @@ dost_premium_test_assert(
         && $claims['dostPremiumUntil'] === $now + 3600,
     'Premium claims must preserve unrelated Firebase custom claims.'
 );
+$cipherEntitlement = array('lifetime' => false, 'expires_at' => $now + 7200);
+$cipherClaims = dost_premium_claims(
+    array('dostAgeEligible' => true, 'dostPremiumUntil' => $now + 1800),
+    'dost_cipher_monthly',
+    $cipherEntitlement,
+    $now
+);
+dost_premium_test_assert(
+    dost_premium_product_type('dost_cipher_annual') === 'subscription'
+        && is_array($cipherClaims)
+        && $cipherClaims['dostCipherUntil'] === $now + 7200
+        && $cipherClaims['dostCipherProductId'] === 'dost_cipher_monthly'
+        && $cipherClaims['dostPremiumUntil'] === $now + 1800
+        && $cipherClaims['dostAgeEligible'] === true,
+    'Cipher purchases grant a separate Cipher claim without changing other entitlements.'
+);
+dost_premium_test_assert(
+    dost_premium_claims(array(), 'dost_cipher_monthly', array('lifetime' => false, 'expires_at' => $now), $now) === false
+        && dost_premium_claims(array(), 'dost_cipher_monthly', array('lifetime' => true, 'expires_at' => null), $now) === false,
+    'Cipher claims require an active subscription and do not accept lifetime purchases.'
+);
 $introDays = 90;
 $launchAt = $now - 86400;
 $newAccountCreatedAt = $now - 3600;

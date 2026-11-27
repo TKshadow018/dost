@@ -46,6 +46,12 @@ class FirebaseAuthRepository(context: Context) {
         return premiumClaimIsActive(claims, System.currentTimeMillis() / 1000)
     }
 
+    suspend fun hasCipherEntitlement(forceRefresh: Boolean = false): Boolean {
+        val user = requireAuth().currentUser ?: return false
+        val claims = user.getIdToken(forceRefresh).awaitTask().claims
+        return cipherClaimIsActive(claims, System.currentTimeMillis() / 1000)
+    }
+
     internal suspend fun premiumEntitlement(forceRefresh: Boolean = false): PremiumEntitlement {
         val user = requireAuth().currentUser
             ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
@@ -57,6 +63,15 @@ class FirebaseAuthRepository(context: Context) {
             isLifetime = isLifetime,
             expiresAtEpochSeconds = expiresAt
         )
+    }
+
+    internal fun cipherClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
+        val expiresAt = when (val claim = claims["dostCipherUntil"]) {
+            is Int -> claim.toLong()
+            is Long -> claim
+            else -> return false
+        }
+        return expiresAt > nowEpochSeconds
     }
 
     suspend fun ensureAdultEligibility() {

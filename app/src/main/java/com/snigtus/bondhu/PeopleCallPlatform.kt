@@ -318,7 +318,7 @@ internal object PeopleMessageNotifications {
 class PeopleCallMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
-        if (data["type"] == "people_message") {
+        if (data["type"] == "people_message" || data["type"] == "cipher_message") {
             showMessageNotification(data)
             return
         }

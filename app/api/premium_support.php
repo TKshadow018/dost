@@ -7,9 +7,16 @@ function dost_premium_product_type($productId)
     $products = array(
         'dost_premium_monthly' => 'subscription',
         'dost_premium_annual' => 'subscription',
-        'dost_premium_lifetime' => 'lifetime'
+        'dost_premium_lifetime' => 'lifetime',
+        'dost_cipher_monthly' => 'subscription',
+        'dost_cipher_annual' => 'subscription'
     );
     return isset($products[$productId]) ? $products[$productId] : false;
+}
+
+function dost_premium_is_cipher_product($productId)
+{
+    return is_string($productId) && in_array($productId, array('dost_cipher_monthly', 'dost_cipher_annual'), true);
 }
 
 function dost_premium_obfuscated_account_id($uid)
@@ -85,6 +92,19 @@ function dost_premium_claims($existing, $productId, $entitlement, $now)
 {
     if (!is_array($existing) || !is_string($productId) || !is_array($entitlement) || !is_int($now)) {
         return false;
+    }
+    if (dost_premium_is_cipher_product($productId)) {
+        $newExpiry = isset($entitlement['expires_at']) ? (int) $entitlement['expires_at'] : 0;
+        $existingExpiry = isset($existing['dostCipherUntil']) && is_numeric($existing['dostCipherUntil'])
+            ? (int) $existing['dostCipherUntil']
+            : 0;
+        if (!empty($entitlement['lifetime']) || $newExpiry <= $now) {
+            return false;
+        }
+        $existing['dostCipherUntil'] = max($existingExpiry, $newExpiry);
+        $existing['dostCipherProductId'] = $productId;
+        $existing['dostCipherSource'] = 'play';
+        return $existing;
     }
     $existingExpiry = isset($existing['dostPremiumUntil']) && is_numeric($existing['dostPremiumUntil'])
         ? (int) $existing['dostPremiumUntil']
