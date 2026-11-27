@@ -329,9 +329,9 @@ test("only managers administer members, changes are audited, and removal revokes
 
   await assertFails(addSecureOrgMember("manager", "secure-a", "new-manager", "manager"));
   await assertSucceeds(addSecureOrgMember("alice", "secure-a", "carol"));
-  const carolMember = doc(secureUser("alice"), "secureOrgs/secure-a/members/carol");
-  const staleCarolAuditId = (await getDoc(carolMember)).get("auditEventId");
   const alice = secureUser("alice");
+  const carolMember = doc(alice, "secureOrgs/secure-a/members/carol");
+  const staleCarolAuditId = (await getDoc(carolMember)).get("auditEventId");
   await assertFails(
     updateDoc(doc(secureUser("bob"), "secureOrgs/secure-a/members/bob"), {
       role: "manager",
