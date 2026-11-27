@@ -36,27 +36,16 @@ internal fun PremiumScreen(
     language: AppLanguage,
     uid: String,
     isPremium: Boolean,
-    isShieldPlansOnly: Boolean = false,
     authRepository: FirebaseAuthRepository,
     onBack: () -> Unit,
     onEntitlementChanged: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
-    val purchaseFlowEnabled = if (isShieldPlansOnly) {
-        BuildConfig.DOST_SUPER_SECURE_ENABLED
-    } else {
-        BuildConfig.DOST_PREMIUM_ENABLED
-    }
-    if (!purchaseFlowEnabled) {
+    if (!BuildConfig.DOST_PREMIUM_ENABLED) {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = {
-                        Text(
-                            if (isShieldPlansOnly) "Shield plans"
-                            else premiumText(language, "Explore Plus", "এক্সপ্লোর প্লাস", "एक्सप्लोर प्लस")
-                        )
-                    },
+                    title = { Text(premiumText(language, "Dost Premium", "দোস্ত প্রিমিয়াম", "दोस्त प्रीमियम")) },
                     navigationIcon = { DostBackButton(language, onBack) }
                 )
             }
@@ -68,15 +57,12 @@ internal fun PremiumScreen(
                 Text(
                     premiumText(
                         language,
-                        if (isShieldPlansOnly) "The organisation owner pays. Members join for free."
-                        else if (isPremium) "Explore Plus is active. New purchases are temporarily disabled."
-                        else "Explore Plus purchases are not available yet. The selected benefits are being prepared.",
-                        if (isShieldPlansOnly) "সংস্থার মালিক অর্থ প্রদান করেন। সদস্যরা বিনামূল্যে যোগ দেন।"
-                        else if (isPremium) "এক্সপ্লোর প্লাস চালু আছে। নতুন কেনাকাটা সাময়িকভাবে বন্ধ।"
-                        else "এক্সপ্লোর প্লাস কেনাকাটা এখনো চালু হয়নি। নির্বাচিত সুবিধাগুলো প্রস্তুত করা হচ্ছে।",
-                        if (isShieldPlansOnly) "संगठन का मालिक भुगतान करता है। सदस्य मुफ़्त में जुड़ते हैं।"
-                        else if (isPremium) "एक्सप्लोर प्लस सक्रिय है। नई खरीदारी अस्थायी रूप से बंद है।"
-                        else "एक्सप्लोर प्लस खरीदारी अभी उपलब्ध नहीं है। चुनी गई सुविधाएँ तैयार की जा रही हैं।"
+                        if (isPremium) "Premium is active. New purchases are temporarily disabled."
+                        else "Premium purchases are not available yet. The selected benefits are being prepared.",
+                        if (isPremium) "প্রিমিয়াম চালু আছে। নতুন কেনাকাটা সাময়িকভাবে বন্ধ।"
+                        else "প্রিমিয়াম কেনাকাটা এখনো চালু হয়নি। নির্বাচিত সুবিধাগুলো প্রস্তুত করা হচ্ছে।",
+                        if (isPremium) "प्रीमियम सक्रिय है। नई खरीदारी अस्थायी रूप से बंद है।"
+                        else "प्रीमियम खरीदारी अभी उपलब्ध नहीं है। चुनी गई सुविधाएँ तैयार की जा रही हैं।"
                     ),
                     style = MaterialTheme.typography.bodyLarge
                 )
@@ -97,12 +83,7 @@ internal fun PremiumScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        if (isShieldPlansOnly) "Shield plans"
-                        else premiumText(language, "Explore Plus", "এক্সপ্লোর প্লাস", "एक्सप्लोर प्लस")
-                    )
-                },
+                title = { Text(premiumText(language, "Dost Premium", "দোস্ত প্রিমিয়াম", "दोस्त प्रीमियम")) },
                 navigationIcon = { DostBackButton(language, onBack) }
             )
         }
@@ -119,25 +100,19 @@ internal fun PremiumScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            if (isShieldPlansOnly && state.isShieldActive) {
-                                "Shield is active for this organisation owner."
-                            } else if (state.isPremium && !isShieldPlansOnly) {
-                                premiumText(language, "Premium is active", "প্রিমিয়াম চালু আছে", "प्रीमियम सक्रिय है")
-                            } else if (isShieldPlansOnly) {
-                                "Closed, admin-controlled organisation messaging, isolated from AI and analytics. Encrypted in transit and at rest by Google Cloud; not end-to-end encrypted."
+                            if (state.isPremium) {
+                                premiumText(language, "Explore Plus is active", "Explore Plus চালু আছে", "Explore Plus सक्रिय है")
                             } else {
-                                premiumText(language, "More room for Explore", "Explore-এর জন্য আরও সুবিধা", "Explore के लिए अधिक सुविधाएँ")
+                                premiumText(language, "Plans for Explore, Cipher, and Shield", "Explore, Cipher ও Shield-এর প্ল্যান", "Explore, Cipher और Shield के प्लान")
                             },
                             style = MaterialTheme.typography.titleLarge
                         )
-                        if (!isShieldPlansOnly) {
-                            Text(premiumText(
-                                language,
-                                "Unlimited AI companions and People likes, one daily 30-minute profile boost, chat themes, and expanded AI-friend customization.",
-                                "সীমাহীন AI বন্ধু ও People লাইক, প্রতিদিন ৩০ মিনিটের একটি প্রোফাইল বুস্ট, চ্যাট থিম এবং AI বন্ধুকে আরও কাস্টমাইজ করার সুবিধা।",
-                                "असीमित AI दोस्त और People लाइक, रोज़ एक 30-मिनट प्रोफ़ाइल बूस्ट, चैट थीम और AI दोस्त को अधिक कस्टमाइज़ करने की सुविधा।"
-                            ))
-                        }
+                        Text(premiumText(
+                            language,
+                            "Choose an optional plan for each mode. Explore Plus, Dost Plus, and Shield owner plans require verified 18+ eligibility. Invited Shield members may be 13 or older. Cipher is available to teens.",
+                            "প্রতিটি মোডের জন্য ঐচ্ছিক প্ল্যান বেছে নিন। Explore Plus, Dost Plus এবং Shield মালিকের প্ল্যানের জন্য যাচাইকৃত ১৮+ যোগ্যতা দরকার। আমন্ত্রিত Shield সদস্যদের বয়স ১৩ বা তার বেশি হতে পারে। কিশোরদের জন্য Cipher উপলভ্য।",
+                            "हर मोड के लिए वैकल्पिक प्लान चुनें। Explore Plus, Dost Plus और Shield मालिक प्लान के लिए सत्यापित 18+ पात्रता चाहिए। आमंत्रित Shield सदस्य 13 वर्ष या उससे अधिक आयु के हो सकते हैं। Cipher किशोरों के लिए उपलब्ध है।"
+                        ))
                     }
                 }
             }
@@ -152,22 +127,17 @@ internal fun PremiumScreen(
                 if (state.isLoading) {
                     item { Text(premiumText(language, "Loading plans…", "প্ল্যান লোড হচ্ছে…", "प्लान लोड हो रहे हैं…")) }
                 }
-                val visibleProducts = state.products.filter {
-                    if (isShieldPlansOnly) {
-                        it.productId in setOf("dost_shield_team", "dost_shield_business")
-                    } else {
-                        it.productId !in setOf("dost_shield_team", "dost_shield_business")
-                    }
-                }
-                if (visibleProducts.isNotEmpty()) {
-                    items(visibleProducts, key = { it.productId }) { product ->
+                if (state.products.isNotEmpty()) {
+                    items(state.products, key = { it.productId }) { product ->
                         PremiumPlanCard(
                             language = language,
                             product = product,
                             enabled = !state.isBusy && activity != null,
-                            onPurchase = {
+                            onPurchase = { offerToken ->
                                 val currentActivity = activity
-                                if (currentActivity != null) manager.purchase(currentActivity, product.productId)
+                                if (currentActivity != null) {
+                                    manager.purchase(currentActivity, product.productId, offerToken)
+                                }
                             }
                         )
                     }
@@ -198,12 +168,9 @@ internal fun PremiumScreen(
                     Text(
                         premiumText(
                             language,
-                            if (isShieldPlansOnly) "Subscriptions renew through Google Play until canceled. The owner pays; invited members join free. Prices and billing periods are shown by Google Play before confirmation."
-                            else "Subscriptions renew through Google Play until canceled. The lifetime plan is a one-time purchase. Prices and billing periods are shown by Google Play before you confirm.",
-                            if (isShieldPlansOnly) "সাবস্ক্রিপশন বাতিল না করা পর্যন্ত Google Play-এর মাধ্যমে নবায়ন হবে। মালিক অর্থ দেন; আমন্ত্রিত সদস্যরা বিনামূল্যে যোগ দেন। নিশ্চিত করার আগে Google Play মূল্য ও বিলিং সময় দেখায়।"
-                            else "সাবস্ক্রিপশন বাতিল না করা পর্যন্ত Google Play-এর মাধ্যমে নবায়ন হবে। লাইফটাইম প্ল্যান একবারের কেনাকাটা। নিশ্চিত করার আগে Google Play মূল্য ও বিলিং সময় দেখাবে।",
-                            if (isShieldPlansOnly) "सदस्यता रद्द होने तक Google Play से नवीनीकृत होती है। मालिक भुगतान करता है; आमंत्रित सदस्य मुफ़्त में जुड़ते हैं। पुष्टि से पहले Google Play कीमत और अवधि दिखाता है।"
-                            else "सदस्यता रद्द होने तक Google Play से नवीनीकृत होती है। लाइफटाइम प्लान एक बार की खरीद है। पुष्टि से पहले Google Play कीमत और बिलिंग अवधि दिखाएगा।"
+                            "Subscriptions renew through Google Play until canceled. The lifetime plan is a one-time purchase. Prices and billing periods are shown by Google Play before you confirm.",
+                            "সাবস্ক্রিপশন বাতিল না করা পর্যন্ত Google Play-এর মাধ্যমে নবায়ন হবে। লাইফটাইম প্ল্যান একবারের কেনাকাটা। নিশ্চিত করার আগে Google Play মূল্য ও বিলিং সময় দেখাবে।",
+                            "सदस्यता रद्द होने तक Google Play से नवीनीकृत होती है। लाइफटाइम प्लान एक बार की खरीद है। पुष्टि से पहले Google Play कीमत और बिलिंग अवधि दिखाएगा।"
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -219,24 +186,33 @@ private fun PremiumPlanCard(
     language: AppLanguage,
     product: ProductDetails,
     enabled: Boolean,
-    onPurchase: () -> Unit
+    onPurchase: (String?) -> Unit
 ) {
     val title = when (product.productId) {
-        "dost_shield_team" -> "Shield Team · up to 10 members"
-        "dost_shield_business" -> "Shield Business · up to 25 members"
-        "dost_premium_monthly" -> premiumText(language, "Monthly", "মাসিক", "मासिक")
-        "dost_premium_annual" -> premiumText(language, "Annual", "বার্ষিক", "वार्षिक")
-        else -> premiumText(language, "Lifetime", "লাইফটাইম", "लाइफटाइम")
+        "dost_explore_plus" -> "Explore Plus"
+        "dost_explore_plus_lifetime" -> "Explore Plus lifetime"
+        "dost_cipher" -> "Cipher"
+        "dost_shield_team" -> "Shield Team"
+        "dost_shield_business" -> "Shield Business"
+        "dost_plus" -> "Dost Plus"
+        else -> premiumText(language, "Plan", "প্ল্যান", "प्लान")
     }
-    val price = if (product.productType == BillingClient.ProductType.SUBS) {
-        product.subscriptionOfferDetails
-            ?.firstOrNull()
-            ?.pricingPhases
-            ?.pricingPhaseList
-            ?.lastOrNull()
-            ?.formattedPrice
+    val offers: List<Triple<String?, String?, String?>> = if (product.productType == BillingClient.ProductType.SUBS) {
+        product.subscriptionOfferDetails.orEmpty()
+            .groupBy { it.basePlanId }
+            .values
+            .map { basePlanOffers ->
+                val offer = basePlanOffers.firstOrNull {
+                    it.pricingPhases.pricingPhaseList.firstOrNull()?.priceAmountMicros == 0L
+                } ?: basePlanOffers.first()
+                Triple(
+                    offer.basePlanId,
+                    offer.offerToken,
+                    offer.pricingPhases.pricingPhaseList.lastOrNull()?.formattedPrice
+                )
+            }
     } else {
-        product.oneTimePurchaseOfferDetailsList?.firstOrNull()?.formattedPrice
+        listOf(Triple(null, null, product.oneTimePurchaseOfferDetailsList?.firstOrNull()?.formattedPrice))
     }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -244,9 +220,22 @@ private fun PremiumPlanCard(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(price ?: premiumText(language, "Price unavailable", "মূল্য পাওয়া যাচ্ছে না", "कीमत उपलब्ध नहीं है"))
-            Button(onClick = onPurchase, enabled = enabled && price != null, modifier = Modifier.fillMaxWidth()) {
-                Text(premiumText(language, "Continue with Google Play", "Google Play দিয়ে চালিয়ে যান", "Google Play से जारी रखें"))
+            offers.forEach { (basePlanId, offerToken, price) ->
+                Text(
+                    when (basePlanId) {
+                        "monthly" -> premiumText(language, "Monthly", "মাসিক", "मासिक")
+                        "annual" -> premiumText(language, "Annual", "বার্ষিক", "वार्षिक")
+                        else -> premiumText(language, "One-time purchase", "একবারের কেনাকাটা", "एक बार की खरीद")
+                    }
+                )
+                Text(price ?: premiumText(language, "Price unavailable", "মূল্য পাওয়া যাচ্ছে না", "कीमत उपलब्ध नहीं है"))
+                Button(
+                    onClick = { onPurchase(offerToken) },
+                    enabled = enabled && price != null,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(premiumText(language, "Continue with Google Play", "Google Play দিয়ে চালিয়ে যান", "Google Play से जारी रखें"))
+                }
             }
         }
     }

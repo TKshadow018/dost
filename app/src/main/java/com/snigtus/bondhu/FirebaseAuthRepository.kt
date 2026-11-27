@@ -40,24 +40,54 @@ class FirebaseAuthRepository(context: Context) {
             ?: throw IOException("Firebase did not return an ID token.")
     }
 
+    suspend fun ensureAgeCohort(birthMonth: String, birthYear: String): String {
+        val user = requireAuth().currentUser
+            ?: throw IllegalStateException("Sign in to save your age cohort.")
+        val idToken = user.getIdToken(false).awaitTask().token
+            ?: throw IOException("Firebase did not return an ID token.")
+        val cohort = AgeCohortClient().assign(user.uid, idToken, birthMonth, birthYear)
+        val refreshedClaims = user.getIdToken(true).awaitTask().claims
+        if (refreshedClaims["dostAgeCohort"] != cohort) {
+            throw IOException("Firebase did not return the server-issued age cohort.")
+        }
+        return cohort
+    }
+
     suspend fun hasPremiumEntitlement(forceRefresh: Boolean = false): Boolean {
         val user = requireAuth().currentUser ?: return false
         val claims = user.getIdToken(forceRefresh).awaitTask().claims
         return premiumClaimIsActive(claims, System.currentTimeMillis() / 1000)
     }
 
-    suspend fun hasShieldEntitlement(forceRefresh: Boolean = false): Boolean {
+    internal suspend fun hasPlanEntitlement(productId: String, forceRefresh: Boolean = false): Boolean {
         val user = requireAuth().currentUser ?: return false
         val claims = user.getIdToken(forceRefresh).awaitTask().claims
-        return shieldOwnerClaimIsActive(claims, System.currentTimeMillis() / 1000)
+        val now = System.currentTimeMillis() / 1000
+        return when (productId) {
+            "dost_cipher" -> planClaimIsActive(claims, "cipher", now)
+            "dost_shield_team", "dost_shield_business" -> planClaimIsActive(claims, "shield", now)
+            "dost_plus" -> premiumClaimIsActive(claims, now) && planClaimIsActive(claims, "cipher", now)
+            "dost_explore_plus", "dost_explore_plus_lifetime" -> premiumClaimIsActive(claims, now)
+            else -> false
+        }
+    }
+
+    internal suspend fun hasAdultEligibility(): Boolean {
+        val user = auth?.currentUser ?: return false
+        val claims = user.getIdToken(false).awaitTask().claims
+        val now = System.currentTimeMillis() / 1000
+        val expiry = (claims[AGE_ELIGIBILITY_EXPIRY_CLAIM] as? Number)?.toLong() ?: return false
+        return claims[AGE_ELIGIBILITY_CLAIM] == true
+            && claims["dostAgeCohort"] != "teen"
+            && expiry > now
     }
 
     internal suspend fun premiumEntitlement(forceRefresh: Boolean = false): PremiumEntitlement {
         val user = requireAuth().currentUser
             ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
         val claims = user.getIdToken(forceRefresh).awaitTask().claims
-        val isLifetime = claims["dostPremiumLifetime"] == true
-        val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong()
+        val isLifetime = claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true
+        val expiresAt = ((claims["dostExplorePlusUntil"] ?: claims["dostPremiumUntil"]) as? Number)?.toLong()
         return PremiumEntitlement(
             isActive = premiumClaimIsActive(claims, System.currentTimeMillis() / 1000),
             isLifetime = isLifetime,
@@ -71,7 +101,10 @@ class FirebaseAuthRepository(context: Context) {
         val currentToken = user.getIdToken(false).awaitTask()
         val now = System.currentTimeMillis() / 1000
         val currentExpiry = (currentToken.claims[AGE_ELIGIBILITY_EXPIRY_CLAIM] as? Number)?.toLong() ?: 0L
-        if (currentToken.claims[AGE_ELIGIBILITY_CLAIM] == true && currentExpiry > now + 60) {
+        if (currentToken.claims[AGE_COHORT_CLAIM] == "adult"
+            && currentToken.claims[AGE_ELIGIBILITY_CLAIM] == true
+            && currentExpiry > now + 60
+        ) {
             return
         }
 
@@ -82,7 +115,8 @@ class FirebaseAuthRepository(context: Context) {
 
         val refreshedToken = user.getIdToken(true).awaitTask()
         val refreshedExpiry = (refreshedToken.claims[AGE_ELIGIBILITY_EXPIRY_CLAIM] as? Number)?.toLong() ?: 0L
-        if (refreshedToken.claims[AGE_ELIGIBILITY_CLAIM] != true
+        if (refreshedToken.claims[AGE_COHORT_CLAIM] != "adult"
+            || refreshedToken.claims[AGE_ELIGIBILITY_CLAIM] != true
             || refreshedExpiry <= System.currentTimeMillis() / 1000
         ) {
             throw IOException("Firebase did not return the verified age-eligibility claim.")
@@ -174,6 +208,7 @@ class FirebaseAuthRepository(context: Context) {
     private companion object {
         const val AGE_ELIGIBILITY_CLAIM = "dostAgeEligible"
         const val AGE_ELIGIBILITY_EXPIRY_CLAIM = "dostAgeEligibleUntil"
+        const val AGE_COHORT_CLAIM = "dostAgeCohort"
     }
 }
 

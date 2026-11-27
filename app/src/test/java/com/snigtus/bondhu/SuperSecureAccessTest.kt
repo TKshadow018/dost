@@ -75,6 +75,10 @@ class SuperSecureAccessTest {
         assertFalse(secureCanAddMembers(0))
         assertTrue(secureCanAddMembers(9, 10))
         assertFalse(secureCanAddMembers(10, 10))
+        assertTrue(secureCanAddMembers(24, 25))
+        assertFalse(secureCanAddMembers(25, 25))
+        assertTrue(secureOrganizationExceedsSeatLimit(11, 10))
+        assertFalse(secureOrganizationExceedsSeatLimit(10, 10))
     }
 
     @Test

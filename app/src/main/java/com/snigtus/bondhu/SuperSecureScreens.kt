@@ -230,10 +230,15 @@ private fun SecureOrganizationWorkspace(
         mutableStateOf<List<SecureOrgAuditEntry>?>(null)
     }
     val scope = rememberCoroutineScope()
-    val readOnly = secureOrganizationIsReadOnly(
+    val planReadOnly = secureOrganizationIsReadOnly(
         organization.activeUntilMillis,
         System.currentTimeMillis()
     )
+    val overSeatLimit = secureOrganizationExceedsSeatLimit(
+        members?.size ?: organization.memberCount,
+        organization.seatLimit
+    )
+    val readOnly = planReadOnly || overSeatLimit
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -282,8 +287,10 @@ private fun SecureOrganizationWorkspace(
             "Active members: ${members?.size ?: organization.memberCount}/${organization.seatLimit}",
             style = MaterialTheme.typography.bodySmall
         )
-        if (readOnly) {
+        if (planReadOnly) {
             Text("This Shield organisation is read-only. You can still read and export its data.")
+        } else if (overSeatLimit) {
+            Text("This organisation is over its seat limit. Members can read and export data, but cannot send until the owner removes enough members.")
         }
         Text(
             "Closed, admin-controlled messaging. Data is isolated from AI and analytics, encrypted in transit and at rest by Google Cloud, and not end-to-end encrypted.",
@@ -340,7 +347,7 @@ private fun SecureOrganizationWorkspace(
                         uid = uid,
                         currentMember = state.member,
                         members = members,
-                        readOnly = readOnly,
+                        readOnly = planReadOnly,
                         onOpenDirect = { member ->
                             notice = ""
                             scope.launch {

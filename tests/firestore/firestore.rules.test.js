@@ -82,6 +82,7 @@ function snapshot({
 
 function user(uid, claims = {}) {
   return testEnv.authenticatedContext(uid, {
+    dostAgeCohort: "adult",
     dostAgeEligible: true,
     dostAgeEligibleUntil: Math.floor(Date.now() / 1000) + 3600,
     ...claims,
@@ -147,10 +148,8 @@ async function seedChat({ members = ["alice", "bob"], ageCohort = "adult", profi
 }
 
 function secureUser(uid, claims = {}) {
-  const nowSeconds = Math.floor(Date.now() / 1000);
   return user(uid, {
-    dostAgeCohort: "adult",
-    dostShieldUntil: nowSeconds + 365 * 24 * 60 * 60,
+    dostShieldUntil: Math.floor(Date.now() / 1000) + 3600,
     dostShieldSeats: 25,
     ...claims,
   });
@@ -182,11 +181,14 @@ async function createSecureOrg(
   orgId,
   ownerUid,
   enableFeature = true,
+  ownerClaims = {},
   seatLimit = 25,
-  activeUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-  firestore = secureUser(ownerUid, { dostShieldSeats: seatLimit }),
+  includeShieldEntitlement = true,
 ) {
   if (enableFeature) await setSecureFeatureEnabled(true);
+  const firestore = includeShieldEntitlement
+    ? secureUser(ownerUid, ownerClaims)
+    : user(ownerUid, ownerClaims);
   const batch = writeBatch(firestore);
   batch.set(doc(firestore, `secureOrgs/${orgId}`), {
     name: "Private group",
@@ -212,23 +214,42 @@ async function createSecureOrg(
   await batch.commit();
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await updateDoc(doc(context.firestore(), `secureOrgs/${orgId}`), {
-      plan: { seatLimit, activeUntil },
+      plan: {
+        seatLimit,
+        activeUntil: new Date(Date.now() + 3_600_000),
+      },
     });
   });
 }
 
-test("Shield requires a valid owner entitlement and remains behind its server flag", async () => {
+test("Shield org creation requires its server-controlled flag and owner entitlement", async () => {
+  await setSecureFeatureEnabled(true);
+  await assertSucceeds(getDoc(doc(secureUser("alice"), "secureOrgConfig/superSecure")));
+  await assertFails(setDoc(doc(secureUser("alice"), "secureOrgConfig/superSecure"), {
+    enabled: false,
+  }));
+  await assertFails(createSecureOrg("secure-no-shield-claim", "alice", false, {}, 25, false));
+  await assertFails(createSecureOrg("secure-ineligible-owner", "alice", false, {
+    dostAgeEligible: false,
+  }));
+  await assertFails(createSecureOrg("secure-expired-owner", "alice", false, {
+    dostAgeEligibleUntil: Math.floor(Date.now() / 1000) - 1,
+  }));
+  await assertFails(createSecureOrg("secure-unpaid", "alice", false, {
+    dostShieldUntil: 1,
+    dostShieldSeats: 0,
+  }));
+  await assertSucceeds(createSecureOrg("secure-paid", "alice", false));
+});
+
+test("Shield remains unavailable until its server-controlled flag is enabled", async () => {
   await assertFails(createSecureOrg("secure-disabled", "alice", false));
-  await assertFails(createSecureOrg("secure-no-claim", "no-claim", true, 25, undefined, user("no-claim")));
   await assertFails(setDoc(doc(secureUser("alice"), "secureOrgConfig/superSecure"), {
     enabled: true,
   }));
 
   await setSecureFeatureEnabled(true);
   await assertSucceeds(createSecureOrg("secure-enabled", "alice", false));
-  await assertFails(updateDoc(doc(secureUser("alice"), "secureOrgs/secure-enabled"), {
-    plan: { seatLimit: 25, activeUntil: new Date(Date.now() + 60_000) },
-  }));
   await setSecureFeatureEnabled(false);
 
   await assertFails(getDoc(doc(secureUser("alice"), "secureOrgs/secure-enabled")));
@@ -240,8 +261,8 @@ test("Shield requires a valid owner entitlement and remains behind its server fl
   }));
 });
 
-async function addSecureOrgMember(actorUid, orgId, targetUid, role = "member") {
-  const firestore = secureUser(actorUid);
+async function addSecureOrgMember(actorUid, orgId, targetUid, role = "member", actorClaims = {}) {
+  const firestore = secureUser(actorUid, actorClaims);
   const eventId = `evt-${targetUid}-${++secureAuditSequence}`;
   const organization = await getDoc(doc(firestore, `secureOrgs/${orgId}`));
   const memberCount = organization.get("memberCount");
@@ -286,7 +307,7 @@ async function sendChatMessage(uid, messageId, text, unreadCounts) {
   return batch.commit();
 }
 
-test("Super Secure organization data is private to current members", async () => {
+test("Shield organization data is private to current members", async () => {
   await createSecureOrg("secure-a", "alice");
   await addSecureOrgMember("alice", "secure-a", "bob");
   await createSecureOrg("secure-b", "charlie");
@@ -325,6 +346,27 @@ test("Super Secure organization data is private to current members", async () =>
     createdAt: serverTimestamp(),
   }));
   await assertFails(getDoc(doc(secureUser("mallory"), "secureOrgs/secure-a/directChats/alice-bob")));
+  await addSecureOrgMember("alice", "secure-a", "carol");
+  await addSecureOrgMember("alice", "secure-a", "manager", "manager");
+  await assertSucceeds(setDoc(doc(secureUser("bob"), "secureOrgs/secure-a/directChats/bob-carol"), {
+    members: ["bob", "carol"],
+    createdBy: "bob",
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(secureUser("carol"), "secureOrgs/secure-a/directChats/bob-carol/messages/owner-export"), {
+    senderUid: "carol",
+    text: "Owner export access.",
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(secureUser("alice"), "secureOrgs/secure-a/directChats/bob-carol")));
+  await assertSucceeds(getDoc(doc(secureUser("alice"), "secureOrgs/secure-a/directChats/bob-carol/messages/owner-export")));
+  await assertSucceeds(getDocs(collection(secureUser("alice"), "secureOrgs/secure-a/directChats")));
+  await assertSucceeds(getDocs(collection(
+    secureUser("alice"),
+    "secureOrgs/secure-a/directChats/bob-carol/messages",
+  )));
+  await assertFails(getDoc(doc(secureUser("manager"), "secureOrgs/secure-a/directChats/bob-carol")));
+  await assertFails(getDoc(doc(secureUser("manager"), "secureOrgs/secure-a/directChats/bob-carol/messages/owner-export")));
   await assertFails(setDoc(doc(secureUser("alice"), "secureOrgs/secure-a/directChats/alice-bob/messages/too-long"), {
     senderUid: "alice",
     text: "x".repeat(4_001),
@@ -345,7 +387,10 @@ test("Super Secure organization data is private to current members", async () =>
 test("only managers administer members, changes are audited, and removal revokes chat access", async () => {
   await createSecureOrg("secure-a", "alice");
   await addSecureOrgMember("alice", "secure-a", "manager", "manager");
-  await assertSucceeds(addSecureOrgMember("manager", "secure-a", "bob"));
+  await assertSucceeds(addSecureOrgMember("manager", "secure-a", "bob", "member", {
+    dostShieldUntil: 1,
+    dostShieldSeats: 0,
+  }));
   assert.equal((await getDoc(doc(secureUser("alice"), "secureOrgs/secure-a"))).get("memberCount"), 3);
 
   await assertFails(addSecureOrgMember("manager", "secure-a", "new-manager", "manager"));
@@ -448,107 +493,165 @@ test("only managers administer members, changes are audited, and removal revokes
   assert.equal((await getDoc(doc(secureUser("alice"), "secureOrgs/secure-a"))).get("memberCount"), 4);
 });
 
-test("Shield Team and Business enforce their active-member seat limits", async () => {
-  await createSecureOrg("secure-team", "team-owner", true, 10);
-  for (let index = 1; index < 10; index += 1) {
-    await assertSucceeds(addSecureOrgMember("team-owner", "secure-team", `team-${index}`));
-  }
-  await assertFails(addSecureOrgMember("team-owner", "secure-team", "team-11"));
-
-  await createSecureOrg("secure-business", "business-owner");
-  for (let index = 1; index < 25; index += 1) {
-    await assertSucceeds(addSecureOrgMember("business-owner", "secure-business", `business-${index}`));
-  }
-  await assertFails(addSecureOrgMember("business-owner", "secure-business", "business-26"));
-});
-
-test("a downgraded organization can remove members while temporarily over its new seat cap", async () => {
-  await createSecureOrg("secure-downgraded", "owner", true, 25);
-  for (let index = 1; index <= 11; index += 1) {
-    await assertSucceeds(addSecureOrgMember("owner", "secure-downgraded", `member-${index}`));
-  }
+test("the Firestore boundary enforces the 25-active-member limit", async () => {
+  await createSecureOrg("secure-full", "alice", true, {}, 25);
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    await updateDoc(doc(context.firestore(), "secureOrgs/secure-downgraded"), {
-      plan: {
-        seatLimit: 10,
-        activeUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      },
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-full"), {
+      memberCount: 25,
     });
   });
-  await assertFails(addSecureOrgMember("owner", "secure-downgraded", "member-new"));
 
-  const firestore = secureUser("owner", { dostShieldSeats: 10 });
-  const organizationRef = doc(firestore, "secureOrgs/secure-downgraded");
-  const organization = await getDoc(organizationRef);
+  await assertFails(addSecureOrgMember("alice", "secure-full", "bob"));
+});
+
+test("Shield Team applies its synchronized ten-seat limit", async () => {
+  await createSecureOrg("secure-team-cap", "alice", true, {}, 10);
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-team-cap"), {
+      memberCount: 10,
+    });
+  });
+  await assertFails(addSecureOrgMember("alice", "secure-team-cap", "member-11"));
+});
+
+test("Shield Business blocks the 26th active member", async () => {
+  await createSecureOrg("secure-business-cap", "alice", true, {}, 25);
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-business-cap"), {
+      memberCount: 25,
+    });
+  });
+  await assertFails(addSecureOrgMember("alice", "secure-business-cap", "member-26"));
+});
+
+test("a downgraded Shield org can remove members until it reaches its new seat cap", async () => {
+  await createSecureOrg("secure-downgraded", "alice", true, {}, 25);
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-downgraded"), {
+      memberCount: 12,
+    });
+    await setDoc(doc(context.firestore(), "secureOrgs/secure-downgraded/members/member-12"), secureMember(
+      "member-12",
+      "alice",
+      "member",
+    ));
+  });
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-downgraded"), {
+      plan: { seatLimit: 10, activeUntil: new Date(Date.now() + 3_600_000) },
+    });
+  });
+
+  await assertFails(addSecureOrgMember("alice", "secure-downgraded", "member-new"));
+  await assertFails(setDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-downgraded/groupChats/main/messages/over-seat-limit",
+  ), {
+    senderUid: "alice",
+    text: "Sending is blocked until the team is within its downgraded seat cap.",
+    createdAt: serverTimestamp(),
+  }));
+  const firestore = secureUser("alice");
   const batch = writeBatch(firestore);
-  batch.update(doc(firestore, "secureOrgs/secure-downgraded/members/member-11"), {
+  batch.update(doc(firestore, "secureOrgs/secure-downgraded/members/member-12"), {
     status: "removed",
-    actorUid: "owner",
+    actorUid: "alice",
     auditEventId: "evt-downgrade-removal",
     updatedAt: serverTimestamp(),
   });
   batch.set(doc(firestore, "secureOrgs/secure-downgraded/auditLog/evt-downgrade-removal"), {
-    actorUid: "owner",
-    targetUid: "member-11",
+    actorUid: "alice",
+    targetUid: "member-12",
     action: "member_removed",
     createdAt: serverTimestamp(),
   });
-  batch.update(organizationRef, {
-    memberCount: organization.get("memberCount") - 1,
+  batch.update(doc(firestore, "secureOrgs/secure-downgraded"), {
+    memberCount: 11,
     memberCountAuditEventId: "evt-downgrade-removal",
   });
   await assertSucceeds(batch.commit());
-  assert.equal((await getDoc(organizationRef)).get("memberCount"), 11);
+  assert.equal((await getDoc(doc(firestore, "secureOrgs/secure-downgraded"))).get("memberCount"), 11);
+  await assertFails(setDoc(doc(
+    firestore,
+    "secureOrgs/secure-downgraded/groupChats/main/messages/still-over-seat-limit",
+  ), {
+    senderUid: "alice",
+    text: "Members must be removed until the org is within the seat cap.",
+    createdAt: serverTimestamp(),
+  }));
 });
 
-test("Shield members need a 13+ age cohort, and expired plans allow export reads but not writes", async () => {
-  await createSecureOrg(
-    "secure-expired",
-    "owner",
-    true,
-    25,
-    new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
-  );
+test("Shield permits 13+ members without granting them an owner plan", async () => {
+  await createSecureOrg("secure-teen", "alice");
+  await assertSucceeds(addSecureOrgMember("alice", "secure-teen", "teen"));
+  const teen = secureUser("teen", {
+    dostAgeEligible: false,
+    dostAgeEligibleUntil: 1,
+    dostAgeCohort: "teen",
+  });
+  await assertSucceeds(getDoc(doc(teen, "secureOrgs/secure-teen")));
+  await assertSucceeds(setDoc(doc(
+    teen,
+    "secureOrgs/secure-teen/groupChats/main/messages/teen-message",
+  ), {
+    senderUid: "teen",
+    text: "Invited teen members can participate.",
+    createdAt: serverTimestamp(),
+  }));
+});
+
+test("Shield messaging is allowed during the 14-day grace period and read-only afterward", async () => {
+  await createSecureOrg("secure-grace", "alice");
+  await addSecureOrgMember("alice", "secure-grace", "bob");
+  await assertSucceeds(setDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-grace/directChats/during-grace",
+  ), {
+    members: ["alice", "bob"],
+    createdBy: "alice",
+    createdAt: serverTimestamp(),
+  }));
   await testEnv.withSecurityRulesDisabled(async (context) => {
-    const firestore = context.firestore();
-    await setDoc(doc(firestore, "secureOrgs/secure-expired/members/teen"), secureMember(
-      "teen",
-      "owner",
-      "member",
-    ));
-    await setDoc(doc(firestore, "secureOrgs/secure-expired/groupChats/main/messages/old"), {
-      senderUid: "owner",
-      text: "Still exportable",
-      createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-    });
-    await setDoc(doc(firestore, "secureOrgs/secure-expired/directChats/direct"), {
-      members: ["owner", "teen"],
-      createdBy: "owner",
-      createdAt: new Date(),
-    });
-    await setDoc(doc(firestore, "secureOrgs/secure-expired/directChats/direct/messages/direct-old"), {
-      senderUid: "owner",
-      text: "Also exportable",
-      createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-grace"), {
+      plan: {
+        seatLimit: 10,
+        activeUntil: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      },
     });
   });
-  await assertSucceeds(getDoc(doc(secureUser("owner"), "secureOrgs/secure-expired")));
-  await assertSucceeds(getDocs(collection(secureUser("owner"), "secureOrgs/secure-expired/members")));
-  await assertSucceeds(getDocs(collection(
-    secureUser("owner"),
-    "secureOrgs/secure-expired/directChats/direct/messages",
-  )));
-  await assertSucceeds(getDocs(collection(secureUser("owner"), "secureOrgs/secure-expired/directChats")));
-  await assertSucceeds(getDocs(collection(
-    user("teen", { dostAgeCohort: "teen" }),
-    "secureOrgs/secure-expired/groupChats/main/messages",
-  )));
-  await assertFails(setDoc(
-    doc(secureUser("owner"), "secureOrgs/secure-expired/groupChats/main/messages/after-grace"),
-    { senderUid: "owner", text: "Read-only", createdAt: serverTimestamp() },
-  ));
-  await assertFails(getDoc(doc(user("no-cohort"), "secureOrgs/secure-expired")));
-  await assertSucceeds(getDoc(doc(user("teen", { dostAgeCohort: "teen" }), "secureOrgs/secure-expired/members/teen")));
+  await assertSucceeds(setDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-grace/groupChats/main/messages/during-grace",
+  ), {
+    senderUid: "alice",
+    text: "The org remains writable during grace.",
+    createdAt: serverTimestamp(),
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-grace"), {
+      plan: {
+        seatLimit: 10,
+        activeUntil: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
+      },
+    });
+  });
+  await assertSucceeds(getDoc(doc(secureUser("alice"), "secureOrgs/secure-grace")));
+  await assertFails(setDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-grace/directChats/after-grace",
+  ), {
+    members: ["alice", "bob"],
+    createdBy: "alice",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-grace/groupChats/main/messages/after-grace",
+  ), {
+    senderUid: "alice",
+    text: "The org is read-only after grace.",
+    createdAt: serverTimestamp(),
+  }));
 });
 
 test("a user can create a private profile but cannot read another private profile", async () => {
@@ -579,6 +682,17 @@ test("People data requires an unexpired server age-eligibility claim", async () 
   await assertFails(
     setDoc(doc(unverified, "publicProfiles/another-user"), profile()),
   );
+});
+
+test("teen and cohort-less claims cannot access People discovery or chats", async () => {
+  await seedProfile("adult");
+  await seedChat({ members: ["teen", "adult"] });
+  const teen = user("teen", { dostAgeCohort: "teen" });
+  const missingCohort = user("adult", { dostAgeCohort: null });
+
+  await assertFails(getDoc(doc(teen, "publicProfiles/adult")));
+  await assertFails(getDoc(doc(teen, "peopleChats/alice-bob")));
+  await assertFails(getDoc(doc(missingCohort, "publicProfiles/adult")));
 });
 
 test("profile creation rejects under-18 age bands and cohorts", async () => {

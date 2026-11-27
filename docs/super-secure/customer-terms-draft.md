@@ -18,7 +18,7 @@ Removing a member blocks future server-authorized access but does not erase hist
 
 ## 3. Security and service limitations
 
-Shield is closed, admin-controlled, isolated from AI and analytics, and encrypted in transit and at rest by Google Cloud. It is **not end-to-end encrypted**: Google Cloud and privileged project administrators may technically access stored data. Group messages are available to current organisation members; direct messages are limited to their two current participants through the application.
+Shield is closed, admin-controlled, isolated from AI and analytics, and encrypted in transit and at rest by Google Cloud. It is **not end-to-end encrypted**: Google Cloud and privileged project administrators may technically access stored data. Group messages are available to current organisation members; direct messages are available to their two current participants and the owner for organisation export. Managers cannot read other members' direct conversations through the application.
 
 The organisation owner can export messages and the member list as JSON in the app. Moving data to a customer-owned server is a separate manual service arranged with Dost, not a self-service feature.
 

@@ -10,6 +10,8 @@ class PremiumEntitlementTest {
         val now = 1_790_000_000L
 
         assertTrue(premiumClaimIsActive(mapOf("dostPremiumLifetime" to true), now))
+        assertTrue(premiumClaimIsActive(mapOf("dostExplorePlusLifetime" to true), now))
+        assertTrue(premiumClaimIsActive(mapOf("dostExplorePlusUntil" to now + 1), now))
         assertTrue(premiumClaimIsActive(mapOf("dostPremiumUntil" to now + 1), now))
         assertFalse(premiumClaimIsActive(mapOf("dostPremiumUntil" to now), now))
         assertFalse(premiumClaimIsActive(mapOf("dostPremiumUntil" to (now - 1).toDouble()), now))
@@ -17,13 +19,24 @@ class PremiumEntitlementTest {
     }
 
     @Test
-    fun shieldOwnerClaimRequiresAValidSeatLimitAndFutureExpiry() {
-        val now = 1_800_000_000L
+    fun modeClaimsRespectExpiryAndShieldSeatCount() {
+        val now = 1_790_000_000L
 
-        assertTrue(shieldOwnerClaimIsActive(mapOf("dostShieldUntil" to now + 1, "dostShieldSeats" to 10), now))
-        assertTrue(shieldOwnerClaimIsActive(mapOf("dostShieldUntil" to now + 1, "dostShieldSeats" to 25), now))
-        assertFalse(shieldOwnerClaimIsActive(mapOf("dostShieldUntil" to now, "dostShieldSeats" to 10), now))
-        assertFalse(shieldOwnerClaimIsActive(mapOf("dostShieldUntil" to now + 1, "dostShieldSeats" to 11), now))
-        assertFalse(shieldOwnerClaimIsActive(emptyMap(), now))
+        assertTrue(planClaimIsActive(mapOf("dostCipherUntil" to now + 1), "cipher", now))
+        assertFalse(planClaimIsActive(mapOf("dostCipherUntil" to now), "cipher", now))
+        assertTrue(
+            planClaimIsActive(
+                mapOf("dostShieldUntil" to now + 1, "dostShieldSeats" to 10),
+                "shield",
+                now,
+            ),
+        )
+        assertFalse(
+            planClaimIsActive(
+                mapOf("dostShieldUntil" to now + 1, "dostShieldSeats" to 0),
+                "shield",
+                now,
+            ),
+        )
     }
 }
