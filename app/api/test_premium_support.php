@@ -73,6 +73,32 @@ $claimLock = dost_firebase_claim_lock($uid);
 dost_premium_test_assert(is_resource($claimLock), 'Custom-claim updates acquire a per-user lock.');
 dost_firebase_claim_unlock($claimLock);
 dost_premium_test_assert(dost_firebase_claim_lock('invalid uid') === false, 'Custom-claim locks reject invalid user identifiers.');
+dost_premium_test_assert(
+    dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'adult',
+        'dostAgeEligible' => true,
+        'dostAgeEligibleUntil' => $now + 60
+    ), $now),
+    'Explore Plus eligibility requires a current server-issued adult eligibility claim.'
+);
+dost_premium_test_assert(
+    !dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'teen',
+        'dostAgeEligible' => true,
+        'dostAgeEligibleUntil' => $now + 60
+    ), $now)
+    && !dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'adult',
+        'dostAgeEligible' => false,
+        'dostAgeEligibleUntil' => $now + 60
+    ), $now)
+    && !dost_premium_user_adult_eligible(array(
+        'dostAgeCohort' => 'adult',
+        'dostAgeEligible' => true,
+        'dostAgeEligibleUntil' => $now
+    ), $now),
+    'Teen, unverified adult, and expired eligibility claims must not activate Explore Plus.'
+);
 
 $claims = dost_premium_claims(
     array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => $now + 21600),

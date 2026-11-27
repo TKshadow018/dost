@@ -1,6 +1,6 @@
 # Dost AI API (Hostinger)
 
-Upload `ai.php`, `app_credential.php`, `age_eligibility.php`, `age_eligibility_support.php`, `archive_store.php`, `delete_archive.php`, `romance_safety.php`, `telemetry_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. The PHP endpoints load helper files from the same directory; uploading an endpoint alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
+Upload `ai.php`, `app_credential.php`, `age_cohort.php`, `age_eligibility.php`, `age_eligibility_support.php`, `archive_store.php`, `delete_archive.php`, `romance_safety.php`, `telemetry_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. The PHP endpoints load helper files from the same directory; uploading an endpoint alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
 
 `https://bisque-bear-900175.hostingersite.com/api/ai.php`
 
@@ -8,16 +8,18 @@ For optional anonymous usage analytics, also upload `telemetry.php` and `telemet
 
 The server needs PHP with the cURL extension and outbound HTTPS access.
 
-## Trusted People age eligibility
+## Trusted age cohorts and People eligibility
 
-The app's Play Age Signals gate remains the first check. When the short-lived eligibility claim is missing or nearly expired, the app requests a Play Integrity Standard token whose request hash binds the Firebase UID, eligibility result, and a fresh random nonce. The Hostinger endpoint verifies the Firebase ID token, asks Google to decode the Integrity token, checks the package, request hash, token age, Play licensing, app recognition, and device integrity, then sets a server-side Firebase custom claim that expires after six hours. Firestore rules require this unexpired claim for People reads and writes. The exact Play Age Signals range is not sent to or stored by Dost's server.
+The app first asks for birth month/year on a neutral age screen; under-13 users are blocked locally before account creation. Play Age Signals supplies an age band and can block a shared range below 13, but does not block teens from the app. After Firebase sign-in, `age_cohort.php` validates the submitted month/year, stores it with a server-issued `dostAgeCohort` (`teen` or `adult`) custom claim, and rejects later date changes. A teen cohort becomes adult only when the stored birth month/year reaches 18.
+
+People remains adults-only. When the short-lived eligibility claim is missing or nearly expired, the app requests a Play Integrity Standard token whose request hash binds the Firebase UID, eligibility result, and a fresh random nonce. The Hostinger endpoint verifies the Firebase ID token, asks Google to decode the Integrity token, checks the package, request hash, token age, Play licensing, app recognition, and device integrity, then sets an adult-only server-side Firebase eligibility claim that expires after six hours. Firestore rules require both the adult cohort and this unexpired claim for People reads and writes. The exact Play Age Signals range is not sent to or stored by Dost's server.
 
 Before deploying this endpoint:
 
 1. Link the Google Cloud project to `com.snigtus.dost` in Play Console and enable the Play Integrity API. Enable Identity Toolkit API for the Firebase project as well.
 2. Create a dedicated service account and grant only `firebaseauth.users.get` and `firebaseauth.users.update` on the Firebase project. Keep its JSON key outside `public_html` and outside source control.
 3. Configure `DOST_FIREBASE_PROJECT_ID`, `DOST_FIREBASE_WEB_API_KEY`, and `DOST_FIREBASE_SERVICE_ACCOUNT_PATH` for PHP, or use the corresponding fields in server-only `config.php`. The project ID must match the service account and Firebase app. Never place the service-account JSON in `config.php`, the repository, or the web root.
-4. Upload the two age-eligibility PHP files with the endpoint, deploy the matching Firestore rules, and run `php.exe test_age_eligibility.php` plus `npm run test:rules` before release.
+4. Upload `age_cohort.php`, `age_eligibility.php`, and `age_eligibility_support.php`; the cohort endpoint writes immutable server-side birth month/year and `dostAgeCohort` claims. Deploy the matching Firestore rules, and run `php.exe test_age_eligibility.php` plus `npm run test:rules` before release.
 5. Test using a Play-installed build and a Play license tester. A sideloaded debug build normally cannot satisfy the licensing verdict.
 
 For QA on a debug or sideloaded build, the server can optionally allow specific Firebase UIDs to pass only the app-recognition and licensing checks. Configure `DOST_AGE_ELIGIBILITY_TEST_MODE=true` (or `age_eligibility_test_mode => true` in server-only `config.php`) and set `DOST_AGE_ELIGIBILITY_TEST_UIDS` to a comma-separated list of Firebase UIDs (or `age_eligibility_test_uids` to an array in `config.php`). Test mode defaults off; only the exact value `true` enables it, and an empty UID list allows nobody. When both are enabled, only `UNRECOGNIZED_VERSION` and `UNLICENSED` are accepted in place of `PLAY_RECOGNIZED` and `LICENSED`.
@@ -53,7 +55,7 @@ Deploy `people_message_push.php` and the updated `people_call_support.php` besid
 
 ## Premium purchases
 
-The app offers `dost_premium_monthly` and `dost_premium_annual` subscriptions plus the non-consumable `dost_premium_lifetime` product. Create those exact products in Play Console and configure regional prices there. Upload `premium_verify.php`, `premium_intro_grant.php`, `premium_support.php`, and the already-required `age_eligibility_support.php` to the API directory.
+The app offers `dost_premium_monthly` and `dost_premium_annual` subscriptions plus the non-consumable `dost_premium_lifetime` product. Create those exact products in Play Console and configure regional prices there. Upload `premium_verify.php`, `premium_intro_grant.php`, `premium_support.php`, and the already-required `age_eligibility_support.php` to the API directory. Both purchase verification and the 90-day intro grant require a current server-issued adult cohort and eligibility claim; a client age or Play purchase alone is insufficient.
 
 Configure `DOST_PREMIUM_SERVICE_ACCOUNT_PATH` (or `premium_service_account_path`) as an absolute path to a service-account JSON file outside the web root. The intro endpoint uses this path when set, otherwise it falls back to `DOST_FIREBASE_SERVICE_ACCOUNT_PATH` / `firebase_service_account_path`. Also configure `DOST_FIREBASE_PROJECT_ID`, `DOST_FIREBASE_WEB_API_KEY`, and `DOST_PLAY_PACKAGE_NAME=com.snigtus.dost`. The service account must belong to the same Firebase project and have the Firebase Authentication user lookup/update permissions needed to set custom claims. Premium purchases additionally require Android Publisher API authorization in Play Console; enable that API only for the purchase flow. The intro grant uses Identity Toolkit only. Keep the service-account key out of the repository, APK, and web root.
 

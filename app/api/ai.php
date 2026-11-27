@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/app_credential.php';
 require_once __DIR__ . '/archive_store.php';
+require_once __DIR__ . '/age_eligibility_support.php';
 require_once __DIR__ . '/romance_safety.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -112,6 +113,83 @@ function enforce_rate_limit($bucket, $maximum)
     }
 }
 
+function dost_ai_verified_age_cohort($config)
+{
+    $authorization = isset($_SERVER['HTTP_AUTHORIZATION']) && is_string($_SERVER['HTTP_AUTHORIZATION'])
+        ? trim($_SERVER['HTTP_AUTHORIZATION'])
+        : (isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION']) && is_string($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])
+            ? trim($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])
+            : '');
+    if (preg_match('/\ABearer\s+(\S+)\z/i', $authorization, $matches) !== 1 || strlen($matches[1]) > 8192) {
+        return 'unknown';
+    }
+    $setting = function ($environmentKey, $configKey) use ($config) {
+        $value = getenv($environmentKey);
+        if (is_string($value) && trim($value) !== '') {
+            return trim($value);
+        }
+        return isset($config[$configKey]) && is_string($config[$configKey]) ? trim($config[$configKey]) : '';
+    };
+    $apiKey = $setting('DOST_FIREBASE_WEB_API_KEY', 'firebase_web_api_key');
+    $projectId = $setting('DOST_FIREBASE_PROJECT_ID', 'firebase_project_id');
+    $serviceAccountPath = $setting('DOST_FIREBASE_SERVICE_ACCOUNT_PATH', 'firebase_service_account_path');
+    if ($apiKey === '' || $projectId === '' || $serviceAccountPath === '' || !is_file($serviceAccountPath)
+        || !is_readable($serviceAccountPath)
+    ) {
+        return 'unknown';
+    }
+    $resolvedPath = realpath($serviceAccountPath);
+    $documentRoot = isset($_SERVER['DOCUMENT_ROOT']) && is_string($_SERVER['DOCUMENT_ROOT'])
+        ? realpath($_SERVER['DOCUMENT_ROOT'])
+        : false;
+    if (!is_string($resolvedPath)
+        || ($documentRoot !== false
+            && ($resolvedPath === $documentRoot
+                || strpos($resolvedPath, rtrim($documentRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR) === 0))
+    ) {
+        return 'unknown';
+    }
+    $credentialContents = file_get_contents($resolvedPath);
+    $credentials = is_string($credentialContents) ? json_decode($credentialContents, true) : null;
+    if (!is_array($credentials)
+        || !isset($credentials['project_id'], $credentials['client_email'], $credentials['private_key'])
+        || $credentials['project_id'] !== $projectId
+    ) {
+        return 'unknown';
+    }
+    $identity = dost_age_http_json(
+        'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' . rawurlencode($apiKey),
+        array(),
+        array('idToken' => $matches[1])
+    );
+    if ($identity === false || $identity['status'] !== 200
+        || !isset($identity['body']['users'][0]['localId'])
+        || !is_string($identity['body']['users'][0]['localId'])
+    ) {
+        return 'unknown';
+    }
+    $serviceToken = dost_age_service_account_token($credentials);
+    if (!is_string($serviceToken)) {
+        return 'unknown';
+    }
+    $adminLookup = dost_age_http_json(
+        'https://identitytoolkit.googleapis.com/v1/projects/' . rawurlencode($projectId) . '/accounts:lookup',
+        array('Authorization: Bearer ' . $serviceToken),
+        array('localId' => array($identity['body']['users'][0]['localId']))
+    );
+    if ($adminLookup === false || $adminLookup['status'] !== 200
+        || !isset($adminLookup['body']['users'][0]['customAttributes'])
+        || !is_string($adminLookup['body']['users'][0]['customAttributes'])
+    ) {
+        return 'unknown';
+    }
+    $claims = json_decode($adminLookup['body']['users'][0]['customAttributes'], true);
+    if (!is_array($claims)) {
+        return 'unknown';
+    }
+    return dost_ai_age_cohort_from_claims($claims, (int) gmdate('n'), (int) gmdate('Y'));
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Allow: POST');
     respond(405, array('error' => 'POST requests only'));
@@ -134,6 +212,11 @@ if (!is_array($request) || json_last_error() !== JSON_ERROR_NONE) {
 
 $operation = isset($request['operation']) && is_string($request['operation']) ? $request['operation'] : 'completion';
 enforce_rate_limit($operation === 'log_message' ? 'logs' : 'ai', $operation === 'log_message' ? 120 : 30);
+if ($operation === 'profile_generation'
+    && !dost_ai_profile_age_allowed(isset($request['friend_age']) ? $request['friend_age'] : null)
+) {
+    respond(400, array('error' => 'Generated AI friend profiles must be 18 or older'));
+}
 $config = array();
 $configPath = __DIR__ . '/config.php';
 if (is_file($configPath)) {
@@ -250,10 +333,19 @@ foreach ($messages as $message) {
     }
 }
 
-$romanceAllowed = dost_romance_allowed_by_age(
-    isset($request['user_age']) ? $request['user_age'] : null,
-    isset($request['friend_age']) ? $request['friend_age'] : null
+$ageCohort = dost_ai_verified_age_cohort($config);
+$romanceAllowed = $ageCohort === 'adult' && (
+    $operation === 'profile_generation'
+        ? true
+        : dost_romance_allowed_by_age(
+            isset($request['user_age']) ? $request['user_age'] : null,
+            isset($request['friend_age']) ? $request['friend_age'] : null
+        )
 );
+$teenPolicy = $ageCohort !== 'adult';
+if ($teenPolicy) {
+    array_unshift($messages, array('role' => 'system', 'content' => dost_teen_policy_prompt()));
+}
 $chatLanguage = isset($request['chat_language'])
     && is_string($request['chat_language'])
     && in_array($request['chat_language'], array('en', 'bn', 'hi'), true)
@@ -411,6 +503,24 @@ if ($upstreamStatus < 200 || $upstreamStatus >= 300) {
         $errorDetails['provider_error'] = bounded_log_text($providerError, 500, $apiKey);
     }
     write_ai_error_log('provider_http_error', $errorDetails);
+}
+if ($operation === 'profile_generation' && $upstreamStatus >= 200 && $upstreamStatus < 300) {
+    $decodedProfileResponse = json_decode($upstreamResponse, true);
+    $profileContent = isset($decodedProfileResponse['choices'][0]['message']['content'])
+        && is_string($decodedProfileResponse['choices'][0]['message']['content'])
+        ? $decodedProfileResponse['choices'][0]['message']['content']
+        : null;
+    $safeProfileContent = dost_filter_ai_profile_content($profileContent, $romanceAllowed);
+    if (!is_string($safeProfileContent)) {
+        respond(502, array('error' => 'AI provider returned an invalid profile response'));
+    }
+    if ($safeProfileContent !== $profileContent) {
+        $decodedProfileResponse['choices'][0]['message']['content'] = $safeProfileContent;
+        $upstreamResponse = json_encode($decodedProfileResponse, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if (!is_string($upstreamResponse)) {
+            respond(502, array('error' => 'AI profile safety check failed'));
+        }
+    }
 }
 if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300) {
     $decodedResponse = json_decode($upstreamResponse, true);

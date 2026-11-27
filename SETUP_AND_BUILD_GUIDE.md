@@ -28,7 +28,7 @@ Debug builds can compile without `google-services.json`, but Firebase authentica
 ### Enable People and age eligibility
 
 1. Create a Cloud Firestore database in the same project and region that the app will use.
-2. Link this Google Cloud project to `com.snigtus.dost` in Play Console. The app is for ages 13+; only Explore Plus is 18+ and requires server-verified eligibility. Do not configure **Restrict Minor Access** for the whole app.
+2. Link this Google Cloud project to `com.snigtus.dost` in Play Console. The app is for ages 13+; People discovery/chat and Explore Plus remain adults-only and require server-verified eligibility. Do not configure **Restrict Minor Access** for the whole app.
 3. Enable the Play Integrity API, Identity Toolkit API, Cloud Firestore API, and Firebase Cloud Messaging API in the linked Google Cloud project.
 4. Deploy the checked-in Firestore rules and indexes from the repository root:
 
@@ -37,7 +37,7 @@ Debug builds can compile without `google-services.json`, but Firebase authentica
    firebase deploy --only firestore --project YOUR_FIREBASE_PROJECT_ID
    ```
 
-   Do not replace these rules with open test rules. People access requires the server-issued, short-lived `dostAgeEligible` claim.
+   Do not replace these rules with open test rules. People access requires the server-issued `dostAgeCohort == adult` claim and short-lived `dostAgeEligible` claim.
 5. Enable Firestore TTL for each call collection group. Replace `YOUR_FIREBASE_PROJECT_ID` in these commands:
 
    ```powershell
@@ -56,7 +56,22 @@ Debug builds can compile without `google-services.json`, but Firebase authentica
    Pop-Location
    ```
 
-The app's Play Age Signals gate and Play Console restriction are separate from the server claim. A sideloaded debug build normally cannot satisfy Play licensing checks; verify age eligibility with a Play-installed build and a registered Play license tester.
+### Owner checklist: Play audience, rating, and child safety
+
+The repository does not change Play Console settings or publish policy pages. Complete these items before release:
+
+- [ ] In Play Console **Target audience and content**, select ages **13–15**, **16–17**, and **18+**. Do not select under 13; this is not a Designed for Families app.
+- [ ] Turn **off** whole-app **Restrict Minor Access**. Keep adult-only People and Explore Plus enforcement in server claims and Firestore/PHP.
+- [ ] Complete the IARC content-rating questionnaire for **user interaction**, **sharing user-provided information**, and **AI-generated content**; save the submitted answers and rating.
+- [ ] Publish the app's Child Safety Standards / CSAE page on Hostinger. Add the final public URL here, link it in-app and in Play Console, and keep it current: **Owner to provide URL: ____________________**.
+- [ ] Confirm in-app reporting is available from every shipped social/communication surface. Current People reports are admin-reviewed; do not assume that covers Circle, groups, AI chats, Shield, or Cipher until those surfaces exist and have report controls.
+- [ ] Document the CSAM escalation and reporting process, including preservation, platform escalation, and legally required reporting. Do not ask users to upload or send suspected CSAM to support.
+- [ ] Designate and monitor a child-safety contact for Play Console and the published CSAE page: **Owner to provide contact: ____________________**.
+- [ ] Confirm reports from or about minors are prioritized for review, and test that blocks take effect immediately in the server rules.
+
+These are owner actions; this PR does not modify Play Console or production configuration. Paid billing and age-sensitive features must remain disabled by default until the owner explicitly approves enabling them.
+
+Play Age Signals supplies an age band and does not block teens from the app. A sideloaded debug build normally cannot satisfy Play licensing checks; verify adult-only People eligibility with a Play-installed build and a registered Play license tester. The Hostinger `age_cohort.php` endpoint assigns immutable server claims from the birth month/year entered before signup.
 
 For QA on a debug or sideloaded build, the server-only tester allowlist is disabled by default. Set `DOST_AGE_ELIGIBILITY_TEST_MODE=true` (or `age_eligibility_test_mode => true` in server-only `config.php`) and set `DOST_AGE_ELIGIBILITY_TEST_UIDS` to a comma-separated list of Firebase UIDs (or `age_eligibility_test_uids` to an array). Only the exact value `true` enables test mode, and an empty allowlist enables nobody. For allowlisted UIDs only, the server may accept `UNRECOGNIZED_VERSION` and `UNLICENSED`; Firebase token/UID verification, the Google Integrity decode call, package name, request hash and nonce, fresh timestamp, and `MEETS_DEVICE_INTEGRITY` remain required. Device integrity is not relaxed. Successful checks still issue the normal six-hour claim. Rejections are logged by failed check without tokens or raw payloads, and only allowlisted testers receive a non-sensitive reason code; production callers keep the generic error. Never add a client-side debug bypass.
 
@@ -88,7 +103,7 @@ Set these values in Hostinger's PHP environment or the server-only `config.php` 
 
 Use separate, randomly generated values for the app credential and TURN shared secret. Keep each service-account key outside the web root and source control. Do not grant broad project roles such as Owner or Editor to these service accounts.
 
-For the complete endpoint permissions, variable fallbacks, and coturn requirements, follow the **Trusted People age eligibility** and **People audio and video calls** sections of [app/api/README.md](app/api/README.md).
+For the complete endpoint permissions, variable fallbacks, and coturn requirements, follow the **Trusted People age eligibility**, **Premium**, and **People audio and video calls** sections of [app/api/README.md](app/api/README.md).
 
 ### Provision TURN and retention
 
@@ -103,10 +118,16 @@ From `app/api/` on a PHP development environment, lint the deployed PHP files an
 ```powershell
 php.exe -l age_eligibility.php
 php.exe -l age_eligibility_support.php
+php.exe -l age_cohort.php
+php.exe -l ai.php
+php.exe -l premium_verify.php
+php.exe -l premium_intro_grant.php
 php.exe -l people_call_support.php
 php.exe -l people_call_push.php
 php.exe -l people_call_ice_servers.php
 php.exe test_age_eligibility.php
+php.exe test_premium_support.php
+php.exe test_romance_safety.php
 php.exe test_people_call_support.php
 ```
 
