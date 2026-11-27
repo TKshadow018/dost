@@ -1104,7 +1104,7 @@ internal fun ProfileHomeScreen(
                 OutlinedButton(onClick = onOpenSuperSecure, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Lock, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Super Secure")
+                    Text("Shield")
                 }
             }
         }
@@ -1423,7 +1423,10 @@ internal fun SettingsScreen(
     onCopyInstallationId: () -> Unit,
     onExportLocalData: () -> Unit,
     onImportLocalData: () -> Unit,
-    onDeleteServerArchive: () -> Unit
+    onDeleteServerArchive: () -> Unit,
+    shieldModeAvailable: Boolean = false,
+    shieldModeEnabled: Boolean = false,
+    onShieldModeChange: (Boolean) -> Unit = {}
 ) {
     var showAiSettings by remember { mutableStateOf(false) }
     var confirmArchiveDelete by remember { mutableStateOf(false) }
@@ -1447,6 +1450,29 @@ internal fun SettingsScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (shieldModeAvailable) {
+                item {
+                    SettingsSection("Modes") {
+                        Text("Shield", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Closed, admin-controlled organisation messaging, isolated from AI and analytics. Encrypted in transit and at rest by Google Cloud; not end-to-end encrypted.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "The organisation owner pays. Shield Team supports up to 10 active members; Shield Business supports up to 25.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Show Shield")
+                            Switch(checked = shieldModeEnabled, onCheckedChange = onShieldModeChange)
+                        }
+                    }
+                }
+            }
             item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "দোস্ত প্রিমিয়াম"

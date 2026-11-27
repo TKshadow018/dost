@@ -72,13 +72,17 @@ $projectId = $setting('DOST_FIREBASE_PROJECT_ID', 'firebase_project_id');
 $apiKey = $setting('DOST_FIREBASE_WEB_API_KEY', 'firebase_web_api_key');
 $serviceAccountPath = $setting('DOST_PREMIUM_SERVICE_ACCOUNT_PATH', 'premium_service_account_path');
 $packageName = $setting('DOST_PLAY_PACKAGE_NAME', 'play_package_name');
-$premiumEnabled = strtolower($setting('DOST_PREMIUM_ENABLED', 'premium_enabled'));
-if (!in_array($premiumEnabled, array('true', 'false'), true)) {
-    error_log('Dost Premium enabled setting must be true or false.');
+$isShieldPurchase = dost_shield_seats_for_product($request['product_id']) !== false;
+$planEnabledValue = $isShieldPurchase
+    ? $setting('DOST_PLAN_SHIELD_ENABLED', 'plan_shield_enabled')
+    : $setting('DOST_PREMIUM_ENABLED', 'premium_enabled');
+$planEnabled = strtolower($planEnabledValue === '' ? 'false' : $planEnabledValue);
+if (!in_array($planEnabled, array('true', 'false'), true)) {
+    error_log('Dost paid-plan enabled setting must be true or false.');
     dost_premium_respond(503, array('error' => 'Premium verification is not configured'));
 }
-if ($premiumEnabled !== 'true') {
-    dost_premium_respond(503, array('error' => 'Premium purchases are not enabled'));
+if ($planEnabled !== 'true') {
+    dost_premium_respond(503, array('error' => 'Paid plan purchases are not enabled'));
 }
 if ($projectId === '' || $apiKey === '' || $serviceAccountPath === ''
     || $packageName !== 'com.snigtus.dost'
@@ -188,7 +192,9 @@ if (!is_array($customClaims)) {
     error_log('Dost Premium custom claims are malformed.');
     dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
 }
-$updatedClaims = dost_premium_claims($customClaims, $request['product_id'], $entitlement, time());
+$updatedClaims = $isShieldPurchase
+    ? dost_shield_claims($customClaims, $request['product_id'], $entitlement, time())
+    : dost_premium_claims($customClaims, $request['product_id'], $entitlement, time());
 $customAttributes = is_array($updatedClaims)
     ? json_encode($updatedClaims, JSON_UNESCAPED_SLASHES)
     : false;
@@ -208,8 +214,11 @@ if ($claimUpdate === false || $claimUpdate['status'] !== 200) {
 dost_firebase_claim_unlock($claimLock);
 
 dost_premium_respond(200, array(
-    'premium' => true,
+    'premium' => !$isShieldPurchase,
+    'shield' => $isShieldPurchase,
     'source' => 'play',
+    'shield_seats' => $isShieldPurchase ? (int) $updatedClaims['dostShieldSeats'] : null,
+    'shield_until' => $isShieldPurchase ? (int) $updatedClaims['dostShieldUntil'] : null,
     'lifetime' => !empty($updatedClaims['dostPremiumLifetime']),
     'premium_until' => isset($updatedClaims['dostPremiumUntil']) ? (int) $updatedClaims['dostPremiumUntil'] : null,
     'intro_granted' => !empty($updatedClaims['dostPremiumIntroGranted'])

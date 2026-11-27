@@ -11,6 +11,15 @@ import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import org.json.JSONObject
+import org.json.JSONArray
+import java.io.OutputStream
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -32,9 +41,15 @@ internal object SuperSecureSession {
 }
 
 internal const val MAX_SECURE_ORG_MEMBERS = 25
+internal const val SHIELD_GRACE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
-internal fun secureCanAddMembers(memberCount: Int): Boolean =
-    memberCount in 1 until MAX_SECURE_ORG_MEMBERS
+internal fun secureCanAddMembers(
+    memberCount: Int,
+    seatLimit: Int = MAX_SECURE_ORG_MEMBERS
+): Boolean = seatLimit in listOf(10, 25) && memberCount in 1 until seatLimit
+
+internal fun secureOrganizationIsReadOnly(activeUntilMillis: Long?, nowMillis: Long): Boolean =
+    activeUntilMillis == null || nowMillis >= activeUntilMillis + SHIELD_GRACE_MILLIS
 
 internal fun superSecureSessionAllowsAi(): Boolean = !SuperSecureSession.active
 internal fun superSecureSessionAllowsTelemetry(): Boolean = !SuperSecureSession.active
@@ -43,7 +58,9 @@ internal data class SecureOrgSummary(
     val id: String,
     val name: String,
     val role: SecureOrgRole,
-    val memberCount: Int
+    val memberCount: Int,
+    val seatLimit: Int = MAX_SECURE_ORG_MEMBERS,
+    val activeUntilMillis: Long? = null
 )
 
 internal data class SecureOrgMember(
@@ -99,8 +116,12 @@ internal class SuperSecureRepository(context: Context) {
 
     private fun requireSignedIn(uid: String) {
         val currentUid = app?.let { FirebaseAuth.getInstance(it).currentUser?.uid }
-        check(uid.isNotBlank() && uid == currentUid) { "Sign in to use Super Secure." }
+        check(uid.isNotBlank() && uid == currentUid) { "Sign in to use Shield." }
     }
+
+    suspend fun isFeatureEnabled(): Boolean =
+        database().collection("secureOrgConfig").document("superSecure")
+            .get(Source.SERVER).await().getBoolean("enabled") == true
 
     suspend fun openOrganization(uid: String, organizationId: String): SecureOrgSummary {
         requireSignedIn(uid)
@@ -112,13 +133,28 @@ internal class SuperSecureRepository(context: Context) {
         }
         val orgSnapshot = organization.get(Source.SERVER).await()
         check(orgSnapshot.exists()) { "This organization is unavailable." }
+        val role = SecureOrgRole.parse(member.getString("role"))
+        var planActiveUntilMillis = orgSnapshot.getTimestamp("plan.activeUntil")?.toDate()?.time
+        var planSeatLimit = orgSnapshot.getLong("plan.seatLimit")?.toInt()
+            ?.takeIf { it in listOf(10, 25) }
+            ?: MAX_SECURE_ORG_MEMBERS
+        if (role == SecureOrgRole.OWNER) {
+            runCatching { syncOrganizationPlan(uid, organizationId) }
+            val refreshedOrganization = organization.get(Source.SERVER).await()
+            planActiveUntilMillis = refreshedOrganization.getTimestamp("plan.activeUntil")?.toDate()?.time
+            planSeatLimit = refreshedOrganization.getLong("plan.seatLimit")?.toInt()
+                ?.takeIf { it in listOf(10, 25) }
+                ?: MAX_SECURE_ORG_MEMBERS
+        }
         return SecureOrgSummary(
             id = organizationId,
             name = orgSnapshot.getString("name") ?: error("Organization name is unavailable."),
-            role = SecureOrgRole.parse(member.getString("role")),
+            role = role,
             memberCount = orgSnapshot.getLong("memberCount")?.toInt()
                 ?.takeIf { it in 1..MAX_SECURE_ORG_MEMBERS }
-                ?: error("Organization membership is unavailable.")
+                ?: error("Organization membership is unavailable."),
+            seatLimit = planSeatLimit,
+            activeUntilMillis = planActiveUntilMillis
         )
     }
 
@@ -158,7 +194,116 @@ internal class SuperSecureRepository(context: Context) {
             "org_created"
         ))
         batch.commit().await()
-        return SecureOrgSummary(organization.id, trimmedName, SecureOrgRole.OWNER, 1)
+        return openOrganization(uid, organization.id)
+    }
+
+    private suspend fun syncOrganizationPlan(uid: String, organizationId: String) = withContext(Dispatchers.IO) {
+        requireSignedIn(uid)
+        require(organizationId.matches(ORG_ID_PATTERN)) { "Enter a valid organization ID." }
+        val currentUser = app?.let { FirebaseAuth.getInstance(it).currentUser }
+            ?: error("Sign in to use Shield.")
+        val idToken = currentUser.getIdToken(true).await().token
+            ?: error("Could not verify the signed-in account.")
+        val connection = URL("$SHIELD_API_ROOT/shield_plan_sync.php").openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 15_000
+            connection.doOutput = true
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Authorization", "Bearer " + idToken)
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            val payload = JSONObject()
+                .put("uid", uid)
+                .put("org_id", organizationId)
+                .toString()
+                .toByteArray(StandardCharsets.UTF_8)
+            connection.outputStream.use { it.write(payload) }
+            check(connection.responseCode in 200..299) { "Shield plan could not be activated." }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    suspend fun exportOrganization(uid: String, organizationId: String, output: OutputStream) {
+        requireSignedIn(uid)
+        require(organizationId.matches(ORG_ID_PATTERN)) { "Enter a valid organization ID." }
+        val organization = organizationRef(organizationId)
+        val ownerMembership = organization.collection(MEMBERS).document(uid).get(Source.SERVER).await()
+        check(ownerMembership.getString("status") == ACTIVE
+            && ownerMembership.getString("role") == SecureOrgRole.OWNER.value
+        ) { "Only the organization owner can export Shield data." }
+        val orgSnapshot = organization.get(Source.SERVER).await()
+        check(orgSnapshot.exists() && orgSnapshot.getString("ownerUid") == uid) {
+            "This organization is unavailable."
+        }
+
+        val writer = OutputStreamWriter(output, StandardCharsets.UTF_8)
+        writer.write(
+            JSONObject()
+                .put("format", "dost-shield-export")
+                .put("version", 1)
+                .put("organization", JSONObject()
+                    .put("id", organizationId)
+                    .put("name", orgSnapshot.getString("name"))
+                    .put("ownerUid", uid))
+                .toString()
+                .dropLast(1)
+        )
+        writer.write(",\"members\":[")
+        val members = organization.collection(MEMBERS).get(Source.SERVER).await()
+        members.documents.forEachIndexed { index, member ->
+            if (index > 0) writer.write(",")
+            writer.write(JSONObject()
+                .put("uid", member.getString("uid") ?: member.id)
+                .put("displayName", member.getString("displayName").orEmpty())
+                .put("role", member.getString("role").orEmpty())
+                .put("status", member.getString("status").orEmpty())
+                .toString())
+        }
+        writer.write("],\"groupMessages\":")
+        writeExportMessages(
+            writer,
+            organization.collection(GROUP_CHATS).document(MAIN_GROUP_CHAT).collection(MESSAGES)
+        )
+        writer.write(",\"directConversations\":[")
+        val directChats = organization.collection(DIRECT_CHATS).get(Source.SERVER).await().documents
+        directChats.forEachIndexed { index, chat ->
+            if (index > 0) writer.write(",")
+            writer.write(JSONObject()
+                .put("id", chat.id)
+                .put("members", JSONArray(chat.get("members") as? Collection<*> ?: emptyList<String>()))
+                .toString().dropLast(1))
+            writer.write(",\"messages\":")
+            writeExportMessages(writer, chat.reference.collection(MESSAGES))
+            writer.write("}")
+        }
+        writer.write("]}")
+        writer.flush()
+    }
+
+    private suspend fun writeExportMessages(writer: OutputStreamWriter, messages: Query) {
+        writer.write("[")
+        var lastDocument: DocumentSnapshot? = null
+        var first = true
+        while (true) {
+            var pageQuery = messages.orderBy("createdAt").limit(EXPORT_PAGE_SIZE.toLong())
+            if (lastDocument != null) pageQuery = pageQuery.startAfter(lastDocument)
+            val page = pageQuery.get(Source.SERVER).await()
+            page.documents.forEach { message ->
+                if (!first) writer.write(",")
+                first = false
+                writer.write(JSONObject()
+                    .put("id", message.id)
+                    .put("senderUid", message.getString("senderUid").orEmpty())
+                    .put("text", message.getString("text").orEmpty())
+                    .put("createdAtMillis", message.getTimestamp("createdAt")?.toDate()?.time ?: 0L)
+                    .toString())
+            }
+            if (page.documents.isEmpty()) break
+            lastDocument = page.documents.last()
+        }
+        writer.write("]")
     }
 
     fun listenMembership(
@@ -504,6 +649,8 @@ internal class SuperSecureRepository(context: Context) {
         const val MAX_MESSAGE_LENGTH = 4_000
         const val MAX_VISIBLE_MESSAGES = 100
         const val MAX_AUDIT_ENTRIES = 100
+        const val EXPORT_PAGE_SIZE = 200
+        const val SHIELD_API_ROOT = "https://bisque-bear-900175.hostingersite.com/api"
         val ORG_ID_PATTERN = Regex("[A-Za-z0-9_-]{1,128}")
         val UID_PATTERN = Regex("[A-Za-z0-9_-]{1,128}")
     }

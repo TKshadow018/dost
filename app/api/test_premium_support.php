@@ -69,6 +69,13 @@ dost_premium_test_assert(
     dost_premium_purchase_entitlement('dost_premium_annual', 'subscription', $subscription, $uid, $now) === false,
     'A purchase response for another product must not grant the requested plan.'
 );
+dost_premium_test_assert(
+    dost_premium_product_type('dost_shield_team') === 'subscription'
+        && dost_premium_product_type('dost_shield_business') === 'subscription'
+        && dost_shield_seats_for_product('dost_shield_team') === 10
+        && dost_shield_seats_for_product('dost_shield_business') === 25,
+    'Shield subscription products map to their fixed owner-paid seat limits.'
+);
 $claimLock = dost_firebase_claim_lock($uid);
 dost_premium_test_assert(is_resource($claimLock), 'Custom-claim updates acquire a per-user lock.');
 dost_firebase_claim_unlock($claimLock);
@@ -85,6 +92,50 @@ dost_premium_test_assert(
         && $claims['dostAgeEligible'] === true
         && $claims['dostPremiumUntil'] === $now + 3600,
     'Premium claims must preserve unrelated Firebase custom claims.'
+);
+$adultClaims = array(
+    'dostAgeEligible' => true,
+    'dostAgeEligibleUntil' => $now + 21600,
+    'dostAgeCohort' => 'adult'
+);
+$shieldClaims = dost_shield_claims(
+    $adultClaims,
+    'dost_shield_team',
+    array('lifetime' => false, 'expires_at' => $now + 3600),
+    $now
+);
+dost_premium_test_assert(
+    is_array($shieldClaims)
+        && $shieldClaims['dostShieldUntil'] === $now + 3600
+        && $shieldClaims['dostShieldSeats'] === 10
+        && $shieldClaims['dostAgeCohort'] === 'adult',
+    'A verified adult Shield Team purchase grants the owner a 10-seat claim without dropping age claims.'
+);
+dost_premium_test_assert(
+    dost_shield_plan_from_claims($shieldClaims, $now) === array(
+        'seatLimit' => 10,
+        'activeUntil' => $now + 3600
+    )
+    && dost_shield_plan_from_claims(
+        array('dostShieldSeats' => 11, 'dostShieldUntil' => $now + 3600),
+        $now
+    ) === false,
+    'Only validated 10-seat Team and 25-seat Business claims can become server-mirrored plans.'
+);
+dost_premium_test_assert(
+    dost_shield_claims(
+        array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => $now + 21600, 'dostAgeCohort' => 'teen'),
+        'dost_shield_business',
+        array('lifetime' => false, 'expires_at' => $now + 3600),
+        $now
+    ) === false
+    && dost_shield_claims(
+        $adultClaims,
+        'dost_shield_business',
+        array('lifetime' => false, 'expires_at' => $now),
+        $now
+    ) === false,
+    'Shield owner claims require a current adult-eligibility claim and an unexpired verified subscription.'
 );
 $introDays = 90;
 $launchAt = $now - 86400;

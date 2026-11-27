@@ -1,6 +1,6 @@
-# Super Secure Play Data safety notes
+# Shield Play Data safety notes
 
-**Draft input only — not a Play Console submission.** Reconcile these notes with the complete app's current SDK behavior and the actual production Firebase configuration before enabling Super Secure or submitting any Data safety declaration. Do not select "no data collected" or "no data shared" on the basis of this feature's isolation.
+**Draft input only — not a Play Console submission.** Reconcile these notes with the complete app's current SDK behavior and the actual production Firebase configuration before enabling Shield or submitting any Data safety declaration. Do not select "no data collected" or "no data shared" on the basis of this feature's isolation.
 
 ## Product-specific data inventory
 
@@ -11,7 +11,7 @@
 | Membership actor/target UIDs, action, and timestamp | Auditing role and membership changes | Sent to Firebase Firestore when a manager changes membership | Current managers can read the audit log |
 | Text message, sender UID, and timestamp | Group and 1:1 messaging | Sent to Firebase Firestore when a member sends a message | Group messages are available to current org members; direct messages to the two current participants |
 
-Super Secure does not collect message media, contacts, location, email addresses for member lookup, or invite codes. It does not send its content to AI/model services, AI archives, People collections, analytics, ads, or Crashlytics custom keys/logs. Normal app Crashlytics reports remain enabled; review the full SDK data collection declaration independently.
+Shield does not collect message media, contacts, location, email addresses for member lookup, or invite codes. It does not send its content to AI/model services, AI archives, People collections, analytics, product-improvement/testing systems, ads, or Crashlytics custom keys/logs. Normal app Crashlytics reports remain enabled; review the full SDK data collection declaration independently. Shield is closed and admin-controlled, encrypted in transit and at rest by Google Cloud, and is not end-to-end encrypted.
 
 ## Draft declaration inputs
 

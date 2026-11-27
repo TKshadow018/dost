@@ -1,6 +1,6 @@
 # Dost AI API (Hostinger)
 
-Upload `ai.php`, `app_credential.php`, `age_eligibility.php`, `age_eligibility_support.php`, `archive_store.php`, `delete_archive.php`, `romance_safety.php`, `telemetry_store.php`, and `.htaccess` to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. The PHP endpoints load helper files from the same directory; uploading an endpoint alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
+Upload the API files as a complete set to `public_html/api/` on `bisque-bear-900175.hostingersite.com`. PHP endpoints load helper files from the same directory; uploading an endpoint alone will fail. Keep the existing `default.php` image-upload endpoint; this API uses a separate URL:
 
 `https://bisque-bear-900175.hostingersite.com/api/ai.php`
 
@@ -56,6 +56,14 @@ Deploy `people_message_push.php` and the updated `people_call_support.php` besid
 The app offers `dost_premium_monthly` and `dost_premium_annual` subscriptions plus the non-consumable `dost_premium_lifetime` product. Create those exact products in Play Console and configure regional prices there. Upload `premium_verify.php`, `premium_intro_grant.php`, `premium_support.php`, and the already-required `age_eligibility_support.php` to the API directory.
 
 Configure `DOST_PREMIUM_SERVICE_ACCOUNT_PATH` (or `premium_service_account_path`) as an absolute path to a service-account JSON file outside the web root. The intro endpoint uses this path when set, otherwise it falls back to `DOST_FIREBASE_SERVICE_ACCOUNT_PATH` / `firebase_service_account_path`. Also configure `DOST_FIREBASE_PROJECT_ID`, `DOST_FIREBASE_WEB_API_KEY`, and `DOST_PLAY_PACKAGE_NAME=com.snigtus.dost`. The service account must belong to the same Firebase project and have the Firebase Authentication user lookup/update permissions needed to set custom claims. Premium purchases additionally require Android Publisher API authorization in Play Console; enable that API only for the purchase flow. The intro grant uses Identity Toolkit only. Keep the service-account key out of the repository, APK, and web root.
+
+## Shield owner plans
+
+`premium_verify.php` recognizes `dost_shield_team` (10 active seats) and `dost_shield_business` (25 active seats). Purchases set the owner's `dostShieldUntil` and `dostShieldSeats` custom claims only when the verified account has a current adult-eligibility claim and cohort. Invited members need a server-issued `dostAgeCohort` of `teen` or `adult`; they do not need to buy a plan.
+
+Deploy `shield_plan_sync.php` with `premium_support.php` and `age_eligibility_support.php`. It validates the Firebase ID token, verifies the owner and live plan claims, checks the server-controlled `secureOrgConfig/superSecure` switch, then mirrors `seatLimit` and `activeUntil` to `secureOrgs/{orgId}.plan` using the service account. Grant the service account Firestore Datastore access in addition to Identity Toolkit access. Client writes to `plan` are denied by Firestore rules.
+
+Keep `DOST_PLAN_SHIELD_ENABLED` / `plan_shield_enabled` set to `false` and the build flag `DOST_SUPER_SECURE_ENABLED` off unless the owner explicitly approves launch. Do not create or activate Play products, or change production config, as part of this implementation. The export path is app-only; server migration remains a manual customer service.
 
 The intro grant is separate from Play billing. Configure `DOST_INTRO_PREMIUM_ENABLED=true` and `DOST_INTRO_PREMIUM_DAYS=90`; an invalid or false enabled flag returns HTTP 503 without changing claims. `DOST_PREMIUM_ENABLED=false` independently disables purchases and does not disable intro grants. `intro_premium_launch_at` / `DOST_INTRO_PREMIUM_LAUNCH_AT` is an optional epoch-seconds, epoch-milliseconds, or ISO-8601 rollout timestamp: accounts created before it receive the full grant from first request, while accounts created at or after it use Firebase Auth `createdAt` plus the configured days. If omitted, accounts created more than 24 hours before the first grant use the first-request time; recently created accounts use their `createdAt`. The grant is recorded once on the Firebase user and is not reset by reinstall or sign-out. The endpoint rate-limits by source IP and never needs a Play purchase token.
 

@@ -17,6 +17,7 @@ return array(
     'premium_service_account_path' => '/home/ACCOUNT/private/firebase-service-account.json',
     'play_package_name' => 'com.snigtus.dost',
     'premium_enabled' => 'false',
+    'plan_shield_enabled' => 'false',
     'intro_premium_enabled' => 'true',
     'intro_premium_days' => '90',
     'intro_premium_launch_at' => '',

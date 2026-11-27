@@ -6,7 +6,7 @@ See the [Dost App Overview](APP_OVERVIEW_FOR_USERS.md) for a user-facing summary
 
 For end-to-end Firebase, Hostinger backend, People calling, and APK setup, see the [Setup and Build Guide](SETUP_AND_BUILD_GUIDE.md).
 
-The Super Secure MVP decisions, launch gates, and draft legal/Data safety materials are in [SUPER_SECURE_MVP.md](SUPER_SECURE_MVP.md) and [docs/super-secure](docs/super-secure/).
+Shield (the renamed Super Secure MVP) decisions, launch gates, and draft legal/Data safety materials are in [SUPER_SECURE_MVP.md](SUPER_SECURE_MVP.md) and [docs/super-secure](docs/super-secure/).
 
 ## Firebase Authentication setup
 

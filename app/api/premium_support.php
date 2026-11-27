@@ -7,7 +7,9 @@ function dost_premium_product_type($productId)
     $products = array(
         'dost_premium_monthly' => 'subscription',
         'dost_premium_annual' => 'subscription',
-        'dost_premium_lifetime' => 'lifetime'
+        'dost_premium_lifetime' => 'lifetime',
+        'dost_shield_team' => 'subscription',
+        'dost_shield_business' => 'subscription'
     );
     return isset($products[$productId]) ? $products[$productId] : false;
 }
@@ -100,6 +102,55 @@ function dost_premium_claims($existing, $productId, $entitlement, $now)
     $existing['dostPremiumProductId'] = $productId;
     $existing['dostPremiumSource'] = 'play';
     return $existing;
+}
+
+function dost_shield_seats_for_product($productId)
+{
+    if ($productId === 'dost_shield_team') {
+        return 10;
+    }
+    if ($productId === 'dost_shield_business') {
+        return 25;
+    }
+    return false;
+}
+
+function dost_shield_claims($existing, $productId, $entitlement, $now)
+{
+    $seats = dost_shield_seats_for_product($productId);
+    if (!is_array($existing) || $seats === false || !is_array($entitlement)
+        || !is_int($now) || !empty($entitlement['lifetime'])
+        || !isset($entitlement['expires_at']) || !is_numeric($entitlement['expires_at'])
+        || (int) $entitlement['expires_at'] <= $now
+        || !isset($existing['dostAgeEligible'], $existing['dostAgeEligibleUntil'], $existing['dostAgeCohort'])
+        || $existing['dostAgeEligible'] !== true
+        || !is_numeric($existing['dostAgeEligibleUntil'])
+        || (int) $existing['dostAgeEligibleUntil'] <= $now
+        || $existing['dostAgeCohort'] !== 'adult'
+    ) {
+        return false;
+    }
+
+    $existing['dostShieldUntil'] = (int) $entitlement['expires_at'];
+    $existing['dostShieldSeats'] = $seats;
+    return $existing;
+}
+
+function dost_shield_plan_from_claims($claims, $now)
+{
+    if (!is_array($claims) || !is_int($now)
+        || !isset($claims['dostShieldUntil'], $claims['dostShieldSeats'])
+        || !is_numeric($claims['dostShieldUntil'])
+        || !in_array($claims['dostShieldSeats'], array(10, 25), true)
+        || (int) $claims['dostShieldUntil'] <= 0
+    ) {
+        return false;
+    }
+
+    return array(
+        'seatLimit' => $claims['dostShieldSeats'],
+        'activeUntil' => (int) $claims['dostShieldUntil']
+    );
 }
 
 function dost_premium_account_creation_epoch($createdAt)

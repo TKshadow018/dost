@@ -1,10 +1,10 @@
-# Super Secure Data Processing Addendum — draft template
+# Shield Data Processing Addendum — draft template
 
 **Unexecuted template. Do not sign or represent as a DPA until completed and approved by counsel and the service operator.** This draft assumes the customer is controller and Dost is processor for organization data; confirm the parties' actual legal roles and governing law.
 
 ## 1. Parties and service
 
-This Addendum is between **[Dost legal entity and address]** ("Processor") and **[Customer legal entity and address]** ("Controller"), effective **[date]**. It applies only to Super Secure organization data processed to provide the closed-group messaging service under **[main agreement]**.
+This Addendum is between **[Dost legal entity and address]** ("Processor") and **[Customer legal entity and address]** ("Controller"), effective **[date]**. It applies only to Shield organisation data processed to provide the closed-group messaging service under **[main agreement]**.
 
 ## 2. Processing details
 
@@ -27,11 +27,11 @@ Processor will:
 6. restrict access to current organization members under Firestore rules, with role-limited management and audit access; and
 7. provide information reasonably needed to demonstrate compliance, subject to security and confidentiality restrictions.
 
-Super Secure is not end-to-end encrypted. Firebase infrastructure and privileged project administrators may technically access stored data. Processor will not claim otherwise.
+Shield is closed, admin-controlled, isolated from AI and analytics, and encrypted in transit and at rest by Google Cloud. It is not end-to-end encrypted. Google Cloud infrastructure and privileged project administrators may technically access stored data. Processor will not claim otherwise.
 
 ## 4. Subprocessors and transfers
 
-The known hosting subprocessor is **Google Firebase/Cloud Firestore** under the configured Google Cloud project and region: **[confirm project and region]**. Before execution, Processor must list all applicable subprocessors, processing locations, and transfer safeguards; notify Controller of material changes; and provide a reasonable objection process. No other AI/model provider receives Super Secure data.
+The known hosting subprocessor is **Google Firebase/Cloud Firestore** under the configured Google Cloud project and region: **[confirm project and region]**. Before execution, Processor must list all applicable subprocessors, processing locations, and transfer safeguards; notify Controller of material changes; and provide a reasonable objection process. No AI/model provider receives Shield data.
 
 ## 5. Retention, return, and deletion
 

@@ -317,6 +317,10 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("anonymous_telemetry_enabled", enabled).apply()
     }
+    fun shieldModeEnabled(): Boolean = preferences.getBoolean("shield_mode_enabled", false)
+    fun setShieldModeEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("shield_mode_enabled", enabled).apply()
+    }
     fun peopleCallAlertsEnabled(defaultEnabled: Boolean): Boolean =
         preferences.getBoolean("people_call_alerts_enabled", defaultEnabled)
     fun hasPeopleCallAlertsChoice(): Boolean = preferences.contains("people_call_alerts_enabled")

@@ -21,12 +21,15 @@ internal enum class AnonymousTelemetryEvent(val wireName: String) {
     PROACTIVE_REPLY_COMPLETED("proactive_reply_completed")
 }
 
+internal fun anonymousTelemetryAllowed(enabled: Boolean): Boolean =
+    enabled && superSecureSessionAllowsTelemetry()
+
 internal object AnonymousTelemetry {
     private const val ENDPOINT = "https://bisque-bear-900175.hostingersite.com/api/telemetry.php"
     private const val TAG = "DostTelemetry"
 
     suspend fun record(enabled: Boolean, event: AnonymousTelemetryEvent) = withContext(Dispatchers.IO) {
-        if (!enabled || !superSecureSessionAllowsTelemetry()) return@withContext
+        if (!anonymousTelemetryAllowed(enabled)) return@withContext
 
         val connection = URL(ENDPOINT).openConnection() as HttpURLConnection
         try {

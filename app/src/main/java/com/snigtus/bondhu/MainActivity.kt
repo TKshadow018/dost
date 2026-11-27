@@ -165,6 +165,8 @@ fun DostApp(
     var openRouterApiKey by appViewModel.openRouterApiKey
     var aiModel by appViewModel.aiModel
     var anonymousTelemetryEnabled by remember { mutableStateOf(store.anonymousTelemetryEnabled()) }
+    var shieldModeEnabled by remember { mutableStateOf(store.shieldModeEnabled()) }
+    var shieldServerEnabled by remember { mutableStateOf(false) }
     var aiNotificationPreviewsEnabled by remember { mutableStateOf(store.aiNotificationPreviewsEnabled()) }
     var proactiveEnabled by remember { mutableStateOf(store.proactiveEnabled()) }
     var proactiveCadenceMinutes by remember { mutableIntStateOf(store.proactiveCadenceMinutes()) }
@@ -180,6 +182,16 @@ fun DostApp(
             friends.forEach { ReplyNotifier.cancelReply(context, it.id) }
         }
     }
+    LaunchedEffect(screen, BuildConfig.DOST_SUPER_SECURE_ENABLED) {
+        if (BuildConfig.DOST_SUPER_SECURE_ENABLED &&
+            (screen == AppScreen.HOME || screen == AppScreen.SETTINGS)
+        ) {
+            shieldServerEnabled = runCatching {
+                SuperSecureRepository(context).isFeatureEnabled()
+            }.getOrDefault(false)
+        }
+    }
+    val shieldModeAvailable = BuildConfig.DOST_SUPER_SECURE_ENABLED && shieldServerEnabled
     var selectedMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
     var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.ALL) }
     var homeInboxSearchQuery by remember { mutableStateOf("") }
@@ -290,11 +302,9 @@ fun DostApp(
     }
 
     fun openSuperSecure() {
-        if (!BuildConfig.DOST_SUPER_SECURE_ENABLED) return
-        withAdultEligibility {
-            SuperSecureSession.active = true
-            screen = AppScreen.SUPER_SECURE
-        }
+        if (!shieldModeAvailable || !shieldModeEnabled) return
+        SuperSecureSession.active = true
+        screen = AppScreen.SUPER_SECURE
     }
 
     fun closeSuperSecure() {
@@ -1140,7 +1150,7 @@ fun DostApp(
                     language = language,
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
                     email = authRepository.currentAccount?.email.orEmpty(),
-                    superSecureEnabled = BuildConfig.DOST_SUPER_SECURE_ENABLED,
+                    superSecureEnabled = shieldModeAvailable && shieldModeEnabled,
                     onOpenSuperSecure = ::openSuperSecure,
                     onOpenSettings = {
                         settingsReturnScreen = AppScreen.HOME
@@ -1284,6 +1294,12 @@ fun DostApp(
                         "Archive deletion failed: ${error.message?.take(160) ?: "please try again"}"
                     }
                 }
+            },
+            shieldModeAvailable = shieldModeAvailable,
+            shieldModeEnabled = shieldModeEnabled,
+            onShieldModeChange = {
+                shieldModeEnabled = it
+                store.setShieldModeEnabled(it)
             }
         )
         AppScreen.PREMIUM -> if (hasLocalAccountAccess()) PremiumScreen(
