@@ -173,6 +173,13 @@ fun DostApp(
     var quietHoursEndMinute by remember { mutableIntStateOf(store.quietHoursEndMinute()) }
     val friends = appViewModel.friends
     var selectedFriend by appViewModel.selectedFriend
+    LaunchedEffect(screen) {
+        SuperSecureSession.active = screen == AppScreen.SUPER_SECURE
+        if (screen == AppScreen.SUPER_SECURE) {
+            context.stopService(Intent(context, FloatingChatService::class.java))
+            friends.forEach { ReplyNotifier.cancelReply(context, it.id) }
+        }
+    }
     var selectedMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
     var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.ALL) }
     var homeInboxSearchQuery by remember { mutableStateOf("") }
@@ -280,6 +287,20 @@ fun DostApp(
                 checkingPeopleEligibility = false
             }
         }
+    }
+
+    fun openSuperSecure() {
+        if (!BuildConfig.DOST_SUPER_SECURE_ENABLED) return
+        withAdultEligibility {
+            SuperSecureSession.active = true
+            screen = AppScreen.SUPER_SECURE
+        }
+    }
+
+    fun closeSuperSecure() {
+        SuperSecureSession.active = false
+        ConversationManager.refreshProactiveWork()
+        screen = AppScreen.HOME
     }
 
     LaunchedEffect(activeFirebaseUid) {
@@ -397,6 +418,7 @@ fun DostApp(
             AppScreen.CHAT,
             AppScreen.PEOPLE,
             AppScreen.PEOPLE_CHAT,
+            AppScreen.SUPER_SECURE,
             AppScreen.FRIEND_PROFILE,
             AppScreen.SYSTEM_FRIEND_PICKER,
             AppScreen.KNOWLEDGE,
@@ -409,6 +431,9 @@ fun DostApp(
         when (screen) {
             AppScreen.CHAT -> screen = chatReturnScreen
             AppScreen.PEOPLE_CHAT -> screen = peopleChatReturnScreen
+            AppScreen.SUPER_SECURE -> {
+                closeSuperSecure()
+            }
             AppScreen.PEOPLE -> screen = AppScreen.HOME
             AppScreen.FRIEND_PROFILE -> screen = friendProfileReturnScreen
             AppScreen.SYSTEM_FRIEND_PICKER -> screen = AppScreen.HOME
@@ -1115,6 +1140,8 @@ fun DostApp(
                     language = language,
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
                     email = authRepository.currentAccount?.email.orEmpty(),
+                    superSecureEnabled = BuildConfig.DOST_SUPER_SECURE_ENABLED,
+                    onOpenSuperSecure = ::openSuperSecure,
                     onOpenSettings = {
                         settingsReturnScreen = AppScreen.HOME
                         screen = AppScreen.SETTINGS
@@ -1327,6 +1354,20 @@ fun DostApp(
             )
         } ?: run { screen = AppScreen.PEOPLE } else {
             selectedPeopleConversation = null
+            screen = AppScreen.HOME
+        }
+        AppScreen.SUPER_SECURE -> if (BuildConfig.DOST_SUPER_SECURE_ENABLED && hasLocalAccountAccess()) {
+            SuperSecureScreen(
+                context = context,
+                language = language,
+                uid = activeFirebaseUid,
+                displayName = name.ifBlank { store.userName() },
+                onBack = {
+                    closeSuperSecure()
+                }
+            )
+        } else {
+            SuperSecureSession.active = false
             screen = AppScreen.HOME
         }
         AppScreen.FRIEND_PROFILE -> if (hasLocalAccountAccess()) selectedFriend?.let { friend ->

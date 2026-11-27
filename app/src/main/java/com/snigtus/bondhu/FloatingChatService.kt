@@ -63,6 +63,10 @@ class FloatingChatService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!superSecureSessionAllowsAi()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!::friend.isInitialized) {
             val friendId = intent?.getStringExtra(EXTRA_FRIEND_ID)
             friend = store.loadFriends().firstOrNull { it.id == friendId }

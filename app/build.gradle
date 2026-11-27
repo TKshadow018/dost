@@ -54,8 +54,13 @@ android {
     if (!dostPremiumEnabledValue.equalsIgnoreCase("true") && !dostPremiumEnabledValue.equalsIgnoreCase("false")) {
         throw new GradleException("DOST_PREMIUM_ENABLED must be either true or false.")
     }
+    def dostSuperSecureEnabledValue = System.getenv("DOST_SUPER_SECURE_ENABLED") ?: providers.gradleProperty("DOST_SUPER_SECURE_ENABLED").orNull ?: "false"
+    if (!dostSuperSecureEnabledValue.equalsIgnoreCase("true") && !dostSuperSecureEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_SUPER_SECURE_ENABLED must be either true or false.")
+    }
     def dostPeopleEnabled = dostPeopleEnabledValue.equalsIgnoreCase("true")
     def dostPremiumEnabled = dostPremiumEnabledValue.equalsIgnoreCase("true")
+    def dostSuperSecureEnabled = dostSuperSecureEnabledValue.equalsIgnoreCase("true")
     def escapedDostAppCredentialSecret = dostAppCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")
 
     signingConfigs {
@@ -78,6 +83,7 @@ android {
         buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
         buildConfigField "boolean", "DOST_PEOPLE_ENABLED", dostPeopleEnabled.toString()
         buildConfigField "boolean", "DOST_PREMIUM_ENABLED", dostPremiumEnabled.toString()
+        buildConfigField "boolean", "DOST_SUPER_SECURE_ENABLED", dostSuperSecureEnabled.toString()
         buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseApiKey)
         buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseAppId)
         buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseProjectId)

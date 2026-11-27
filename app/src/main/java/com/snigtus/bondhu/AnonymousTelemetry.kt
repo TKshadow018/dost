@@ -26,7 +26,7 @@ internal object AnonymousTelemetry {
     private const val TAG = "DostTelemetry"
 
     suspend fun record(enabled: Boolean, event: AnonymousTelemetryEvent) = withContext(Dispatchers.IO) {
-        if (!enabled) return@withContext
+        if (!enabled || !superSecureSessionAllowsTelemetry()) return@withContext
 
         val connection = URL(ENDPOINT).openConnection() as HttpURLConnection
         try {

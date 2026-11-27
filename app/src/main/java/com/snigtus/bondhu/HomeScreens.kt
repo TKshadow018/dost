@@ -1050,7 +1050,9 @@ internal fun ProfileHomeScreen(
     language: AppLanguage,
     userName: String,
     email: String,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    superSecureEnabled: Boolean = false,
+    onOpenSuperSecure: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -1097,6 +1099,13 @@ internal fun ProfileHomeScreen(
                     AppLanguage.HINDI -> "सेटिंग्स और गोपनीयता"
                     AppLanguage.ENGLISH -> "Settings and privacy"
                 })
+            }
+            if (superSecureEnabled) {
+                OutlinedButton(onClick = onOpenSuperSecure, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Lock, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Super Secure")
+                }
             }
         }
     }

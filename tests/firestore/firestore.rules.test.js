@@ -24,6 +24,7 @@ import {
 const projectId = "demo-dost";
 const rules = await readFile(new URL("../../firestore.rules", import.meta.url), "utf8");
 let testEnv;
+let secureAuditSequence = 0;
 
 before(async () => {
   testEnv = await initializeTestEnvironment({
@@ -145,6 +146,107 @@ async function seedChat({ members = ["alice", "bob"], ageCohort = "adult", profi
   });
 }
 
+function secureUser(uid) {
+  return user(uid);
+}
+
+function secureMember(uid, actorUid, role, organizationName = "Private group", eventId = `evt-${uid}`) {
+  return {
+    uid,
+    displayName: uid,
+    role,
+    status: "active",
+    actorUid,
+    auditEventId: eventId,
+    organizationName,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+async function setSecureFeatureEnabled(enabled) {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "secureOrgConfig/superSecure"), {
+      enabled,
+    });
+  });
+}
+
+async function createSecureOrg(orgId, ownerUid, enableFeature = true) {
+  if (enableFeature) await setSecureFeatureEnabled(true);
+  const firestore = secureUser(ownerUid);
+  const batch = writeBatch(firestore);
+  batch.set(doc(firestore, `secureOrgs/${orgId}`), {
+    name: "Private group",
+    ownerUid,
+    memberCount: 1,
+    memberCountAuditEventId: "org-created",
+    createdAt: serverTimestamp(),
+  });
+  batch.set(
+    doc(firestore, `secureOrgs/${orgId}/members/${ownerUid}`),
+    secureMember(ownerUid, ownerUid, "owner", "Private group", "org-created"),
+  );
+  batch.set(doc(firestore, `secureOrgs/${orgId}/groupChats/main`), {
+    createdBy: ownerUid,
+    createdAt: serverTimestamp(),
+  });
+  batch.set(doc(firestore, `secureOrgs/${orgId}/auditLog/org-created`), {
+    actorUid: ownerUid,
+    targetUid: ownerUid,
+    action: "org_created",
+    createdAt: serverTimestamp(),
+  });
+  return batch.commit();
+}
+
+test("Super Secure remains unavailable until its server-controlled flag is enabled", async () => {
+  await assertFails(createSecureOrg("secure-disabled", "alice", false));
+  await assertFails(setDoc(doc(secureUser("alice"), "secureOrgConfig/superSecure"), {
+    enabled: true,
+  }));
+
+  await setSecureFeatureEnabled(true);
+  await assertSucceeds(createSecureOrg("secure-enabled", "alice", false));
+  await setSecureFeatureEnabled(false);
+
+  await assertFails(getDoc(doc(secureUser("alice"), "secureOrgs/secure-enabled")));
+  await assertFails(getDoc(doc(secureUser("alice"), "secureOrgs/secure-enabled/members/alice")));
+  await assertFails(setDoc(doc(secureUser("alice"), "secureOrgs/secure-enabled/groupChats/main/messages/disabled"), {
+    senderUid: "alice",
+    text: "The service is disabled.",
+    createdAt: serverTimestamp(),
+  }));
+});
+
+async function addSecureOrgMember(actorUid, orgId, targetUid, role = "member") {
+  const firestore = secureUser(actorUid);
+  const eventId = `evt-${targetUid}-${++secureAuditSequence}`;
+  const organization = await getDoc(doc(firestore, `secureOrgs/${orgId}`));
+  const memberCount = organization.get("memberCount");
+  const memberRef = doc(firestore, `secureOrgs/${orgId}/members/${targetUid}`);
+  const existingMember = await getDoc(memberRef);
+  const batch = writeBatch(firestore);
+  batch.update(doc(firestore, `secureOrgs/${orgId}`), {
+    memberCount: memberCount + 1,
+    memberCountAuditEventId: eventId,
+  });
+  const fields = secureMember(targetUid, actorUid, role, "Private group", eventId);
+  if (existingMember.exists()) {
+    delete fields.createdAt;
+    batch.update(memberRef, fields);
+  } else {
+    batch.set(memberRef, fields);
+  }
+  batch.set(doc(firestore, `secureOrgs/${orgId}/auditLog/${eventId}`), {
+    actorUid,
+    targetUid,
+    action: role === "manager" ? "manager_added" : "member_added",
+    createdAt: serverTimestamp(),
+  });
+  return batch.commit();
+}
+
 async function sendChatMessage(uid, messageId, text, unreadCounts) {
   const firestore = user(uid);
   const batch = writeBatch(firestore);
@@ -162,6 +264,179 @@ async function sendChatMessage(uid, messageId, text, unreadCounts) {
   });
   return batch.commit();
 }
+
+test("Super Secure organization data is private to current members", async () => {
+  await createSecureOrg("secure-a", "alice");
+  await addSecureOrgMember("alice", "secure-a", "bob");
+  await createSecureOrg("secure-b", "charlie");
+
+  await assertSucceeds(getDoc(doc(secureUser("alice"), "secureOrgs/secure-a")));
+  await assertSucceeds(getDoc(doc(secureUser("bob"), "secureOrgs/secure-a")));
+  await assertSucceeds(getDoc(doc(secureUser("bob"), "secureOrgs/secure-a/members/alice")));
+  await assertFails(getDoc(doc(secureUser("mallory"), "secureOrgs/secure-a")));
+  await assertFails(getDoc(doc(secureUser("alice"), "secureOrgs/secure-b")));
+  await assertFails(getDocs(collection(secureUser("alice"), "secureOrgs")));
+  await assertFails(getDoc(doc(testEnv.unauthenticatedContext().firestore(), "secureOrgs/secure-a")));
+  await assertSucceeds(setDoc(doc(secureUser("alice"), "secureOrgs/secure-a/groupChats/main/messages/group-message"), {
+    senderUid: "alice",
+    text: "Organization-only group text.",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(secureUser("mallory"), "secureOrgs/secure-a/groupChats/main/messages/outsider"), {
+    senderUid: "mallory",
+    text: "Not a member.",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(secureUser("alice"), "secureOrgs/secure-b/groupChats/main/messages/cross-org"), {
+    senderUid: "alice",
+    text: "Not in this organization.",
+    createdAt: serverTimestamp(),
+  }));
+
+  await assertSucceeds(setDoc(doc(secureUser("bob"), "secureOrgs/secure-a/directChats/alice-bob"), {
+    members: ["alice", "bob"],
+    createdBy: "bob",
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(secureUser("alice"), "secureOrgs/secure-a/directChats/alice-bob/messages/direct-message"), {
+    senderUid: "alice",
+    text: "Private to this pair.",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(secureUser("mallory"), "secureOrgs/secure-a/directChats/alice-bob")));
+  await assertFails(setDoc(doc(secureUser("alice"), "secureOrgs/secure-a/directChats/alice-bob/messages/too-long"), {
+    senderUid: "alice",
+    text: "x".repeat(4_001),
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(secureUser("alice"), "secureOrgs/secure-a/directChats/alice-mallory"), {
+    members: ["alice", "mallory"],
+    createdBy: "alice",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(secureUser("alice"), "secureOrgs/secure-b/directChats/alice-charlie"), {
+    members: ["alice", "charlie"],
+    createdBy: "alice",
+    createdAt: serverTimestamp(),
+  }));
+});
+
+test("only managers administer members, changes are audited, and removal revokes chat access", async () => {
+  await createSecureOrg("secure-a", "alice");
+  await addSecureOrgMember("alice", "secure-a", "manager", "manager");
+  await assertSucceeds(addSecureOrgMember("manager", "secure-a", "bob"));
+  assert.equal((await getDoc(doc(secureUser("alice"), "secureOrgs/secure-a"))).get("memberCount"), 3);
+
+  await assertFails(addSecureOrgMember("manager", "secure-a", "new-manager", "manager"));
+  await assertSucceeds(addSecureOrgMember("alice", "secure-a", "carol"));
+  const alice = secureUser("alice");
+  const carolMember = doc(alice, "secureOrgs/secure-a/members/carol");
+  const staleCarolAuditId = (await getDoc(carolMember)).get("auditEventId");
+  await assertFails(
+    updateDoc(doc(secureUser("bob"), "secureOrgs/secure-a/members/bob"), {
+      role: "manager",
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertFails(
+    setDoc(doc(secureUser("bob"), "secureOrgs/secure-a/invites/another-user"), {
+      uid: "another-user",
+    }),
+  );
+  await assertFails(
+    setDoc(doc(secureUser("bob"), "secureOrgs/secure-a/auditLog/fake"), {
+      actorUid: "bob",
+      targetUid: "another-user",
+      action: "member_added",
+      createdAt: serverTimestamp(),
+    }),
+  );
+
+  const firestore = secureUser("manager");
+  const batch = writeBatch(firestore);
+  batch.update(doc(firestore, "secureOrgs/secure-a/members/bob"), {
+    role: "member",
+    status: "removed",
+    actorUid: "manager",
+    auditEventId: "evt-remove-bob",
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(firestore, "secureOrgs/secure-a/auditLog/evt-remove-bob"), {
+    actorUid: "manager",
+    targetUid: "bob",
+    action: "member_removed",
+    createdAt: serverTimestamp(),
+  });
+  const organization = await getDoc(doc(firestore, "secureOrgs/secure-a"));
+  batch.update(doc(firestore, "secureOrgs/secure-a"), {
+    memberCount: organization.get("memberCount") - 1,
+    memberCountAuditEventId: "evt-remove-bob",
+  });
+  await assertSucceeds(batch.commit());
+
+  assert.equal((await getDoc(doc(secureUser("alice"), "secureOrgs/secure-a"))).get("memberCount"), 3);
+  await assertSucceeds(getDoc(doc(secureUser("manager"), "secureOrgs/secure-a/auditLog/evt-remove-bob")));
+  await assertFails(getDoc(doc(secureUser("bob"), "secureOrgs/secure-a/auditLog/evt-remove-bob")));
+  await assertFails(getDoc(doc(secureUser("carol"), "secureOrgs/secure-a/members/bob")));
+  const promotion = writeBatch(alice);
+  promotion.update(carolMember, {
+    role: "manager",
+    actorUid: "alice",
+    auditEventId: "evt-promote-carol",
+    updatedAt: serverTimestamp(),
+  });
+  promotion.set(doc(alice, "secureOrgs/secure-a/auditLog/evt-promote-carol"), {
+    actorUid: "alice",
+    targetUid: "carol",
+    action: "manager_promoted",
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(promotion.commit());
+  await assertFails(
+    updateDoc(doc(secureUser("manager"), "secureOrgs/secure-a/members/carol"), {
+      role: "manager",
+      status: "removed",
+      actorUid: "manager",
+      auditEventId: staleCarolAuditId,
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertFails(getDocs(collection(secureUser("bob"), "secureOrgs/secure-a/members")));
+  const activeMembers = await assertSucceeds(getDocs(query(
+    collection(secureUser("carol"), "secureOrgs/secure-a/members"),
+    where("status", "==", "active"),
+  )));
+  assert.deepEqual(activeMembers.docs.map((entry) => entry.id).sort(), ["alice", "carol", "manager"]);
+  await assertFails(getDocs(collection(secureUser("bob"), "secureOrgs/secure-a/groupChats/main/messages")));
+  await assertFails(setDoc(doc(secureUser("bob"), "secureOrgs/secure-a/groupChats/main/messages/after-removal"), {
+    senderUid: "bob",
+    text: "Removed members cannot send.",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(
+    updateDoc(doc(secureUser("alice"), "secureOrgs/secure-a/members/alice"), {
+      role: "member",
+      status: "removed",
+      actorUid: "alice",
+      auditEventId: "evt-remove-owner",
+      updatedAt: serverTimestamp(),
+    }),
+  );
+
+  await assertSucceeds(addSecureOrgMember("manager", "secure-a", "bob"));
+  assert.equal((await getDoc(doc(secureUser("alice"), "secureOrgs/secure-a"))).get("memberCount"), 4);
+});
+
+test("the Firestore boundary enforces the 25-active-member limit", async () => {
+  await createSecureOrg("secure-full", "alice");
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-full"), {
+      memberCount: 25,
+    });
+  });
+
+  await assertFails(addSecureOrgMember("alice", "secure-full", "bob"));
+});
 
 test("a user can create a private profile but cannot read another private profile", async () => {
   await assertSucceeds(

@@ -33,6 +33,7 @@ object ReplyNotifier {
     }
 
     fun notifyReply(context: Context, friend: Friend, preview: String, language: AppLanguage) {
+        if (!superSecureSessionAllowsAi()) return
         val notifications = NotificationManagerCompat.from(context)
         if (!notifications.areNotificationsEnabled()) return
         if (DostStore(context).isConversationMuted("ai:${friend.id}")) return

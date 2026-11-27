@@ -55,6 +55,7 @@ class OpenRouterClient {
     }
 
     suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile = structuredProfileFromMemories(userName, userMemories)): AiReply = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         require(friendAgeResult(friend.age) == AccountAgeResult.VALID) {
             "Messaging is disabled for friend profiles under 18."
         }
@@ -62,6 +63,7 @@ class OpenRouterClient {
     }
 
     suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         require(friendAgeResult(age) == AccountAgeResult.VALID) {
             "Generated friend profiles must be 18 or older."
         }
@@ -69,10 +71,12 @@ class OpenRouterClient {
     }
 
     suspend fun summarizeSession(apiKey: String, model: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         requestSessionSummary(model, apiKey, friendName, messages, language)
     }
 
     fun logConversationMessage(installationId: String, userName: String, friendId: String, friendName: String, message: ChatMessage): Boolean {
+        if (!superSecureSessionAllowsAi()) return true
         val body = JSONObject().apply {
             put("operation", "log_message")
             put("user_name", userName)
@@ -100,6 +104,7 @@ class OpenRouterClient {
     }
 
     suspend fun deleteServerArchive(installationId: String): Int = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI archives are unavailable in Super Secure mode." }
         require(installationId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
             "The installation id is invalid."
         }
@@ -140,6 +145,7 @@ class OpenRouterClient {
     }
 
     private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile): AiReply {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
@@ -265,6 +271,7 @@ class OpenRouterClient {
     }
 
     private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, personality: String, language: AppLanguage): FriendProfile {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         val system = """
             Create a complete fictional friend character for a social chat app. The user provided this personality and it must remain consistent: $personality. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
             Return only valid JSON with these exact string fields: personality, interests, family, familyMembers, familyActivities, financialCondition, address, height, weight, facialFeatures, bodyFeatures, conversationStyle.
@@ -290,6 +297,7 @@ class OpenRouterClient {
     }
 
     private fun requestSessionSummary(model: String, apiKey: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         val transcript = summaryMessages(messages).joinToString("\n") { message ->
             "${if (message.role == "user") "User" else friendName}: ${message.content}"
         }
@@ -343,6 +351,7 @@ class OpenRouterClient {
         .trim()
 
     private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null, nowEpochSeconds: Long = System.currentTimeMillis() / 1000): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         requestMethod = "POST"
         doOutput = true
         connectTimeout = 15_000
