@@ -56,6 +56,9 @@ internal fun mainNavigationTabs(exploreEnabled: Boolean): List<MainTab> =
     MainTab.values().filter { exploreEnabled || it != MainTab.DISCOVER }
 
 internal enum class HomeInboxFilter { ALL, AI_FRIENDS, PEOPLE, ARCHIVED }
+
+internal fun circleInboxFilter(selectedFilter: HomeInboxFilter): HomeInboxFilter =
+    if (selectedFilter == HomeInboxFilter.ARCHIVED) selectedFilter else HomeInboxFilter.PEOPLE
 private enum class ConversationMenuAction { PIN, MUTE, ARCHIVE }
 
 private fun conversationMenuLabel(
@@ -219,7 +222,7 @@ internal fun HomeScreen(
     } else {
         buildHomeInboxEntries(friends, messageMap, peopleConversations, pinnedConversationIds)
     }
-    val visibleFilter = if (circleOnly) HomeInboxFilter.PEOPLE else selectedFilter
+    val visibleFilter = if (circleOnly) circleInboxFilter(selectedFilter) else selectedFilter
     val inboxEntries = filterHomeInboxEntries(
         allInboxEntries,
         visibleFilter,
@@ -420,7 +423,7 @@ internal fun HomeScreen(
                                 )
                             }
                     }
-                    if (friends.any { it.profilePending }) {
+                    if (!circleOnly && friends.any { it.profilePending }) {
                         val creating = friends.any { it.profilePending && it.id !in profileFailedIds }
                         Text(
                             when {

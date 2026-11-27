@@ -17,6 +17,12 @@ class HomeInboxTest {
     }
 
     @Test
+    fun circleInboxPreservesArchivedFilter() {
+        assertEquals(HomeInboxFilter.PEOPLE, circleInboxFilter(HomeInboxFilter.ALL))
+        assertEquals(HomeInboxFilter.ARCHIVED, circleInboxFilter(HomeInboxFilter.ARCHIVED))
+    }
+
+    @Test
     fun circleInboxContainsOnlyPeopleConversations() {
         val person = PublicPersonProfile(
             uid = "person-uid",
