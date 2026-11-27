@@ -154,6 +154,8 @@ internal fun filterHomeInboxEntries(
 @Composable
 internal fun HomeScreen(
     language: AppLanguage,
+    exploreEnabled: Boolean,
+    onManageModes: () -> Unit,
     showFriendCount: Boolean,
     isPremium: Boolean,
     userName: String,
@@ -188,8 +190,21 @@ internal fun HomeScreen(
     generatingProfileIds: Set<String>,
     profileFailedIds: Set<String>,
     peopleEnabled: Boolean = true,
+    showExplorePlus: Boolean = false,
     onOpenPremium: () -> Unit
 ) {
+    if (!exploreEnabled) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("Explore is off", style = MaterialTheme.typography.titleLarge)
+            Text("Your Explore data is kept on this device. Turn Explore on in Settings to use it.")
+            TextButton(onClick = onManageModes) { Text("Open Settings") }
+        }
+        return
+    }
     val unreadCounts = ConversationManager.unread.collectAsState().value
     val messageMap = ConversationManager.messages.collectAsState().value
     val bangla = language == AppLanguage.BANGLA
@@ -317,12 +332,12 @@ internal fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (!isPremium && (!canAddCustomFriend || systemFriendCount >= MAX_SYSTEM_FRIENDS)) {
+                    if (showExplorePlus && !isPremium && (!canAddCustomFriend || systemFriendCount >= MAX_SYSTEM_FRIENDS)) {
                         TextButton(onClick = onOpenPremium) {
                             Text(when {
-                                bangla -> "সীমাহীন AI বন্ধুর জন্য প্রিমিয়াম"
-                                hindi -> "असीमित AI दोस्तों के लिए प्रीमियम"
-                                else -> "Explore Premium for more AI friends"
+                                bangla -> "Explore Plus"
+                                hindi -> "Explore Plus"
+                                else -> "Explore Plus for more AI friends"
                             })
                         }
                     }
@@ -849,13 +864,14 @@ private fun NoChatsMatch(language: AppLanguage) {
 internal fun MainNavigationScaffold(
     language: AppLanguage,
     selectedTab: MainTab,
+    exploreEnabled: Boolean,
     onSelectTab: (MainTab) -> Unit,
     content: @Composable () -> Unit
 ) {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                MainTab.values().forEach { tab ->
+                (if (exploreEnabled) MainTab.values().toList() else listOf(MainTab.CHATS, MainTab.PROFILE)).forEach { tab ->
                     val label = when (tab) {
                         MainTab.CHATS -> when (language) {
                             AppLanguage.BANGLA -> "চ্যাট"
@@ -1388,6 +1404,10 @@ internal fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange:
 internal fun SettingsScreen(
     language: AppLanguage,
     chatLanguage: AppLanguage,
+    exploreAvailable: Boolean,
+    exploreEnabled: Boolean,
+    exploreDisclosureAccepted: Boolean,
+    showExplorePlus: Boolean,
     showFriendCount: Boolean,
     friends: List<Friend>,
     userTimeZoneId: String,
@@ -1405,6 +1425,8 @@ internal fun SettingsScreen(
     settingsNotice: String,
     onBack: () -> Unit,
     onOpenPremium: () -> Unit,
+    onExploreEnabledChange: (Boolean) -> Unit,
+    onExploreDisclosureAccepted: () -> Unit,
     onDeleteFriend: (Friend) -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
     onChatLanguageChange: (AppLanguage) -> Unit,
@@ -1427,6 +1449,7 @@ internal fun SettingsScreen(
     onOpenPrivacy: () -> Unit
 ) {
     var showAiSettings by remember { mutableStateOf(false) }
+    var showExploreDisclosure by remember { mutableStateOf(false) }
     var confirmArchiveDelete by remember { mutableStateOf(false) }
     var friendToDelete by remember { mutableStateOf<Friend?>(null) }
     val context = LocalContext.current
@@ -1448,23 +1471,37 @@ internal fun SettingsScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
-                SettingsSection(when (language) {
-                    AppLanguage.BANGLA -> "দোস্ত প্রিমিয়াম"
-                    AppLanguage.HINDI -> "दोस्त प्रीमियम"
-                    AppLanguage.ENGLISH -> "Dost Premium"
-                }) {
-                    Text(when (language) {
-                        AppLanguage.BANGLA -> "সীমাহীন AI বন্ধু ও People লাইক, দৈনিক প্রোফাইল বুস্ট, চ্যাট থিম এবং আরও AI কাস্টমাইজেশন।"
-                        AppLanguage.HINDI -> "असीमित AI दोस्त और People लाइक, रोज़ाना प्रोफ़ाइल बूस्ट, चैट थीम और अधिक AI कस्टमाइज़ेशन।"
-                        AppLanguage.ENGLISH -> "Unlimited AI companions and People likes, a daily profile boost, chat themes, and more AI customization."
-                    }, style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = onOpenPremium, modifier = Modifier.fillMaxWidth()) {
-                        Text(when (language) {
-                            AppLanguage.BANGLA -> "প্রিমিয়াম দেখুন"
-                            AppLanguage.HINDI -> "प्रीमियम देखें"
-                            AppLanguage.ENGLISH -> "Explore Premium"
-                        })
+            if (exploreAvailable) item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Explore mode", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Turn on AI friends and People discovery.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        Switch(
+                            checked = exploreEnabled,
+                            onCheckedChange = { enabled ->
+                                if (exploreDisclosureRequired(enabled, exploreDisclosureAccepted)) {
+                                    showExploreDisclosure = true
+                                } else {
+                                    onExploreEnabledChange(enabled)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            if (showExplorePlus) {
+                item {
+                    TextButton(onClick = onOpenPremium) {
+                        Text("Explore Plus")
                     }
                 }
             }
@@ -1620,7 +1657,7 @@ internal fun SettingsScreen(
                     )
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "বন্ধুর বার্তা"
                     AppLanguage.HINDI -> "दोस्तों के संदेश"
@@ -1756,7 +1793,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) {
                     Button(onClick = { showAiSettings = true }, modifier = Modifier.fillMaxWidth()) {
                         Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language))
@@ -1803,7 +1840,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "আপনার তথ্য"
                     AppLanguage.HINDI -> "आपकी जानकारी"
@@ -1818,7 +1855,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "বন্ধু পরিচালনা"
                     AppLanguage.HINDI -> "दोस्त प्रबंधित करें"
@@ -1850,6 +1887,28 @@ internal fun SettingsScreen(
                 }
             }
         }
+    }
+    if (showExploreDisclosure) {
+        AlertDialog(
+            onDismissRequest = { showExploreDisclosure = false },
+            title = { Text("About Explore") },
+            text = {
+                Text(
+                    "AI friends are fictional. AI chats are sent to a third-party model provider. " +
+                        "When you use People discovery, your profile is shown to strangers."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onExploreDisclosureAccepted()
+                    onExploreEnabledChange(true)
+                    showExploreDisclosure = false
+                }) { Text("Continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExploreDisclosure = false }) { Text("Cancel") }
+            }
+        )
     }
     if (showAiSettings) AiSettingsDialog(
         language = language,

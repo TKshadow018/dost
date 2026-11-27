@@ -308,8 +308,8 @@ $claims = dost_premium_claims(
 dost_premium_test_assert(
     is_array($claims)
         && $claims['dostAgeEligible'] === true
-        && $claims['dostExplorePlusUntil'] === $now + 3600
-        && $claims['dostPremiumUntil'] === $now + 3600,
+        && $claims['dostPremiumUntil'] === $now + 3600
+        && $claims['dostExplorePlusUntil'] === $now + 3600,
     'Premium claims must preserve unrelated Firebase custom claims.'
 );
 $introDays = 90;
@@ -328,10 +328,27 @@ dost_premium_test_assert(
         && $newAccountClaims['dostPremiumUntil'] === $newAccountCreatedAt + ($introDays * 86400)
         && $newAccountClaims['dostPremiumSource'] === 'intro'
         && $newAccountClaims['dostPremiumIntroGranted'] === true
+        && $newAccountClaims['dostExplorePlusUntil'] === $newAccountCreatedAt + ($introDays * 86400)
         && $newAccountClaims['dostPremiumIntroGrantedAt'] === $now
         && $newAccountClaims['dostAgeEligible'] === true
         && !isset($newAccountClaims['dostPremiumProductId']),
     'A new account receives one intro expiry from account creation without a fake Play product.'
+);
+dost_premium_test_assert(
+    dost_explore_plus_claim_active($newAccountClaims, $now)
+    && !dost_explore_plus_claim_active(
+        array('dostExplorePlusUntil' => $now, 'dostPremiumUntil' => $now),
+        $now
+    ),
+    'Explore Plus claims are active only until their server-set expiry.'
+);
+dost_premium_test_assert(
+    dost_explore_plus_claim_active(array('dostPremiumUntil' => $now + 60), $now)
+        && !dost_explore_plus_claim_active(array(
+            'dostExplorePlusUntil' => $now,
+            'dostPremiumUntil' => $now + 60
+        ), $now),
+    'The legacy Premium expiry is a fallback alias, not a second entitlement claim.'
 );
 dost_premium_test_assert(
     dost_premium_account_creation_epoch((string) (($newAccountCreatedAt * 1000))) === $newAccountCreatedAt,
@@ -427,7 +444,10 @@ $lifetimeClaims = dost_premium_claims(
     'verified-lifetime-token'
 );
 dost_premium_test_assert(
-    is_array($lifetimeClaims) && $lifetimeClaims['dostExplorePlusLifetime'] === true,
+    is_array($lifetimeClaims)
+        && $lifetimeClaims['dostPremiumLifetime'] === true
+        && $lifetimeClaims['dostExplorePlusLifetime'] === true
+        && dost_explore_plus_claim_active($lifetimeClaims, $now),
     'A verified lifetime purchase grants a lifetime custom claim.'
 );
 $keptLifetime = dost_premium_claims($lifetimeClaims, 'dost_explore_plus', $entitlement, $now);

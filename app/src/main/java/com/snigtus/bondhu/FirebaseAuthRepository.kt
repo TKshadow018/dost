@@ -35,7 +35,7 @@ class FirebaseAuthRepository(context: Context) {
 
     suspend fun currentIdToken(forceRefresh: Boolean = false): String {
         val user = requireAuth().currentUser
-            ?: throw IllegalStateException("Sign in to manage Premium.")
+            ?: throw IllegalStateException("Sign in to manage Explore Plus.")
         return user.getIdToken(forceRefresh).awaitTask().token
             ?: throw IOException("Firebase did not return an ID token.")
     }
@@ -86,7 +86,7 @@ class FirebaseAuthRepository(context: Context) {
         val user = requireAuth().currentUser
             ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
         val claims = user.getIdToken(forceRefresh).awaitTask().claims
-        val isLifetime = claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true
+        val isLifetime = premiumClaimIsLifetime(claims)
         val expiresAt = ((claims["dostExplorePlusUntil"] ?: claims["dostPremiumUntil"]) as? Number)?.toLong()
         return PremiumEntitlement(
             isActive = premiumClaimIsActive(claims, System.currentTimeMillis() / 1000),

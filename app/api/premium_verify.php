@@ -279,6 +279,7 @@ dost_firebase_claim_unlock($claimLock);
 dost_premium_respond(200, array(
     'premium' => true,
     'plan' => $product['plan'],
+    'explore_plus' => in_array($product['plan'], array('explore_plus', 'plus_bundle'), true),
     'source' => 'play',
     'lifetime' => !empty($updatedClaims['dostExplorePlusLifetime']),
     'premium_until' => isset($updatedClaims['dostExplorePlusUntil'])

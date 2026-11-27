@@ -122,7 +122,9 @@ function dost_cred_post($url, $headers, $body = '{"model":"openrouter/free","mes
     ));
     $body = @file_get_contents($url, false, $context);
     $status = 0;
-    $responseHeaders = http_get_last_response_headers();
+    $responseHeaders = isset($http_response_header) && is_array($http_response_header)
+        ? $http_response_header
+        : array();
     if (is_array($responseHeaders)) {
         foreach ($responseHeaders as $header) {
             if (preg_match('/^HTTP\/\S+\s+(\d{3})\b/', $header, $matches) === 1) {
@@ -176,6 +178,7 @@ if (!mkdir($storage, 0700, true)) {
 }
 putenv('DOST_CONVERSATION_STORAGE_DIR=' . $storage);
 putenv('DOST_APP_CREDENTIAL_SECRET=' . $secret);
+putenv('DOST_EXPLORE_ENABLED=true');
 dost_cred_unset('OPENROUTER_API_KEY');
 dost_cred_unset('DOST_ALLOW_LEGACY_SERVER_KEY');
 

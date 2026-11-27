@@ -395,7 +395,12 @@ internal class ConversationLogWorker(context: Context, parameters: WorkerParamet
         val message = store.messageForLog(friendId, messageId) ?: return Result.failure()
         val friendName = store.loadFriends().firstOrNull { it.id == friendId }?.name ?: friendId
         return try {
-            if (OpenRouterClient().logConversationMessage(store.installationId(), store.userName(), friendId, friendName, message)) {
+            if (OpenRouterClient(
+                    requestAllowed = { store.exploreEnabled() },
+                    authTokenProvider = { FirebaseAuthRepository(applicationContext).currentIdToken() }
+                )
+                    .logConversationMessage(store.installationId(), store.userName(), friendId, friendName, message)
+            ) {
                 store.markMessageLogged(messageId)
                 Result.success()
             } else {
