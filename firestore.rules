@@ -669,7 +669,7 @@ service cloud.firestore {
           && orgAfter.memberCount == orgBefore.memberCount + delta
           && orgAfter.memberCount >= 1
           && orgAfter.plan.seatLimit in [10, 25]
-          && orgAfter.memberCount <= orgAfter.plan.seatLimit
+          && (orgAfter.memberCount <= orgAfter.plan.seatLimit || delta == -1)
           && (delta != 1 || orgAfter.plan.activeUntil > request.time)
           && orgAfter.memberCountAuditEventId == auditId
           && getAfter(targetPath).data.auditEventId == auditId
@@ -775,7 +775,7 @@ service cloud.firestore {
           && auditId.matches('^[A-Za-z0-9_-]{1,128}$')
           && data.memberCount >= 1
           && resource.data.plan.seatLimit in [10, 25]
-          && data.memberCount <= resource.data.plan.seatLimit
+          && (data.memberCount <= resource.data.plan.seatLimit || delta == -1)
           && data.memberCountAuditEventId == auditId
           && validCountAudit(auditId, delta, actorRole, resource.data.ownerUid);
       }

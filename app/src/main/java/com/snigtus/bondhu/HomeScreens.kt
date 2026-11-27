@@ -1426,6 +1426,7 @@ internal fun SettingsScreen(
     onDeleteServerArchive: () -> Unit,
     shieldModeAvailable: Boolean = false,
     shieldModeEnabled: Boolean = false,
+    onOpenShieldPlans: () -> Unit = {},
     onShieldModeChange: (Boolean) -> Unit = {}
 ) {
     var showAiSettings by remember { mutableStateOf(false) }
@@ -1462,6 +1463,9 @@ internal fun SettingsScreen(
                             "The organisation owner pays. Shield Team supports up to 10 active members; Shield Business supports up to 25.",
                             style = MaterialTheme.typography.bodySmall
                         )
+                        OutlinedButton(onClick = onOpenShieldPlans, modifier = Modifier.fillMaxWidth()) {
+                            Text("View Shield plans")
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,

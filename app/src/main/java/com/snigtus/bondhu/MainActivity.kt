@@ -167,6 +167,7 @@ fun DostApp(
     var anonymousTelemetryEnabled by remember { mutableStateOf(store.anonymousTelemetryEnabled()) }
     var shieldModeEnabled by remember { mutableStateOf(store.shieldModeEnabled()) }
     var shieldServerEnabled by remember { mutableStateOf(false) }
+    var shieldPlanPurchaseFlow by rememberSaveable { mutableStateOf(false) }
     var aiNotificationPreviewsEnabled by remember { mutableStateOf(store.aiNotificationPreviewsEnabled()) }
     var proactiveEnabled by remember { mutableStateOf(store.proactiveEnabled()) }
     var proactiveCadenceMinutes by remember { mutableIntStateOf(store.proactiveCadenceMinutes()) }
@@ -450,7 +451,10 @@ fun DostApp(
             AppScreen.GAMES -> screen = gameReturnScreen
             AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
             AppScreen.SETTINGS -> screen = settingsReturnScreen
-            AppScreen.PREMIUM -> screen = AppScreen.SETTINGS
+            AppScreen.PREMIUM -> {
+                shieldPlanPurchaseFlow = false
+                screen = AppScreen.SETTINGS
+            }
             AppScreen.REGISTER -> screen = AppScreen.AUTH
             AppScreen.AUTH -> authMode = AuthMode.SIGN_IN
             else -> Unit
@@ -1178,7 +1182,10 @@ fun DostApp(
             quietHoursEndMinute = quietHoursEndMinute,
             settingsNotice = settingsNotice,
             onBack = { screen = settingsReturnScreen },
-            onOpenPremium = { screen = AppScreen.PREMIUM },
+            onOpenPremium = {
+                shieldPlanPurchaseFlow = false
+                screen = AppScreen.PREMIUM
+            },
             onDeleteFriend = ::removeFriendPermanently,
             onLanguageChange = {
                 language = it
@@ -1297,6 +1304,10 @@ fun DostApp(
             },
             shieldModeAvailable = shieldModeAvailable,
             shieldModeEnabled = shieldModeEnabled,
+            onOpenShieldPlans = {
+                shieldPlanPurchaseFlow = true
+                screen = AppScreen.PREMIUM
+            },
             onShieldModeChange = {
                 shieldModeEnabled = it
                 store.setShieldModeEnabled(it)
@@ -1307,7 +1318,11 @@ fun DostApp(
             uid = activeFirebaseUid,
             isPremium = isPremium,
             authRepository = authRepository,
-            onBack = { screen = AppScreen.SETTINGS },
+            isShieldPlansOnly = shieldPlanPurchaseFlow,
+            onBack = {
+                shieldPlanPurchaseFlow = false
+                screen = AppScreen.SETTINGS
+            },
             onEntitlementChanged = { isPremium = it }
         )
         AppScreen.SYSTEM_FRIEND_PICKER -> if (hasLocalAccountAccess()) SystemFriendPickerScreen(

@@ -462,6 +462,45 @@ test("Shield Team and Business enforce their active-member seat limits", async (
   await assertFails(addSecureOrgMember("business-owner", "secure-business", "business-26"));
 });
 
+test("a downgraded organization can remove members while temporarily over its new seat cap", async () => {
+  await createSecureOrg("secure-downgraded", "owner", true, 25);
+  for (let index = 1; index <= 11; index += 1) {
+    await assertSucceeds(addSecureOrgMember("owner", "secure-downgraded", `member-${index}`));
+  }
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "secureOrgs/secure-downgraded"), {
+      plan: {
+        seatLimit: 10,
+        activeUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+  });
+  await assertFails(addSecureOrgMember("owner", "secure-downgraded", "member-new"));
+
+  const firestore = secureUser("owner", { dostShieldSeats: 10 });
+  const organizationRef = doc(firestore, "secureOrgs/secure-downgraded");
+  const organization = await getDoc(organizationRef);
+  const batch = writeBatch(firestore);
+  batch.update(doc(firestore, "secureOrgs/secure-downgraded/members/member-11"), {
+    status: "removed",
+    actorUid: "owner",
+    auditEventId: "evt-downgrade-removal",
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(firestore, "secureOrgs/secure-downgraded/auditLog/evt-downgrade-removal"), {
+    actorUid: "owner",
+    targetUid: "member-11",
+    action: "member_removed",
+    createdAt: serverTimestamp(),
+  });
+  batch.update(organizationRef, {
+    memberCount: organization.get("memberCount") - 1,
+    memberCountAuditEventId: "evt-downgrade-removal",
+  });
+  await assertSucceeds(batch.commit());
+  assert.equal((await getDoc(organizationRef)).get("memberCount"), 11);
+});
+
 test("Shield members need a 13+ age cohort, and expired plans allow export reads but not writes", async () => {
   await createSecureOrg(
     "secure-expired",

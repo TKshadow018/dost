@@ -196,6 +196,9 @@ if (!is_array($customClaims)) {
 $expiresAt = time() + 21600;
 $customClaims['dostAgeEligible'] = $request['eligible'];
 $customClaims['dostAgeEligibleUntil'] = $expiresAt;
+if ($request['eligible']) {
+    $customClaims['dostAgeCohort'] = 'adult';
+}
 $customAttributes = json_encode($customClaims, JSON_UNESCAPED_SLASHES);
 if (!is_string($customAttributes)) {
     error_log('Dost age eligibility custom claims could not be encoded.');

@@ -61,6 +61,12 @@ internal fun premiumClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Lon
     return expiresAt > nowEpochSeconds
 }
 
+internal fun shieldOwnerClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
+    val expiresAt = (claims["dostShieldUntil"] as? Number)?.toLong() ?: return false
+    val seats = (claims["dostShieldSeats"] as? Number)?.toInt() ?: return false
+    return expiresAt > nowEpochSeconds && seats in listOf(10, 25)
+}
+
 internal fun stableIdempotencyKey(value: String): String =
     java.util.UUID.nameUUIDFromBytes(value.toByteArray(Charsets.UTF_8)).toString()
 

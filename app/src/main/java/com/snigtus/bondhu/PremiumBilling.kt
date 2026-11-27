@@ -38,6 +38,7 @@ internal data class PremiumBillingState(
     val isLoading: Boolean = true,
     val isBusy: Boolean = false,
     val isPremium: Boolean = false,
+    val isShieldActive: Boolean = false,
     val message: String? = null
 )
 
@@ -71,7 +72,11 @@ internal class PremiumBillingManager(
         scope.launch {
             try {
                 val active = authRepository.hasPremiumEntitlement()
-                mutableState.value = mutableState.value.copy(isPremium = active)
+                val shieldActive = authRepository.hasShieldEntitlement()
+                mutableState.value = mutableState.value.copy(
+                    isPremium = active,
+                    isShieldActive = shieldActive
+                )
                 onEntitlementChanged(active)
                 connect()
                 val products = queryProducts()
@@ -79,7 +84,8 @@ internal class PremiumBillingManager(
                     products = products,
                     isLoading = false,
                     isPremium = active,
-                    message = if (products.isEmpty()) "Premium plans are not available right now." else null
+                    isShieldActive = shieldActive,
+                    message = if (products.isEmpty()) "Plans are not available right now." else null
                 )
             } catch (error: CancellationException) {
                 throw error
@@ -93,18 +99,27 @@ internal class PremiumBillingManager(
     }
 
     fun purchase(activity: Activity, productId: String) {
-        if (!BuildConfig.DOST_PREMIUM_ENABLED) {
-            mutableState.value = mutableState.value.copy(message = "Premium purchases are not available yet.")
+        val isShieldProduct = productId in SHIELD_PRODUCT_IDS
+        if ((isShieldProduct && !BuildConfig.DOST_SUPER_SECURE_ENABLED)
+            || (!isShieldProduct && !BuildConfig.DOST_PREMIUM_ENABLED)
+        ) {
+            mutableState.value = mutableState.value.copy(
+                message = if (isShieldProduct) "Shield purchases are not available yet."
+                else "Explore Plus purchases are not available yet."
+            )
             return
         }
         val product = mutableState.value.products.firstOrNull { it.productId == productId }
         if (product == null) {
-            mutableState.value = mutableState.value.copy(message = "This Premium plan is unavailable.")
+            mutableState.value = mutableState.value.copy(
+                message = if (isShieldProduct) "This Shield plan is unavailable."
+                else "This Explore Plus plan is unavailable."
+            )
             return
         }
         val uid = authRepository.currentAccount?.uid
         if (uid.isNullOrBlank()) {
-            mutableState.value = mutableState.value.copy(message = "Sign in before purchasing Premium.")
+            mutableState.value = mutableState.value.copy(message = "Sign in before purchasing a plan.")
             return
         }
         val offerToken = if (product.productType == BillingClient.ProductType.SUBS) {
@@ -219,11 +234,22 @@ internal class PremiumBillingManager(
 
     private suspend fun queryProducts(): List<ProductDetails> =
         suspendCancellableCoroutine { continuation ->
-            val products = listOf(
-                BillingClient.ProductType.SUBS to PREMIUM_MONTHLY_PRODUCT_ID,
-                BillingClient.ProductType.SUBS to PREMIUM_ANNUAL_PRODUCT_ID,
-                BillingClient.ProductType.INAPP to PREMIUM_LIFETIME_PRODUCT_ID
-            ).map { (type, id) ->
+            val requestedProducts = buildList<Pair<String, String>> {
+                if (BuildConfig.DOST_PREMIUM_ENABLED) {
+                    addAll(listOf(
+                        BillingClient.ProductType.SUBS to PREMIUM_MONTHLY_PRODUCT_ID,
+                        BillingClient.ProductType.SUBS to PREMIUM_ANNUAL_PRODUCT_ID,
+                        BillingClient.ProductType.INAPP to PREMIUM_LIFETIME_PRODUCT_ID
+                    ))
+                }
+                if (BuildConfig.DOST_SUPER_SECURE_ENABLED) {
+                    addAll(listOf(
+                        BillingClient.ProductType.SUBS to SHIELD_TEAM_PRODUCT_ID,
+                        BillingClient.ProductType.SUBS to SHIELD_BUSINESS_PRODUCT_ID
+                    ))
+                }
+            }
+            val products = requestedProducts.map { (type, id) ->
                 QueryProductDetailsParams.Product.newBuilder()
                     .setProductId(id)
                     .setProductType(type)
@@ -264,31 +290,42 @@ internal class PremiumBillingManager(
     private suspend fun verifyAndAcknowledge(purchases: List<Purchase>) {
         mutableState.value = mutableState.value.copy(isBusy = true, message = null)
         val uid = authRepository.currentAccount?.uid
-            ?: throw IOException("Sign in again to restore Premium.")
-        var verified = false
+            ?: throw IOException("Sign in again to restore purchases.")
+        var verifiedPremium = false
+        var verifiedShield = false
         purchases.forEach { purchase ->
             when (purchase.purchaseState) {
                 Purchase.PurchaseState.PENDING -> {
                     mutableState.value = mutableState.value.copy(
                         isBusy = false,
-                        message = "Payment is pending. Premium starts after Google confirms payment."
+                        message = "Payment is pending. The plan starts after Google confirms payment."
                     )
                 }
                 Purchase.PurchaseState.PURCHASED -> {
-                    val productId = purchase.products.firstOrNull { it in PREMIUM_PRODUCT_IDS }
-                        ?: throw IOException("Google Play returned an unrecognized Premium product.")
+                    val productId = purchase.products.firstOrNull { it in ALL_PRODUCT_IDS }
+                        ?: throw IOException("Google Play returned an unrecognized product.")
                     verifyPurchase(uid, productId, purchase.purchaseToken)
                     if (!purchase.isAcknowledged) acknowledge(purchase.purchaseToken)
-                    verified = true
+                    if (productId in SHIELD_PRODUCT_IDS) verifiedShield = true else verifiedPremium = true
                 }
                 else -> Unit
             }
         }
-        if (!verified) return
-        val active = authRepository.hasPremiumEntitlement(forceRefresh = true)
-        if (!active) throw IOException("The verified Premium entitlement was not returned by Firebase.")
-        mutableState.value = mutableState.value.copy(isBusy = false, isPremium = true, message = null)
-        onEntitlementChanged(true)
+        if (!verifiedPremium && !verifiedShield) return
+        val premiumActive = !verifiedPremium || authRepository.hasPremiumEntitlement(forceRefresh = true)
+        val shieldActive = !verifiedShield || authRepository.hasShieldEntitlement(forceRefresh = true)
+        if (!premiumActive || !shieldActive) {
+            throw IOException("The verified purchase entitlement was not returned by Firebase.")
+        }
+        val isPremium = if (verifiedPremium) true else mutableState.value.isPremium
+        val isShieldActive = if (verifiedShield) true else mutableState.value.isShieldActive
+        mutableState.value = mutableState.value.copy(
+            isBusy = false,
+            isPremium = isPremium,
+            isShieldActive = isShieldActive,
+            message = null
+        )
+        onEntitlementChanged(isPremium)
     }
 
     private suspend fun verifyPurchase(uid: String, productId: String, purchaseToken: String) {
@@ -320,7 +357,12 @@ internal class PremiumBillingManager(
                 } catch (error: Exception) {
                     throw IOException("Premium verification returned an invalid response.", error)
                 }
-                if (status !in 200..299 || json.optBoolean("premium") != true) {
+                val entitlementGranted = if (productId in SHIELD_PRODUCT_IDS) {
+                    json.optBoolean("shield")
+                } else {
+                    json.optBoolean("premium")
+                }
+                if (status !in 200..299 || !entitlementGranted) {
                     throw IOException(json.optString("error").ifBlank {
                         "Premium purchase could not be verified (HTTP $status)."
                     })
@@ -358,11 +400,15 @@ internal class PremiumBillingManager(
         const val PREMIUM_MONTHLY_PRODUCT_ID = "dost_premium_monthly"
         const val PREMIUM_ANNUAL_PRODUCT_ID = "dost_premium_annual"
         const val PREMIUM_LIFETIME_PRODUCT_ID = "dost_premium_lifetime"
+        const val SHIELD_TEAM_PRODUCT_ID = "dost_shield_team"
+        const val SHIELD_BUSINESS_PRODUCT_ID = "dost_shield_business"
         val PREMIUM_PRODUCT_IDS = setOf(
             PREMIUM_MONTHLY_PRODUCT_ID,
             PREMIUM_ANNUAL_PRODUCT_ID,
             PREMIUM_LIFETIME_PRODUCT_ID
         )
+        val SHIELD_PRODUCT_IDS = setOf(SHIELD_TEAM_PRODUCT_ID, SHIELD_BUSINESS_PRODUCT_ID)
+        val ALL_PRODUCT_IDS = PREMIUM_PRODUCT_IDS + SHIELD_PRODUCT_IDS
         const val PREMIUM_API_ROOT = "https://bisque-bear-900175.hostingersite.com/api"
         const val MAX_RESPONSE_CHARS = 32_768
     }

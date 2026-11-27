@@ -46,6 +46,12 @@ class FirebaseAuthRepository(context: Context) {
         return premiumClaimIsActive(claims, System.currentTimeMillis() / 1000)
     }
 
+    suspend fun hasShieldEntitlement(forceRefresh: Boolean = false): Boolean {
+        val user = requireAuth().currentUser ?: return false
+        val claims = user.getIdToken(forceRefresh).awaitTask().claims
+        return shieldOwnerClaimIsActive(claims, System.currentTimeMillis() / 1000)
+    }
+
     internal suspend fun premiumEntitlement(forceRefresh: Boolean = false): PremiumEntitlement {
         val user = requireAuth().currentUser
             ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
