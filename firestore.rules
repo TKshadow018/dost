@@ -148,8 +148,7 @@ service cloud.firestore {
 
     function validContactRequestCreate(recipientUid, senderUid) {
       let data = request.resource.data;
-      return secureFeatureEnabled()
-        && ageEligible()
+      return ageEligible()
         && request.auth.uid == senderUid
         && recipientUid != senderUid
         && data.keys().hasAll([
@@ -179,8 +178,7 @@ service cloud.firestore {
 
     function validContactRequestUpdate(recipientUid, senderUid) {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
-      return secureFeatureEnabled()
-        && ageEligible()
+      return ageEligible()
         && request.auth.uid == recipientUid
         && resource.data.senderUid == senderUid
         && resource.data.recipientUid == recipientUid
@@ -195,8 +193,7 @@ service cloud.firestore {
     function validContactApproval(chatId) {
       let data = request.resource.data;
       let acceptedRequestPath = contactRequestPath(data.recipientUid, data.senderUid);
-      return secureFeatureEnabled()
-        && ageEligible()
+      return ageEligible()
         && data.keys().hasAll([
           'conversationId', 'recipientUid', 'senderUid', 'members', 'createdBy', 'createdAt'
         ])
@@ -918,7 +915,7 @@ service cloud.firestore {
       allow get: if isMember();
       allow list: if false;
       allow create: if signedIn() && validOrgCreate();
-      allow update: validOrgMemberCountUpdate();
+      allow update: if validOrgMemberCountUpdate();
       allow delete: if false;
 
       match /members/{memberUid} {
