@@ -52,6 +52,9 @@ import java.util.Locale
 
 internal enum class MainTab { CHATS, DISCOVER, PROFILE }
 
+internal fun mainNavigationTabs(exploreEnabled: Boolean): List<MainTab> =
+    MainTab.values().filter { exploreEnabled || it != MainTab.DISCOVER }
+
 internal enum class HomeInboxFilter { ALL, AI_FRIENDS, PEOPLE, ARCHIVED }
 private enum class ConversationMenuAction { PIN, MUTE, ARCHIVE }
 
@@ -124,6 +127,17 @@ internal fun buildHomeInboxEntries(
     )
 }
 
+internal fun buildCircleInboxEntries(
+    conversations: List<SocialConversation>,
+    pinnedConversationIds: Set<String> = emptySet()
+): List<HomeInboxEntry> =
+    buildHomeInboxEntries(
+        friends = emptyList(),
+        messagesByFriend = emptyMap(),
+        peopleConversations = conversations,
+        pinnedConversationIds = pinnedConversationIds
+    )
+
 internal fun filterHomeInboxEntries(
     entries: List<HomeInboxEntry>,
     filter: HomeInboxFilter,
@@ -188,7 +202,8 @@ internal fun HomeScreen(
     generatingProfileIds: Set<String>,
     profileFailedIds: Set<String>,
     peopleEnabled: Boolean = true,
-    onOpenPremium: () -> Unit
+    onOpenPremium: () -> Unit,
+    circleOnly: Boolean = false
 ) {
     val unreadCounts = ConversationManager.unread.collectAsState().value
     val messageMap = ConversationManager.messages.collectAsState().value
@@ -199,15 +214,15 @@ internal fun HomeScreen(
     val systemFriendCount = friends.size - customFriendCount
     val canAddCustomFriend = isPremium || customFriendCount < MAX_CUSTOM_FRIENDS
     val canAddAnyFriend = isPremium || canAddCustomFriend || systemFriendCount < MAX_SYSTEM_FRIENDS
-    val allInboxEntries = buildHomeInboxEntries(
-        friends,
-        messageMap,
-        peopleConversations,
-        pinnedConversationIds
-    )
+    val allInboxEntries = if (circleOnly) {
+        buildCircleInboxEntries(peopleConversations, pinnedConversationIds)
+    } else {
+        buildHomeInboxEntries(friends, messageMap, peopleConversations, pinnedConversationIds)
+    }
+    val visibleFilter = if (circleOnly) HomeInboxFilter.PEOPLE else selectedFilter
     val inboxEntries = filterHomeInboxEntries(
         allInboxEntries,
-        selectedFilter,
+        visibleFilter,
         if (showSearch) searchQuery else "",
         archivedConversationIds,
         messageMap
@@ -225,9 +240,21 @@ internal fun HomeScreen(
         contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
-                title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
+                title = {
+                    Text(
+                        when {
+                            circleOnly && bangla -> "Circle"
+                            circleOnly && hindi -> "Circle"
+                            circleOnly -> "Circle"
+                            bangla -> "চ্যাট"
+                            hindi -> "चैट"
+                            else -> "Chats"
+                        },
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                },
                 actions = {
-                    IconButton(
+                    if (!circleOnly) IconButton(
                         onClick = {
                             showSearch = !showSearch
                             if (!showSearch) onSearchQueryChange("")
@@ -245,14 +272,21 @@ internal fun HomeScreen(
                             }
                         )
                     }
-                    IconButton(onClick = onOpenGames) {
+                    if (!circleOnly) IconButton(onClick = onOpenGames) {
                         Icon(
                             imageVector = Icons.Filled.SportsEsports,
                             contentDescription = when { bangla -> "খেলা"; hindi -> "खेल"; else -> "Games" }
                         )
                     }
-                    TextButton(onClick = onOpenDiscover) {
-                        Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" })
+                    TextButton(onClick = if (circleOnly) onOpenPeople else onOpenDiscover) {
+                        Text(when {
+                            circleOnly && bangla -> "যোগাযোগ যোগ করুন"
+                            circleOnly && hindi -> "संपर्क जोड़ें"
+                            circleOnly -> "Add contact"
+                            bangla -> "নতুন চ্যাট"
+                            hindi -> "नई चैट"
+                            else -> "New chat"
+                        })
                     }
                 }
             )
@@ -260,23 +294,37 @@ internal fun HomeScreen(
         floatingActionButton = {
             if (canAddAnyFriend || peopleEnabled) {
                 FloatingActionButton(
-                    onClick = onOpenDiscover,
+                    onClick = if (circleOnly) onOpenPeople else onOpenDiscover,
                     modifier = Modifier.semantics {
-                        contentDescription = when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }
+                        contentDescription = when {
+                            circleOnly && bangla -> "যোগাযোগ যোগ করুন"
+                            circleOnly && hindi -> "संपर्क जोड़ें"
+                            circleOnly -> "Add contact"
+                            bangla -> "নতুন চ্যাট"
+                            hindi -> "नई चैट"
+                            else -> "New chat"
+                        }
                     },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_add),
-                        contentDescription = when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }
+                        contentDescription = when {
+                            circleOnly && bangla -> "যোগাযোগ যোগ করুন"
+                            circleOnly && hindi -> "संपर्क जोड़ें"
+                            circleOnly -> "Add contact"
+                            bangla -> "নতুন চ্যাট"
+                            hindi -> "नई चैट"
+                            else -> "New chat"
+                        }
                     )
                 }
             }
         }
     ) { padding ->
         LazyColumn(state = listState, modifier = Modifier.padding(padding), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-            recentlyAddedSystemFriend?.let { friend ->
+            if (!circleOnly) recentlyAddedSystemFriend?.let { friend ->
                 item(key = "newly-added-ai:${friend.id}") {
                     NewlyAddedSystemFriendNotice(
                         language = language,
@@ -292,15 +340,25 @@ internal fun HomeScreen(
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(when { bangla -> "কথোপকথন"; hindi -> "बातचीत"; else -> "Conversations" }, style = MaterialTheme.typography.titleMedium)
-                        if (showFriendCount) {
+                        Text(
+                            when {
+                                circleOnly && bangla -> "আপনার Circle চ্যাট"
+                                circleOnly && hindi -> "आपकी Circle चैट"
+                                circleOnly -> "Your Circle chats"
+                                bangla -> "কথোপকথন"
+                                hindi -> "बातचीत"
+                                else -> "Conversations"
+                            },
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        if (!circleOnly && showFriendCount) {
                             Text(
                                 if (isPremium) "${friends.size}" else "${friends.size}/$MAX_TOTAL_FRIENDS",
                                 style = MaterialTheme.typography.labelLarge
                             )
                         }
                     }
-                    if (showFriendCount) {
+                    if (!circleOnly && showFriendCount) {
                         Text(
                             if (isPremium) {
                                 when {
@@ -317,7 +375,7 @@ internal fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (!isPremium && (!canAddCustomFriend || systemFriendCount >= MAX_SYSTEM_FRIENDS)) {
+                    if (!circleOnly && !isPremium && (!canAddCustomFriend || systemFriendCount >= MAX_SYSTEM_FRIENDS)) {
                         TextButton(onClick = onOpenPremium) {
                             Text(when {
                                 bangla -> "সীমাহীন AI বন্ধুর জন্য প্রিমিয়াম"
@@ -341,7 +399,7 @@ internal fun HomeScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-                    Row(
+                    if (!circleOnly) Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -393,7 +451,7 @@ internal fun HomeScreen(
                     )
                 }
             }
-            when (selectedFilter) {
+            when (visibleFilter) {
                 HomeInboxFilter.ALL -> {
                     if (inboxEntries.isEmpty() && query.isNotBlank()
                         && (friends.isNotEmpty() || peopleConversations.isNotEmpty())
@@ -499,7 +557,7 @@ internal fun HomeScreen(
                             if (allInboxEntries.any { it.key.startsWith("people:") && it.key in archivedConversationIds }) {
                                 ArchivedChatsShortcut(language) { onSelectedFilterChange(HomeInboxFilter.ARCHIVED) }
                             } else {
-                                EmptyPeopleInboxState(language, onDiscover = onOpenPeople)
+                                EmptyPeopleInboxState(language, onDiscover = onOpenPeople, circleOnly = circleOnly)
                             }
                         }
                     }
@@ -808,7 +866,11 @@ private fun EmptyArchivedChats(language: AppLanguage) {
 }
 
 @Composable
-private fun EmptyPeopleInboxState(language: AppLanguage, onDiscover: () -> Unit) {
+private fun EmptyPeopleInboxState(
+    language: AppLanguage,
+    onDiscover: () -> Unit,
+    circleOnly: Boolean
+) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -816,17 +878,20 @@ private fun EmptyPeopleInboxState(language: AppLanguage, onDiscover: () -> Unit)
     ) {
         Text(
             when (language) {
-                AppLanguage.BANGLA -> "এখনো মানুষের সঙ্গে কোনো চ্যাট নেই"
-                AppLanguage.HINDI -> "अभी लोगों के साथ कोई चैट नहीं है"
-                AppLanguage.ENGLISH -> "No People chats yet"
+                AppLanguage.BANGLA -> if (circleOnly) "আপনার Circle এখনো খালি" else "এখনো মানুষের সঙ্গে কোনো চ্যাট নেই"
+                AppLanguage.HINDI -> if (circleOnly) "आपका Circle अभी खाली है" else "अभी लोगों के साथ कोई चैट नहीं है"
+                AppLanguage.ENGLISH -> if (circleOnly) "Your Circle is empty" else "No People chats yet"
             },
             style = MaterialTheme.typography.titleLarge
         )
         Button(onClick = onDiscover) {
-            Text(when (language) {
-                AppLanguage.BANGLA -> "মানুষ খুঁজুন"
-                AppLanguage.HINDI -> "लोग खोजें"
-                AppLanguage.ENGLISH -> "Discover people"
+            Text(when {
+                circleOnly && language == AppLanguage.BANGLA -> "যোগাযোগ যোগ করুন"
+                circleOnly && language == AppLanguage.HINDI -> "संपर्क जोड़ें"
+                circleOnly -> "Add contact"
+                language == AppLanguage.BANGLA -> "মানুষ খুঁজুন"
+                language == AppLanguage.HINDI -> "लोग खोजें"
+                else -> "Discover people"
             })
         }
     }
@@ -849,13 +914,14 @@ private fun NoChatsMatch(language: AppLanguage) {
 internal fun MainNavigationScaffold(
     language: AppLanguage,
     selectedTab: MainTab,
+    exploreEnabled: Boolean,
     onSelectTab: (MainTab) -> Unit,
     content: @Composable () -> Unit
 ) {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                MainTab.values().forEach { tab ->
+                mainNavigationTabs(exploreEnabled).forEach { tab ->
                     val label = when (tab) {
                         MainTab.CHATS -> when (language) {
                             AppLanguage.BANGLA -> "চ্যাট"

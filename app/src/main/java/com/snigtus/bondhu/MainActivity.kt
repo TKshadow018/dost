@@ -181,7 +181,9 @@ fun DostApp(
         }
     }
     var selectedMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
-    var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.ALL) }
+    var peopleReturnMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
+    var peopleCircleMode by rememberSaveable { mutableStateOf(true) }
+    var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.PEOPLE) }
     var homeInboxSearchQuery by remember { mutableStateOf("") }
     var pinnedConversationIds by remember { mutableStateOf(store.pinnedConversationIds()) }
     var mutedConversationIds by remember { mutableStateOf(store.mutedConversationIds()) }
@@ -306,7 +308,7 @@ fun DostApp(
     LaunchedEffect(activeFirebaseUid) {
         showFriendCount = store.showFriendCount()
         aiNotificationPreviewsEnabled = store.aiNotificationPreviewsEnabled()
-        homeInboxFilter = HomeInboxFilter.ALL
+        homeInboxFilter = HomeInboxFilter.PEOPLE
         homeInboxSearchQuery = ""
         recentlyAddedSystemFriend = null
         pinnedConversationIds = store.pinnedConversationIds()
@@ -316,6 +318,12 @@ fun DostApp(
         peopleInboxEligibleUid = ""
         peopleInboxError = null
         peopleInboxLoading = false
+    }
+
+    LaunchedEffect(BuildConfig.DOST_EXPLORE_ENABLED) {
+        if (!BuildConfig.DOST_EXPLORE_ENABLED && selectedMainTab == MainTab.DISCOVER) {
+            selectedMainTab = MainTab.CHATS
+        }
     }
 
     LaunchedEffect(recentlyAddedSystemFriend?.id) {
@@ -1063,6 +1071,7 @@ fun DostApp(
         AppScreen.HOME -> if (hasLocalAccountAccess()) MainNavigationScaffold(
             language = language,
             selectedTab = selectedMainTab,
+            exploreEnabled = BuildConfig.DOST_EXPLORE_ENABLED,
             onSelectTab = { selectedMainTab = it }
         ) {
             when (selectedMainTab) {
@@ -1090,7 +1099,8 @@ fun DostApp(
                         selectedMainTab = MainTab.DISCOVER
                     },
                     onOpenPeople = {
-                        selectedMainTab = MainTab.DISCOVER
+                        peopleReturnMainTab = MainTab.CHATS
+                        peopleCircleMode = true
                         withAdultEligibility { screen = AppScreen.PEOPLE }
                     },
                     onRetryPeopleInbox = { peopleInboxRefreshKey++ },
@@ -1125,17 +1135,22 @@ fun DostApp(
                     generatingProfileIds = generatingProfileIds,
                     profileFailedIds = profileErrors.keys,
                     peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED,
-                    onOpenPremium = { screen = AppScreen.PREMIUM }
+                    onOpenPremium = { screen = AppScreen.PREMIUM },
+                    circleOnly = true
                 )
-                MainTab.DISCOVER -> DiscoverHomeScreen(
+                MainTab.DISCOVER -> if (BuildConfig.DOST_EXPLORE_ENABLED) DiscoverHomeScreen(
                     language = language,
                     peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED,
                     onOpenAiFriends = {
                         screen = AppScreen.SYSTEM_FRIEND_PICKER
                         loadSystemFriendCatalog()
                     },
-                    onOpenPeople = { withAdultEligibility { screen = AppScreen.PEOPLE } }
-                )
+                    onOpenPeople = {
+                        peopleReturnMainTab = MainTab.DISCOVER
+                        peopleCircleMode = false
+                        withAdultEligibility { screen = AppScreen.PEOPLE }
+                    }
+                ) else Box(Modifier.fillMaxSize())
                 MainTab.PROFILE -> ProfileHomeScreen(
                     language = language,
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
@@ -1333,7 +1348,8 @@ fun DostApp(
             userAge = age.ifBlank { store.userAge() },
             userGender = gender.ifBlank { store.userGender() },
             store = store,
-            onBack = { screen = AppScreen.HOME; selectedMainTab = MainTab.DISCOVER },
+            circleMode = peopleCircleMode,
+            onBack = { screen = AppScreen.HOME; selectedMainTab = peopleReturnMainTab },
             onOpenConversation = {
                 withAdultEligibility {
                     selectedPeopleConversation = it

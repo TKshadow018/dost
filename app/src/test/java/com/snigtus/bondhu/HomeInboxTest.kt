@@ -5,6 +5,41 @@ import org.junit.Test
 
 class HomeInboxTest {
     @Test
+    fun exploreNavigationIsHiddenUnlessItsFeatureFlagIsEnabled() {
+        assertEquals(
+            listOf(MainTab.CHATS, MainTab.PROFILE),
+            mainNavigationTabs(exploreEnabled = false)
+        )
+        assertEquals(
+            listOf(MainTab.CHATS, MainTab.DISCOVER, MainTab.PROFILE),
+            mainNavigationTabs(exploreEnabled = true)
+        )
+    }
+
+    @Test
+    fun circleInboxContainsOnlyPeopleConversations() {
+        val person = PublicPersonProfile(
+            uid = "person-uid",
+            displayName = "Sam",
+            ageBand = "25–34",
+            ageCohort = "adult",
+            gender = "man",
+            country = "BD",
+            bio = "",
+            interests = "",
+            isPublic = true
+        )
+
+        val entries = buildCircleInboxEntries(
+            conversations = listOf(SocialConversation("people-chat", person, "Hello", 100L)),
+            pinnedConversationIds = setOf("people:people-chat")
+        )
+
+        assertEquals(listOf("people:people-chat"), entries.map { it.key })
+        assertEquals(true, entries.all { it is HomeInboxEntry.Person })
+    }
+
+    @Test
     fun combinesAiAndPeopleChatsByLatestActivity() {
         val aiFriend = Friend(id = "ai-friend", name = "Mira", age = "24", gender = "woman")
         val unusedFriend = Friend(id = "new-friend", name = "Noor", age = "24", gender = "woman")
