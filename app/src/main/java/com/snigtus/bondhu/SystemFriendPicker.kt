@@ -84,6 +84,7 @@ internal fun SystemFriendPickerScreen(
     addingCatalogId: String?,
     systemLimitReached: Boolean,
     customLimitReached: Boolean,
+    showExplorePlus: Boolean = true,
     onRefresh: () -> Unit,
     onSelect: (SystemFriendListing) -> Unit,
     onPassCatalogFriend: (String) -> Unit,
@@ -126,19 +127,21 @@ internal fun SystemFriendPickerScreen(
                             }
                         )
                     }
-                    TextButton(
-                        onClick = {
-                            if (customLimitReached) onOpenPremium() else showCreateFriend = true
+                    if (!customLimitReached || showExplorePlus) {
+                        TextButton(
+                            onClick = {
+                                if (customLimitReached) onOpenPremium() else showCreateFriend = true
+                            }
+                        ) {
+                            Text(when {
+                                customLimitReached && bangla -> "Explore Plus"
+                                customLimitReached && hindi -> "Explore Plus"
+                                customLimitReached -> "Explore Plus"
+                                bangla -> "নিজের বন্ধু তৈরি করুন"
+                                hindi -> "अपना दोस्त बनाएँ"
+                                else -> "Create your own friend"
+                            }, maxLines = 1)
                         }
-                    ) {
-                        Text(when {
-                            customLimitReached && bangla -> "প্রিমিয়াম"
-                            customLimitReached && hindi -> "प्रीमियम"
-                            customLimitReached -> "Premium"
-                            bangla -> "নিজের বন্ধু তৈরি করুন"
-                            hindi -> "अपना दोस्त बनाएँ"
-                            else -> "Create your own friend"
-                        }, maxLines = 1)
                     }
                 },
                 navigationIcon = { DostBackButton(language, onBack) }
@@ -215,16 +218,16 @@ internal fun SystemFriendPickerScreen(
                     ) {
                         Text(
                             when {
-                                bangla -> "বিনামূল্যের ক্যাটালগ বন্ধু সীমায় পৌঁছেছেন। সীমাহীন AI বন্ধুর জন্য প্রিমিয়াম নিন।"
-                                hindi -> "मुफ़्त कैटलॉग दोस्त सीमा पूरी हो गई है। असीमित AI दोस्तों के लिए प्रीमियम लें।"
-                                else -> "You’ve reached the free catalog-friend limit. Get Premium for unlimited AI friends."
+                                bangla -> if (showExplorePlus) "বিনামূল্যের ক্যাটালগ বন্ধু সীমায় পৌঁছেছেন। সীমা বাড়াতে Explore Plus দেখুন।" else "বিনামূল্যের ক্যাটালগ বন্ধু সীমায় পৌঁছেছেন।"
+                                hindi -> if (showExplorePlus) "मुफ़्त कैटलॉग दोस्त सीमा पूरी हो गई है। सीमा बढ़ाने के लिए Explore Plus देखें।" else "मुफ़्त कैटलॉग दोस्त सीमा पूरी हो गई है।"
+                                else -> if (showExplorePlus) "You’ve reached the free catalog-friend limit. Explore Plus removes the limits." else "You’ve reached the free catalog-friend limit."
                             },
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
-                        TextButton(onClick = onOpenPremium) {
-                            Text(when { bangla -> "প্রিমিয়াম"; hindi -> "प्रीमियम"; else -> "Premium" })
+                        if (showExplorePlus) TextButton(onClick = onOpenPremium) {
+                            Text("Explore Plus")
                         }
                     }
                 }

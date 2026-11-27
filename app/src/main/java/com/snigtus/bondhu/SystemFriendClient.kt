@@ -11,11 +11,16 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.UUID
 
-internal class SystemFriendClient {
+internal class SystemFriendClient(
+    private val requestAllowed: () -> Boolean = { false },
+    private val authTokenProvider: suspend () -> String? = { null }
+) {
     suspend fun getCatalog(chatLanguage: AppLanguage): List<SystemFriendListing> = withContext(Dispatchers.IO) {
+        check(exploreRequestAllowed(requestAllowed())) { "Explore mode is turned off." }
         check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Shield." }
         val languageCode = chatLanguageCode(chatLanguage)
-        val profiles = getJson("chat_language=$languageCode").getJSONArray("profiles")
+        val authToken = requireAuthToken()
+        val profiles = getJson("chat_language=$languageCode", authToken).getJSONArray("profiles")
         List(profiles.length()) { index ->
             val profile = profiles.getJSONObject(index)
             val id = profile.getString("id").takeIf(String::isNotBlank)
@@ -40,9 +45,11 @@ internal class SystemFriendClient {
     }
 
     suspend fun getProfile(catalogId: String, chatLanguage: AppLanguage): Friend = withContext(Dispatchers.IO) {
+        check(exploreRequestAllowed(requestAllowed())) { "Explore mode is turned off." }
         check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Shield." }
+        val authToken = requireAuthToken()
         val query = "id=${URLEncoder.encode(catalogId, "UTF-8")}&chat_language=${chatLanguageCode(chatLanguage)}"
-        val profile = getJson(query).getJSONObject("profile")
+        val profile = getJson(query, authToken).getJSONObject("profile")
         val id = profile.getString("id").takeIf(String::isNotBlank)
             ?: throw IOException("A system friend profile has no ID")
         val age = adultAge(profile)
@@ -80,13 +87,47 @@ internal class SystemFriendClient {
         friend.copy(photoUri = Uri.fromFile(FriendPhotoLoader.saveRemotePhoto(context, friend.photoUri, friend.catalogId)).toString())
     }
 
-    private fun getJson(query: String): JSONObject {
+    suspend fun updateFriendRegistration(friendId: String, kind: String, add: Boolean) = withContext(Dispatchers.IO) {
+        check(exploreRequestAllowed(requestAllowed())) { "Explore mode is turned off." }
+        require(kind == "custom" || kind == "catalog")
+        val connection = URL(API_URL).openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 20_000
+        connection.useCaches = false
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty(
+            "Authorization",
+            listOf("Bearer", requireAuthToken()).joinToString(" ")
+        )
+        try {
+            val body = JSONObject().apply {
+                put("friend_id", friendId)
+                put("kind", kind)
+                put("action", if (add) "add" else "remove")
+            }.toString()
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) {
+                val message = runCatching { JSONObject(response).optString("error") }.getOrNull()
+                throw IOException(message?.takeIf(String::isNotBlank) ?: "Could not update friend registration (HTTP $status)")
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun getJson(query: String, authToken: String): JSONObject {
         val url = if (query.isBlank()) API_URL else "$API_URL?$query"
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
         connection.connectTimeout = 10_000
         connection.readTimeout = 20_000
         connection.useCaches = false
+        connection.setRequestProperty("Authorization", listOf("Bearer", authToken).joinToString(" "))
         try {
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
@@ -95,11 +136,17 @@ internal class SystemFriendClient {
                 val message = runCatching { JSONObject(body).optString("error") }.getOrNull()
                 throw IOException(message?.takeIf(String::isNotBlank) ?: "Could not load system friends (HTTP $status)")
             }
+
             return JSONObject(body)
         } finally {
             connection.disconnect()
         }
+
     }
+
+    private suspend fun requireAuthToken(): String =
+            authTokenProvider()?.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException("Sign in to use Explore.")
 
     private fun requiredText(profile: JSONObject, key: String): String =
         profile.optString(key).trim().takeIf(String::isNotBlank)
