@@ -2,9 +2,9 @@
 
 The People feature uses the Firebase project already configured for Dost Authentication. It is separate from the AI chat and does not send real-person messages to Dost's PHP API or OpenRouter.
 
-## Build-time feature flag
+## Build-time feature flags
 
-People is enabled by default. To disable discovery and human chat for a build without affecting AI chats, set `DOST_PEOPLE_ENABLED=false` as an environment variable or pass `-PDOST_PEOPLE_ENABLED=false` to Gradle. Set it to `true` or omit it to enable People. Any other value fails the build. This is a build-time switch, not a remote kill switch; disabling an already-installed app for all users requires distributing an updated build.
+Circle is the default free chat inbox. To disable Circle for a build, set `DOST_PEOPLE_ENABLED=false` as an environment variable or pass `-PDOST_PEOPLE_ENABLED=false` to Gradle. Explore (AI friends and discovery) is hidden by default; enable its navigation with `DOST_EXPLORE_ENABLED=true` or `-PDOST_EXPLORE_ENABLED=true`. Both flags accept only `true` or `false`. These are build-time switches, not remote kill switches; changing access for already-installed users requires distributing an updated build.
 
 ## Enable and deploy
 

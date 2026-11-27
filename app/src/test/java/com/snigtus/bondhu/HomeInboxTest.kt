@@ -5,6 +5,61 @@ import org.junit.Test
 
 class HomeInboxTest {
     @Test
+    fun exploreNavigationIsHiddenUnlessItsFeatureFlagIsEnabled() {
+        assertEquals(
+            listOf(MainTab.CHATS, MainTab.PROFILE),
+            mainNavigationTabs(exploreEnabled = false)
+        )
+        assertEquals(
+            listOf(MainTab.CHATS, MainTab.DISCOVER, MainTab.PROFILE),
+            mainNavigationTabs(exploreEnabled = true)
+        )
+    }
+
+    @Test
+    fun circleInboxRemainsAvailableWhenExploreIsOff() {
+        assertEquals(false, shouldShowExploreDisabledState(exploreEnabled = false, circleOnly = true))
+        assertEquals(true, shouldShowExploreDisabledState(exploreEnabled = false, circleOnly = false))
+        assertEquals(false, shouldShowExploreDisabledState(exploreEnabled = true, circleOnly = false))
+    }
+
+    @Test
+    fun circleInboxPreservesArchivedFilter() {
+        assertEquals(HomeInboxFilter.PEOPLE, circleInboxFilter(HomeInboxFilter.ALL))
+        assertEquals(HomeInboxFilter.ARCHIVED, circleInboxFilter(HomeInboxFilter.ARCHIVED))
+    }
+
+    @Test
+    fun teenCircleInboxShowsComingSoonWithoutAdultEligibility() {
+        assertEquals(true, shouldShowCircleContactsComingSoon("teen"))
+        assertEquals(false, shouldShowCircleContactsComingSoon("adult"))
+        assertEquals(false, shouldShowCircleContactsComingSoon(""))
+    }
+
+    @Test
+    fun circleInboxContainsOnlyPeopleConversations() {
+        val person = PublicPersonProfile(
+            uid = "person-uid",
+            displayName = "Sam",
+            ageBand = "25–34",
+            ageCohort = "adult",
+            gender = "man",
+            country = "BD",
+            bio = "",
+            interests = "",
+            isPublic = true
+        )
+
+        val entries = buildCircleInboxEntries(
+            conversations = listOf(SocialConversation("people-chat", person, "Hello", 100L)),
+            pinnedConversationIds = setOf("people:people-chat")
+        )
+
+        assertEquals(listOf("people:people-chat"), entries.map { it.key })
+        assertEquals(true, entries.all { it is HomeInboxEntry.Person })
+    }
+
+    @Test
     fun combinesAiAndPeopleChatsByLatestActivity() {
         val aiFriend = Friend(id = "ai-friend", name = "Mira", age = "24", gender = "woman")
         val unusedFriend = Friend(id = "new-friend", name = "Noor", age = "24", gender = "woman")

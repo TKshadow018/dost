@@ -181,6 +181,8 @@ fun DostApp(
         }
     }
     var selectedMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
+    var peopleReturnMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
+    var peopleCircleMode by rememberSaveable { mutableStateOf(true) }
     var exploreEnabled by remember { mutableStateOf(store.exploreEnabled()) }
     LaunchedEffect(exploreEnabled) {
         if (!exploreEnabled && selectedMainTab == MainTab.DISCOVER) selectedMainTab = MainTab.CHATS
@@ -197,7 +199,7 @@ fun DostApp(
         && BuildConfig.DOST_PREMIUM_ENABLED
     val canUsePeopleDiscovery = exploreEnabled && currentAgeCohort == DostAgeCohort.ADULT
         && BuildConfig.DOST_PEOPLE_ENABLED
-    var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.ALL) }
+    var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.PEOPLE) }
     var homeInboxSearchQuery by remember { mutableStateOf("") }
     var pinnedConversationIds by remember { mutableStateOf(store.pinnedConversationIds()) }
     var mutedConversationIds by remember { mutableStateOf(store.mutedConversationIds()) }
@@ -236,6 +238,7 @@ fun DostApp(
     var peopleInboxLoading by remember { mutableStateOf(false) }
     var peopleInboxError by remember { mutableStateOf<String?>(null) }
     var peopleInboxEligibleUid by remember { mutableStateOf("") }
+    var peopleInboxTeen by remember { mutableStateOf(false) }
     var peopleInboxRefreshKey by remember { mutableIntStateOf(0) }
     val activeFirebaseUid = authRepository.currentAccount?.uid.orEmpty()
     var isPremium by remember(activeFirebaseUid) { mutableStateOf(false) }
@@ -358,7 +361,7 @@ fun DostApp(
     LaunchedEffect(activeFirebaseUid) {
         showFriendCount = store.showFriendCount()
         aiNotificationPreviewsEnabled = store.aiNotificationPreviewsEnabled()
-        homeInboxFilter = HomeInboxFilter.ALL
+        homeInboxFilter = HomeInboxFilter.PEOPLE
         homeInboxSearchQuery = ""
         recentlyAddedSystemFriend = null
         pinnedConversationIds = store.pinnedConversationIds()
@@ -366,6 +369,7 @@ fun DostApp(
         archivedConversationIds = store.archivedConversationIds()
         peopleInboxConversations = emptyList()
         peopleInboxEligibleUid = ""
+        peopleInboxTeen = false
         peopleInboxError = null
         peopleInboxLoading = false
     }
@@ -378,7 +382,7 @@ fun DostApp(
 
     LaunchedEffect(screen, selectedMainTab, activeFirebaseUid, peopleInboxRefreshKey, exploreEnabled) {
         if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS
-            || !canUsePeopleDiscovery
+            || !BuildConfig.DOST_PEOPLE_ENABLED
         ) {
             return@LaunchedEffect
         }
@@ -396,8 +400,9 @@ fun DostApp(
         peopleInboxLoading = true
         peopleInboxError = null
         try {
-            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
-            authRepository.ensureAdultEligibility()
+            val ageCohort = authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+            peopleInboxTeen = shouldShowCircleContactsComingSoon(ageCohort)
+            if (!peopleInboxTeen) authRepository.ensureAdultEligibility()
             peopleInboxEligibleUid = activeFirebaseUid
         } catch (error: Exception) {
             if (error is CancellationException) throw error
@@ -412,13 +417,15 @@ fun DostApp(
         screen,
         selectedMainTab,
         activeFirebaseUid,
+        peopleInboxTeen,
         peopleInboxEligibleUid,
         peopleInboxRefreshKey,
         exploreEnabled
     ) {
         if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS
-            || !canUsePeopleDiscovery
+            || !BuildConfig.DOST_PEOPLE_ENABLED
             || activeFirebaseUid.isBlank()
+            || peopleInboxTeen
             || peopleInboxEligibleUid != activeFirebaseUid
         ) {
             onDispose { }
@@ -1226,12 +1233,13 @@ fun DostApp(
                     isPremium = isPremium,
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
                     friends = if (exploreEnabled) friends else emptyList(),
-                    peopleConversations = if (exploreEnabled) peopleInboxConversations else emptyList(),
+                    peopleConversations = peopleInboxConversations,
                     pinnedConversationIds = pinnedConversationIds,
                     mutedConversationIds = mutedConversationIds,
                     archivedConversationIds = archivedConversationIds,
                     peopleInboxLoading = peopleInboxLoading,
                     peopleInboxError = peopleInboxError,
+                    circleContactsComingSoon = peopleInboxTeen,
                     searchQuery = homeInboxSearchQuery,
                     onSearchQueryChange = { homeInboxSearchQuery = it },
                     selectedFilter = homeInboxFilter,
@@ -1245,22 +1253,17 @@ fun DostApp(
                     },
                     onOpenPeople = {
                         if (canUsePeopleDiscovery) {
-                            selectedMainTab = MainTab.DISCOVER
-                            withModeDisclosure(PrivacyMode.EXPLORE) {
-                                withAdultEligibility { screen = AppScreen.PEOPLE }
-                            }
+                            peopleReturnMainTab = MainTab.CHATS
+                            peopleCircleMode = true
+                            withAdultEligibility { screen = AppScreen.PEOPLE }
                         }
                     },
                     onRetryPeopleInbox = { peopleInboxRefreshKey++ },
                     onOpenPeopleConversation = { conversation ->
-                        if (canUsePeopleDiscovery) {
-                            withModeDisclosure(PrivacyMode.EXPLORE) {
-                                withAdultEligibility {
-                                    selectedPeopleConversation = conversation
-                                    peopleChatReturnScreen = AppScreen.HOME
-                                    screen = AppScreen.PEOPLE_CHAT
-                                }
-                            }
+                        withAdultEligibility {
+                            selectedPeopleConversation = conversation
+                            peopleChatReturnScreen = AppScreen.HOME
+                            screen = AppScreen.PEOPLE_CHAT
                         }
                     },
                     onOpenGames = {
@@ -1291,7 +1294,8 @@ fun DostApp(
                     profileFailedIds = profileErrors.keys,
                     peopleEnabled = canUsePeopleDiscovery,
                     showExplorePlus = canUseExplorePlus,
-                    onOpenPremium = ::openExplorePlus
+                    onOpenPremium = ::openExplorePlus,
+                    circleOnly = true
                 )
                 MainTab.DISCOVER -> if (exploreEnabled) DiscoverHomeScreen(
                     language = language,
@@ -1304,6 +1308,8 @@ fun DostApp(
                     },
                     onOpenPeople = {
                         if (canUsePeopleDiscovery) {
+                            peopleReturnMainTab = MainTab.DISCOVER
+                            peopleCircleMode = false
                             withModeDisclosure(PrivacyMode.EXPLORE) {
                                 withAdultEligibility { screen = AppScreen.PEOPLE }
                             }
@@ -1551,9 +1557,14 @@ fun DostApp(
             userAge = age.ifBlank { store.userAge() },
             userGender = gender.ifBlank { store.userGender() },
             store = store,
-            onBack = { screen = AppScreen.HOME; selectedMainTab = MainTab.DISCOVER },
+            circleMode = peopleCircleMode,
+            onBack = { screen = AppScreen.HOME; selectedMainTab = peopleReturnMainTab },
             onOpenConversation = { conversation ->
-                withModeDisclosure(PrivacyMode.EXPLORE) {
+                if (peopleCircleMode) {
+                    selectedPeopleConversation = conversation
+                    peopleChatReturnScreen = AppScreen.PEOPLE
+                    screen = AppScreen.PEOPLE_CHAT
+                } else withModeDisclosure(PrivacyMode.EXPLORE) {
                     withAdultEligibility {
                         selectedPeopleConversation = conversation
                         peopleChatReturnScreen = AppScreen.PEOPLE
