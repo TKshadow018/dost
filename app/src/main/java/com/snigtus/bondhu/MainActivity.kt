@@ -216,56 +216,25 @@ fun DostApp(
     var peopleInboxRefreshKey by remember { mutableIntStateOf(0) }
     val activeFirebaseUid = authRepository.currentAccount?.uid.orEmpty()
     var isPremium by remember(activeFirebaseUid) { mutableStateOf(false) }
-    var premiumEntitlement by remember(activeFirebaseUid) {
-        mutableStateOf(PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null))
-    }
 
-    LaunchedEffect(activeFirebaseUid) {
+    LaunchedEffect(activeFirebaseUid, isPremium) {
         if (activeFirebaseUid.isBlank()) {
             isPremium = false
-            premiumEntitlement = PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
             return@LaunchedEffect
         }
         try {
-            try {
-                authRepository.requestPremiumIntroGrant()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                Unit
-            }
-            authRepository.currentIdToken(forceRefresh = true)
             val entitlement = authRepository.premiumEntitlement()
-            premiumEntitlement = entitlement
             isPremium = entitlement.isActive
+            if (entitlement.isActive && !entitlement.isLifetime) {
+                val expiry = entitlement.expiresAtEpochSeconds ?: return@LaunchedEffect
+                val remainingMillis = expiry * 1000 - System.currentTimeMillis()
+                if (remainingMillis > 0) delay(remainingMillis)
+                isPremium = authRepository.hasPremiumEntitlement(forceRefresh = true)
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             isPremium = false
-            premiumEntitlement = premiumEntitlement.copy(isActive = false)
-            settingsNotice = "Premium status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
-        }
-    }
-
-    LaunchedEffect(activeFirebaseUid, premiumEntitlement) {
-        val entitlement = premiumEntitlement
-        if (activeFirebaseUid.isBlank() || !entitlement.isActive || entitlement.isLifetime) {
-            return@LaunchedEffect
-        }
-        val expiry = entitlement.expiresAtEpochSeconds ?: return@LaunchedEffect
-        val remainingMillis = expiry * 1000 - System.currentTimeMillis()
-        if (remainingMillis > 0) delay(remainingMillis)
-        if (activeFirebaseUid != authRepository.currentAccount?.uid) return@LaunchedEffect
-        isPremium = false
-        try {
-            val refreshed = authRepository.premiumEntitlement(forceRefresh = true)
-            if (activeFirebaseUid == authRepository.currentAccount?.uid) {
-                premiumEntitlement = refreshed
-                isPremium = refreshed.isActive
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
             settingsNotice = "Premium status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
         }
     }
@@ -1076,9 +1045,6 @@ fun DostApp(
                     language = language,
                     showFriendCount = showFriendCount,
                     isPremium = isPremium,
-                    premiumIntroExpiryEpochSeconds = premiumEntitlement
-                        .takeIf { it.isActive && !it.isLifetime && it.source == "intro" }
-                        ?.expiresAtEpochSeconds,
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
                     friends = friends,
                     peopleConversations = peopleInboxConversations,
@@ -1297,22 +1263,9 @@ fun DostApp(
             language = language,
             uid = activeFirebaseUid,
             isPremium = isPremium,
-            entitlement = premiumEntitlement,
             authRepository = authRepository,
             onBack = { screen = AppScreen.SETTINGS },
-            onEntitlementChanged = { active ->
-                isPremium = active
-                scope.launch {
-                    try {
-                        premiumEntitlement = authRepository.premiumEntitlement(forceRefresh = true)
-                        isPremium = premiumEntitlement.isActive
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        settingsNotice = "Premium status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
-                    }
-                }
-            }
+            onEntitlementChanged = { isPremium = it }
         )
         AppScreen.SYSTEM_FRIEND_PICKER -> if (hasLocalAccountAccess()) SystemFriendPickerScreen(
             language = language,

@@ -1,7 +1,5 @@
 package com.snigtus.dost
 
-import java.text.DateFormat
-import java.util.Date
 import java.util.Locale
 
 internal enum class LocalizedText(
@@ -79,12 +77,7 @@ internal enum class LocalizedText(
     LOAD_FRIENDS_FAILED("Could not load friends.", "বন্ধুদের তালিকা আনা যায়নি।", "दोस्तों की सूची लोड नहीं हो सकी।"),
     INVALID_FRIEND_CATALOG("The friends catalog returned invalid data.", "বন্ধুদের তালিকায় ভুল তথ্য এসেছে।", "दोस्तों की सूची में अमान्य जानकारी मिली।"),
     ADD_SYSTEM_FRIEND_FAILED("Could not add this friend.", "এই বন্ধুকে যোগ করা যায়নি।", "इस दोस्त को नहीं जोड़ा जा सका।"),
-    INVALID_SYSTEM_FRIEND("This friend profile is invalid.", "এই বন্ধুর প্রোফাইলটি সঠিক নয়।", "इस दोस्त की प्रोफ़ाइल अमान्य है।"),
-    FREE_PREMIUM_UNTIL("Free Premium until %s", "%s পর্যন্ত বিনামূল্যের প্রিমিয়াম", "%s तक मुफ़्त प्रीमियम"),
-    PREMIUM_INTRO_EXPIRING("Your free Premium period ends soon. Choose a plan to continue.", "আপনার বিনামূল্যের প্রিমিয়াম মেয়াদ শীঘ্রই শেষ হবে। চালিয়ে যেতে একটি পরিকল্পনা বেছে নিন।", "आपकी मुफ़्त प्रीमियम अवधि जल्द समाप्त होगी। जारी रखने के लिए कोई योजना चुनें।"),
-    PREMIUM_PURCHASES_UNAVAILABLE("Premium purchases are not available yet.", "প্রিমিয়াম কেনাকাটা এখনো উপলভ্য নয়।", "प्रीमियम खरीदारी अभी उपलब्ध नहीं है।"),
-    PREMIUM_LIMITS_BENEFIT("Premium removes the free limits of 3 custom AI friends and 7 catalog AI friends.", "প্রিমিয়াম ৩টি নিজস্ব AI বন্ধু ও ৭টি ক্যাটালগ AI বন্ধুর বিনামূল্যের সীমা তুলে দেয়।", "प्रीमियम 3 कस्टम AI दोस्तों और 7 कैटलॉग AI दोस्तों की मुफ़्त सीमा हटा देता है।"),
-    PREMIUM_VIEW_DETAILS("View Premium", "প্রিমিয়াম দেখুন", "प्रीमियम देखें");
+    INVALID_SYSTEM_FRIEND("This friend profile is invalid.", "এই বন্ধুর প্রোফাইলটি সঠিক নয়।", "इस दोस्त की प्रोफ़ाइल अमान्य है।");
 
     fun resolve(language: AppLanguage, vararg arguments: Any): String {
         val text = when (language) {
@@ -92,16 +85,6 @@ internal enum class LocalizedText(
             AppLanguage.BANGLA -> bangla
             AppLanguage.HINDI -> hindi
         }
-
         return if (arguments.isEmpty()) text else String.format(Locale.ROOT, text, *arguments)
     }
-}
-
-internal fun localizedPremiumDate(epochSeconds: Long, language: AppLanguage): String {
-    val locale = when (language) {
-        AppLanguage.ENGLISH -> Locale.forLanguageTag("en")
-        AppLanguage.BANGLA -> Locale.forLanguageTag("bn-BD")
-        AppLanguage.HINDI -> Locale.forLanguageTag("hi-IN")
-    }
-    return DateFormat.getDateInstance(DateFormat.MEDIUM, locale).format(Date(epochSeconds * 1000))
 }

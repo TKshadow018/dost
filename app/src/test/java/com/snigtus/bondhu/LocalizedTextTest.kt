@@ -20,8 +20,6 @@ class LocalizedTextTest {
         AppLanguage.values().forEach { language ->
             assertTrue(LocalizedText.CHAT_WITH_FRIEND.resolve(language, friend).contains(friend))
             assertTrue(LocalizedText.BUSY_SCHEDULE_NOTE.resolve(language, "Asia/Dhaka").contains("Asia/Dhaka"))
-            assertTrue(LocalizedText.FREE_PREMIUM_UNTIL.resolve(language, "Nov 26, 2026").contains("Nov 26, 2026"))
-            assertTrue(localizedPremiumDate(1_790_000_000L, language).isNotBlank())
         }
     }
 

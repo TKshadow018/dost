@@ -15,12 +15,7 @@ import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.FirebaseUser
 import com.google.android.gms.tasks.Task
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -55,47 +50,13 @@ class FirebaseAuthRepository(context: Context) {
         val user = requireAuth().currentUser
             ?: return PremiumEntitlement(isActive = false, isLifetime = false, expiresAtEpochSeconds = null)
         val claims = user.getIdToken(forceRefresh).awaitTask().claims
-        return premiumEntitlementFromClaims(claims, System.currentTimeMillis() / 1000)
-    }
-
-    suspend fun requestPremiumIntroGrant() {
-        val user = requireAuth().currentUser
-            ?: throw IllegalStateException("Sign in to receive Premium.")
-        val idToken = user.getIdToken(false).awaitTask().token
-            ?: throw IOException("Firebase did not return an ID token.")
-        withContext(Dispatchers.IO) {
-            val connection = (URL("$PREMIUM_API_ROOT/premium_intro_grant.php").openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 10_000
-                readTimeout = 20_000
-                instanceFollowRedirects = false
-                doOutput = true
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("Authorization", "******")
-            }
-            try {
-                val body = JSONObject().put("uid", user.uid)
-                connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-                val status = connection.responseCode
-                val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                    ?.bufferedReader(Charsets.UTF_8)
-                    ?.use { it.readText().take(32_768) }
-                    .orEmpty()
-                val json = try {
-                    JSONObject(response)
-                } catch (error: Exception) {
-                    throw IOException("Premium intro grant returned an invalid response.", error)
-                }
-                if (status !in 200..299 || json.optBoolean("intro_granted") != true) {
-                    throw IOException(json.optString("error").ifBlank {
-                        "Premium intro grant could not be confirmed (HTTP $status)."
-                    })
-                }
-            } finally {
-                connection.disconnect()
-            }
-        }
+        val isLifetime = claims["dostPremiumLifetime"] == true
+        val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong()
+        return PremiumEntitlement(
+            isActive = premiumClaimIsActive(claims, System.currentTimeMillis() / 1000),
+            isLifetime = isLifetime,
+            expiresAtEpochSeconds = expiresAt
+        )
     }
 
     suspend fun ensureAdultEligibility() {

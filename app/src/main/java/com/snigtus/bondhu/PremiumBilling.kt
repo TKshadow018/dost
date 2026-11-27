@@ -44,33 +44,8 @@ internal data class PremiumBillingState(
 internal data class PremiumEntitlement(
     val isActive: Boolean,
     val isLifetime: Boolean,
-    val expiresAtEpochSeconds: Long?,
-    val source: String? = null
+    val expiresAtEpochSeconds: Long?
 )
-
-internal fun premiumEntitlementFromClaims(
-    claims: Map<String, Any>,
-    nowEpochSeconds: Long
-): PremiumEntitlement {
-    val lifetime = claims["dostPremiumLifetime"] == true
-    return PremiumEntitlement(
-        isActive = premiumClaimIsActive(claims, nowEpochSeconds),
-        isLifetime = lifetime,
-        expiresAtEpochSeconds = (claims["dostPremiumUntil"] as? Number)?.toLong(),
-        source = claims["dostPremiumSource"] as? String
-    )
-}
-
-internal fun premiumIntroIsNearExpiry(entitlement: PremiumEntitlement, nowEpochSeconds: Long): Boolean {
-    val expiry = entitlement.expiresAtEpochSeconds ?: return false
-    return entitlement.isActive
-        && !entitlement.isLifetime
-        && entitlement.source == "intro"
-        && expiry > nowEpochSeconds
-        && expiry <= nowEpochSeconds + 14 * 86400
-}
-
-internal const val PREMIUM_API_ROOT = "https://bisque-bear-900175.hostingersite.com/api"
 
 internal class PremiumBillingManager(
     context: Context,
@@ -388,6 +363,7 @@ internal class PremiumBillingManager(
             PREMIUM_ANNUAL_PRODUCT_ID,
             PREMIUM_LIFETIME_PRODUCT_ID
         )
+        const val PREMIUM_API_ROOT = "https://bisque-bear-900175.hostingersite.com/api"
         const val MAX_RESPONSE_CHARS = 32_768
     }
 }
