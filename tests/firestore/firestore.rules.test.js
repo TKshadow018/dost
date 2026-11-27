@@ -235,6 +235,9 @@ test("Shield org creation requires its server-controlled flag and owner entitlem
   await assertFails(createSecureOrg("secure-expired-owner", "alice", false, {
     dostAgeEligibleUntil: Math.floor(Date.now() / 1000) - 1,
   }));
+  await assertFails(createSecureOrg("secure-expired-shield-owner", "alice", false, {
+    dostShieldUntil: Math.floor(Date.now() / 1000) - 1,
+  }));
   await assertFails(createSecureOrg("secure-unpaid", "alice", false, {
     dostShieldUntil: 1,
     dostShieldSeats: 0,
@@ -681,6 +684,9 @@ test("People data requires an unexpired server age-eligibility claim", async () 
   );
   await assertFails(
     setDoc(doc(unverified, "publicProfiles/another-user"), profile()),
+  );
+  await assertFails(
+    setDoc(doc(expired, "publicProfiles/expired-user"), profile()),
   );
 });
 

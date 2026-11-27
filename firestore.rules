@@ -10,7 +10,7 @@ service cloud.firestore {
         && request.auth.token.dostAgeCohort == 'adult'
         && request.auth.token.dostAgeEligible == true
         && request.auth.token.dostAgeEligibleUntil is int
-        && request.auth.token.dostAgeEligibleUntil > request.time.seconds();
+        && request.auth.token.dostAgeEligibleUntil * 1000 > request.time.toMillis();
     }
 
     function profilePath(uid) {
@@ -633,9 +633,9 @@ service cloud.firestore {
           && request.auth.token.dostAgeCohort == 'adult'
           && request.auth.token.dostAgeEligible == true
           && request.auth.token.dostAgeEligibleUntil is int
-          && request.auth.token.dostAgeEligibleUntil > request.time.seconds()
+          && request.auth.token.dostAgeEligibleUntil * 1000 > request.time.toMillis()
           && request.auth.token.dostShieldUntil is int
-          && request.auth.token.dostShieldUntil > request.time.seconds()
+          && request.auth.token.dostShieldUntil * 1000 > request.time.toMillis()
           && request.auth.token.dostShieldSeats in [10, 25];
       }
 
