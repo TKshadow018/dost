@@ -1423,7 +1423,8 @@ internal fun SettingsScreen(
     onCopyInstallationId: () -> Unit,
     onExportLocalData: () -> Unit,
     onImportLocalData: () -> Unit,
-    onDeleteServerArchive: () -> Unit
+    onDeleteServerArchive: () -> Unit,
+    onOpenPrivacy: () -> Unit
 ) {
     var showAiSettings by remember { mutableStateOf(false) }
     var confirmArchiveDelete by remember { mutableStateOf(false) }
@@ -1764,6 +1765,17 @@ internal fun SettingsScreen(
                 }
             }
             item {
+                SettingsSection("Privacy") {
+                    Text(
+                        "The disclosures describe the planned 13+ release. This build still requires users to be 18 or older; do not publish the policy until the updated age controls ship.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onOpenPrivacy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Privacy & mode disclosures")
+                    }
+                }
+            }
+            item {
                 SettingsSection("Local data") {
                     Text("Move your profile, friends, routines, reminders, memories, summaries, and chat history with a passphrase-encrypted backup. Your API key and installation id are not included. Keep the passphrase separate; it cannot be recovered.", style = MaterialTheme.typography.bodySmall)
                     Text("Installation ID for deletion and support requests: $installationId", style = MaterialTheme.typography.bodySmall)
@@ -1887,6 +1899,45 @@ internal fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+internal fun PrivacyScreen(onBack: () -> Unit, onOpenPrivacyPolicy: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Privacy") },
+                navigationIcon = { DostBackButton(AppLanguage.ENGLISH, onBack) }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                SettingsSection("Age and audience") {
+                    Text(
+                        "For the planned 13+ release, under-13 users cannot create an account. Teens aged 13–17 will have private-by-default settings, no stranger discovery, and teen-safe AI. Explore Plus is 18+ and requires server-verified eligibility. This build still requires users to be 18 or older; publish these disclosures only after the updated age controls ship."
+                    )
+                }
+            }
+            items(ModePrivacyDisclosures.all) { disclosure ->
+                SettingsSection(disclosure.title) {
+                    Text(disclosure.text)
+                }
+            }
+            item {
+                SettingsSection("Full policy") {
+                    Text("The full policy explains purposes, retention, deletion, and service-provider sharing.")
+                    OutlinedButton(onClick = onOpenPrivacyPolicy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Read the full Privacy Policy")
+                    }
+                }
+            }
+        }
     }
 }
 
