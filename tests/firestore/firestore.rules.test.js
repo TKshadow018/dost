@@ -24,6 +24,7 @@ import {
 const projectId = "demo-dost";
 const rules = await readFile(new URL("../../firestore.rules", import.meta.url), "utf8");
 let testEnv;
+let secureAuditSequence = 0;
 
 before(async () => {
   testEnv = await initializeTestEnvironment({
@@ -220,7 +221,7 @@ test("Super Secure remains unavailable until its server-controlled flag is enabl
 
 async function addSecureOrgMember(actorUid, orgId, targetUid, role = "member") {
   const firestore = secureUser(actorUid);
-  const eventId = `evt-${targetUid}`;
+  const eventId = `evt-${targetUid}-${++secureAuditSequence}`;
   const organization = await getDoc(doc(firestore, `secureOrgs/${orgId}`));
   const memberCount = organization.get("memberCount");
   const memberRef = doc(firestore, `secureOrgs/${orgId}/members/${targetUid}`);
@@ -328,30 +329,9 @@ test("only managers administer members, changes are audited, and removal revokes
 
   await assertFails(addSecureOrgMember("manager", "secure-a", "new-manager", "manager"));
   await assertSucceeds(addSecureOrgMember("alice", "secure-a", "carol"));
+  const carolMember = doc(secureUser("alice"), "secureOrgs/secure-a/members/carol");
+  const staleCarolAuditId = (await getDoc(carolMember)).get("auditEventId");
   const alice = secureUser("alice");
-  const promotion = writeBatch(alice);
-  promotion.update(doc(alice, "secureOrgs/secure-a/members/carol"), {
-    role: "manager",
-    actorUid: "alice",
-    auditEventId: "evt-promote-carol",
-    updatedAt: serverTimestamp(),
-  });
-  promotion.set(doc(alice, "secureOrgs/secure-a/auditLog/evt-promote-carol"), {
-    actorUid: "alice",
-    targetUid: "carol",
-    action: "manager_promoted",
-    createdAt: serverTimestamp(),
-  });
-  await assertSucceeds(promotion.commit());
-  await assertFails(
-    updateDoc(doc(secureUser("manager"), "secureOrgs/secure-a/members/carol"), {
-      role: "manager",
-      status: "removed",
-      actorUid: "manager",
-      auditEventId: "evt-carol",
-      updatedAt: serverTimestamp(),
-    }),
-  );
   await assertFails(
     updateDoc(doc(secureUser("bob"), "secureOrgs/secure-a/members/bob"), {
       role: "manager",
@@ -398,6 +378,29 @@ test("only managers administer members, changes are audited, and removal revokes
   await assertSucceeds(getDoc(doc(secureUser("manager"), "secureOrgs/secure-a/auditLog/evt-remove-bob")));
   await assertFails(getDoc(doc(secureUser("bob"), "secureOrgs/secure-a/auditLog/evt-remove-bob")));
   await assertFails(getDoc(doc(secureUser("carol"), "secureOrgs/secure-a/members/bob")));
+  const promotion = writeBatch(alice);
+  promotion.update(carolMember, {
+    role: "manager",
+    actorUid: "alice",
+    auditEventId: "evt-promote-carol",
+    updatedAt: serverTimestamp(),
+  });
+  promotion.set(doc(alice, "secureOrgs/secure-a/auditLog/evt-promote-carol"), {
+    actorUid: "alice",
+    targetUid: "carol",
+    action: "manager_promoted",
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(promotion.commit());
+  await assertFails(
+    updateDoc(doc(secureUser("manager"), "secureOrgs/secure-a/members/carol"), {
+      role: "manager",
+      status: "removed",
+      actorUid: "manager",
+      auditEventId: staleCarolAuditId,
+      updatedAt: serverTimestamp(),
+    }),
+  );
   await assertFails(getDocs(collection(secureUser("bob"), "secureOrgs/secure-a/members")));
   const activeMembers = await assertSucceeds(getDocs(query(
     collection(secureUser("carol"), "secureOrgs/secure-a/members"),
