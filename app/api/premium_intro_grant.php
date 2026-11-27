@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/premium_support.php';
+require_once __DIR__ . '/explore_support.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -51,6 +52,9 @@ if (is_file($configPath)) {
     if (is_array($loaded)) {
         $config = $loaded;
     }
+}
+if (!dost_explore_enabled($config)) {
+    dost_premium_intro_respond(503, array('error' => 'Explore is not enabled'));
 }
 $setting = function ($environmentKey, $configKey) use ($config) {
     $value = getenv($environmentKey);

@@ -664,7 +664,7 @@ object ConversationManager {
         )
             .summarizeSession(
                 store.openRouterApiKey(), store.aiModel(), friendName, summaryInput, store.language(),
-                store.userAge(), friend.age
+                store.userAge(), friend.age, store.installationId()
             )
         var shouldRetry = false
         val imported = !withCurrentImportGeneration(requestGeneration) {

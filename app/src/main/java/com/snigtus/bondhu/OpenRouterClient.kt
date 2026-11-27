@@ -66,13 +66,13 @@ class OpenRouterClient(
         request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction, userAge, structuredUserProfile, requireAuthToken())
     }
 
-    suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, userAge: String): FriendProfile = withContext(Dispatchers.IO) {
+    suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, userAge: String, friendId: String, installationId: String): FriendProfile = withContext(Dispatchers.IO) {
         requireExploreEnabled()
         check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         require(aiFriendAgeAllowed(userAge, age)) {
             "Generated friend profiles are not available for this age group."
         }
-        requestProfile(model, apiKey, name, age, gender, personality, language, userAge, requireAuthToken())
+        requestProfile(model, apiKey, name, age, gender, personality, language, userAge, friendId, installationId, requireAuthToken())
     }
 
     suspend fun summarizeSession(
@@ -82,11 +82,12 @@ class OpenRouterClient(
         messages: List<ChatMessage>,
         language: AppLanguage,
         userAge: String,
-        friendAge: String
+        friendAge: String,
+        installationId: String
     ): String = withContext(Dispatchers.IO) {
         requireExploreEnabled()
         check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
-        requestSessionSummary(model, apiKey, friendName, messages, language, userAge, friendAge, requireAuthToken())
+        requestSessionSummary(model, apiKey, friendName, messages, language, userAge, friendAge, installationId, requireAuthToken())
     }
 
     suspend fun logConversationMessage(installationId: String, userName: String, friendId: String, friendName: String, message: ChatMessage): Boolean =
@@ -288,7 +289,7 @@ class OpenRouterClient(
         return '{' !in trimmed && '}' !in trimmed
     }
 
-    private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, userAge: String, authToken: String): FriendProfile {
+    private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, userAge: String, friendId: String, installationId: String, authToken: String): FriendProfile {
         check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
         val system = """
             Create a complete fictional friend character for a social chat app. The user provided this personality and it must remain consistent: $personality. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
@@ -302,13 +303,14 @@ class OpenRouterClient(
         }
         val body = JSONObject().apply {
             put("operation", "profile_generation")
+            put("friend_id", friendId)
             put("user_age", userAge)
             put("friend_age", age)
             put("model", model)
             put("messages", messages)
             put("temperature", 0.9)
         }
-        val connection = post(apiKey, null, null, null, body.toString().toByteArray(), authToken)
+        val connection = post(apiKey, installationId, null, null, body.toString().toByteArray(), authToken)
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Profile request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -329,6 +331,7 @@ class OpenRouterClient(
         language: AppLanguage,
         userAge: String,
         friendAge: String,
+        installationId: String,
         authToken: String
     ): String {
         check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
@@ -348,7 +351,7 @@ class OpenRouterClient(
             put("messages", requestMessages)
             put("temperature", 0.2)
         }
-        val connection = post(apiKey, null, null, null, body.toString().toByteArray(), authToken)
+        val connection = post(apiKey, installationId, null, null, body.toString().toByteArray(), authToken)
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Session summary request failed"))
         return JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()

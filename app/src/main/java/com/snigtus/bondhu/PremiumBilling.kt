@@ -79,7 +79,7 @@ internal class PremiumBillingManager(
                     products = products,
                     isLoading = false,
                     isPremium = active,
-                    message = if (products.isEmpty()) "Premium plans are not available right now." else null
+                    message = if (products.isEmpty()) "Explore Plus plans are not available right now." else null
                 )
             } catch (error: CancellationException) {
                 throw error
@@ -94,17 +94,17 @@ internal class PremiumBillingManager(
 
     fun purchase(activity: Activity, productId: String) {
         if (!BuildConfig.DOST_PREMIUM_ENABLED) {
-            mutableState.value = mutableState.value.copy(message = "Premium purchases are not available yet.")
+            mutableState.value = mutableState.value.copy(message = "Explore Plus purchases are not available yet.")
             return
         }
         val product = mutableState.value.products.firstOrNull { it.productId == productId }
         if (product == null) {
-            mutableState.value = mutableState.value.copy(message = "This Premium plan is unavailable.")
+            mutableState.value = mutableState.value.copy(message = "This Explore Plus plan is unavailable.")
             return
         }
         val uid = authRepository.currentAccount?.uid
         if (uid.isNullOrBlank()) {
-            mutableState.value = mutableState.value.copy(message = "Sign in before purchasing Premium.")
+            mutableState.value = mutableState.value.copy(message = "Sign in before purchasing Explore Plus.")
             return
         }
         val offerToken = if (product.productType == BillingClient.ProductType.SUBS) {
@@ -141,7 +141,7 @@ internal class PremiumBillingManager(
                 if (purchases.isEmpty()) {
                     mutableState.value = mutableState.value.copy(
                         isBusy = false,
-                        message = "No Premium purchases were found for this Google Play account."
+                        message = "No Explore Plus purchases were found for this Google Play account."
                     )
                 } else {
                     verifyAndAcknowledge(purchases.distinctBy { it.purchaseToken })
@@ -238,7 +238,7 @@ internal class PremiumBillingManager(
                     continuation.resume(detailsResult.productDetailsList)
                 } else {
                     continuation.resumeWithException(
-                        IOException(result.debugMessage.ifBlank { "Could not load Premium plans." })
+                        IOException(result.debugMessage.ifBlank { "Could not load Explore Plus plans." })
                     )
                 }
             }
@@ -264,19 +264,19 @@ internal class PremiumBillingManager(
     private suspend fun verifyAndAcknowledge(purchases: List<Purchase>) {
         mutableState.value = mutableState.value.copy(isBusy = true, message = null)
         val uid = authRepository.currentAccount?.uid
-            ?: throw IOException("Sign in again to restore Premium.")
+            ?: throw IOException("Sign in again to restore Explore Plus.")
         var verified = false
         purchases.forEach { purchase ->
             when (purchase.purchaseState) {
                 Purchase.PurchaseState.PENDING -> {
                     mutableState.value = mutableState.value.copy(
                         isBusy = false,
-                        message = "Payment is pending. Premium starts after Google confirms payment."
+                        message = "Payment is pending. Explore Plus starts after Google confirms payment."
                     )
                 }
                 Purchase.PurchaseState.PURCHASED -> {
                     val productId = purchase.products.firstOrNull { it in PREMIUM_PRODUCT_IDS }
-                        ?: throw IOException("Google Play returned an unrecognized Premium product.")
+                        ?: throw IOException("Google Play returned an unrecognized Explore Plus product.")
                     verifyPurchase(uid, productId, purchase.purchaseToken)
                     if (!purchase.isAcknowledged) acknowledge(purchase.purchaseToken)
                     verified = true
@@ -286,7 +286,7 @@ internal class PremiumBillingManager(
         }
         if (!verified) return
         val active = authRepository.hasPremiumEntitlement(forceRefresh = true)
-        if (!active) throw IOException("The verified Premium entitlement was not returned by Firebase.")
+        if (!active) throw IOException("The verified Explore Plus entitlement was not returned by Firebase.")
         mutableState.value = mutableState.value.copy(isBusy = false, isPremium = true, message = null)
         onEntitlementChanged(true)
     }

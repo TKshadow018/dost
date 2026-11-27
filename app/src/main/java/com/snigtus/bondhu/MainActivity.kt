@@ -245,7 +245,7 @@ fun DostApp(
             throw error
         } catch (error: Exception) {
             isPremium = false
-            settingsNotice = "Premium status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
+            settingsNotice = "Explore Plus status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
         }
     }
 
@@ -290,6 +290,11 @@ fun DostApp(
                 checkingPeopleEligibility = false
             }
         }
+    }
+
+    fun openExplorePlus() {
+        if (!canUseAdultExploreFeature || !BuildConfig.DOST_PREMIUM_ENABLED) return
+        withAdultEligibility { screen = AppScreen.PREMIUM }
     }
 
     fun openSuperSecure() {
@@ -792,7 +797,7 @@ fun DostApp(
                     authTokenProvider = { authRepository.currentIdToken() }
                 ).generateFriendProfile(
                     store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, friend.personality,
-                    requestLanguage, store.userAge()
+                    requestLanguage, store.userAge(), friend.id, store.installationId()
                 )
                 val index = friends.indexOfFirst { it.id == friendId }
                 if (index >= 0 && friends[index].profilePending) {
@@ -815,14 +820,30 @@ fun DostApp(
 
     fun continueWithBasicProfile(friendId: String) {
         val index = friends.indexOfFirst { it.id == friendId }
-        if (index < 0 || !friends[index].profilePending || friendId in generatingProfileIds) return
-        val updated = store.updateFriend(friendId) { current ->
-            current.copy(profilePending = false)
-        } ?: return
-        friends[index] = updated
-        if (selectedFriend?.id == friendId) selectedFriend = updated
-        profileErrors = profileErrors - friendId
-        ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+        if (!exploreRequestAllowed(exploreEnabled) || index < 0
+            || !friends[index].profilePending || friendId in generatingProfileIds
+        ) return
+        generatingProfileIds = generatingProfileIds + friendId
+        scope.launch {
+            try {
+                systemFriendClient.updateFriendRegistration(friendId, "custom", add = true)
+                val currentIndex = friends.indexOfFirst { it.id == friendId }
+                if (currentIndex < 0 || !friends[currentIndex].profilePending) return@launch
+                val updated = store.updateFriend(friendId) { current ->
+                    current.copy(profilePending = false)
+                } ?: return@launch
+                friends[currentIndex] = updated
+                if (selectedFriend?.id == friendId) selectedFriend = updated
+                profileErrors = profileErrors - friendId
+                ConversationWorkScheduler.scheduleMorningGreeting(context, updated, language)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                profileErrors = profileErrors + (friendId to profileFailureText(language, error.message))
+            } finally {
+                generatingProfileIds = generatingProfileIds - friendId
+            }
+        }
     }
 
     fun addFriendWithProfile(friend: Friend) {
@@ -844,6 +865,17 @@ fun DostApp(
 
     fun removeFriendPermanently(friend: Friend) {
         if (!friends.remove(friend)) return
+        if (exploreEnabled) {
+            scope.launch {
+                runCatching {
+                    systemFriendClient.updateFriendRegistration(
+                        friend.id,
+                        if (friend.catalogId.isBlank()) "custom" else "catalog",
+                        add = false
+                    )
+                }
+            }
+        }
         store.saveFriends(friends)
         ConversationWorkScheduler.cancelAllForFriend(context, friend.id)
         ReplyNotifier.cancelReply(context, friend.id)
@@ -857,12 +889,13 @@ fun DostApp(
         if (recentlyAddedSystemFriend?.id == friend.id) recentlyAddedSystemFriend = null
     }
 
-    fun addSystemFriend(friend: Friend): Friend? {
+    suspend fun addSystemFriend(friend: Friend): Friend? {
         if (!exploreRequestAllowed(exploreEnabled) || !aiFriendAgeAllowed(currentUserAge, friend.age) || friend.catalogId.isBlank()
             || (!isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS)
             || friends.any { it.catalogId == friend.catalogId }
         ) return null
         val addedFriend = friend.copy(id = java.util.UUID.randomUUID().toString()).withLoveMeterGated(store.userAge())
+        systemFriendClient.updateFriendRegistration(addedFriend.id, "catalog", add = true)
         friends.add(addedFriend)
         store.saveFriends(friends)
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
@@ -1173,9 +1206,7 @@ fun DostApp(
                     profileFailedIds = profileErrors.keys,
                     peopleEnabled = canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED,
                     showExplorePlus = canUseAdultExploreFeature && BuildConfig.DOST_PREMIUM_ENABLED,
-                    onOpenPremium = {
-                        if (canUseAdultExploreFeature && BuildConfig.DOST_PREMIUM_ENABLED) screen = AppScreen.PREMIUM
-                    }
+                    onOpenPremium = ::openExplorePlus
                 )
                 MainTab.DISCOVER -> if (exploreEnabled) DiscoverHomeScreen(
                     language = language,
@@ -1225,7 +1256,7 @@ fun DostApp(
             quietHoursEndMinute = quietHoursEndMinute,
             settingsNotice = settingsNotice,
             onBack = { screen = settingsReturnScreen },
-            onOpenPremium = { if (canUseAdultExploreFeature && BuildConfig.DOST_PREMIUM_ENABLED) screen = AppScreen.PREMIUM },
+            onOpenPremium = ::openExplorePlus,
             onExploreEnabledChange = {
                 exploreEnabled = it
                 store.setExploreEnabled(it)
@@ -1381,6 +1412,7 @@ fun DostApp(
             addingCatalogId = addingSystemFriendId,
             systemLimitReached = !isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
             customLimitReached = !isPremium && friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS,
+            showExplorePlus = canUseAdultExploreFeature && BuildConfig.DOST_PREMIUM_ENABLED,
             onRefresh = ::loadSystemFriendCatalog,
             onSelect = ::addCatalogFriend,
             onPassCatalogFriend = {
@@ -1395,7 +1427,7 @@ fun DostApp(
                 addFriendWithProfile(it)
                 screen = AppScreen.HOME
             },
-            onOpenPremium = { screen = AppScreen.PREMIUM },
+            onOpenPremium = ::openExplorePlus,
             onManageFriends = {
                 settingsReturnScreen = AppScreen.SYSTEM_FRIEND_PICKER
                 screen = AppScreen.SETTINGS

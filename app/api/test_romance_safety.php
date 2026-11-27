@@ -227,7 +227,7 @@ $apiPatterns = array(
     'latest-turn check' => '/dost_conversation_requires_safety_block\s*\(\s*\$messages\s*,\s*\$romanceAllowed\s*\)/',
     'history filtering' => '/dost_filter_unsafe_conversation_history\s*\(\s*\$messages\s*,\s*\$romanceAllowed\s*\)/',
     'localized fallback' => '/dost_safety_fallback\s*\(\s*\$romanceAllowed\s*,\s*\$chatLanguage\s*\)/',
-    'AI age check' => '/dost_ai_friend_age_allowed\s*\(/',
+    'server-claim AI age check' => '/dost_explore_ai_friend_allowed\s*\(/',
     'teen safety policy' => '/The user is a teenager\. Keep the character clearly fictional/'
 );
 foreach ($apiPatterns as $behavior => $pattern) {

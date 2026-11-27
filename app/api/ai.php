@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/app_credential.php';
 require_once __DIR__ . '/archive_store.php';
+require_once __DIR__ . '/explore_support.php';
 require_once __DIR__ . '/romance_safety.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -142,6 +143,18 @@ if (is_file($configPath)) {
         $config = $loadedConfig;
     }
 }
+if (!dost_explore_enabled($config)) {
+    respond(503, array('error' => 'Explore is not enabled'));
+}
+$authorization = dost_explore_authorization_header($_SERVER);
+$identity = dost_explore_authorize($authorization, $config, time());
+if ($identity['status'] !== 200) {
+    respond($identity['status'], array('error' => $identity['error']));
+}
+$claims = $identity['claims'];
+$explorePlusActive = dost_explore_plus_active($claims, time());
+$adultAgeEligible = dost_age_eligibility_claim_active($claims, time());
+$verifiedUserAge = dost_explore_user_age($claims, time());
 if ($operation === 'log_message') {
     $installationId = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) ? $_SERVER['HTTP_X_DOST_INSTALL_ID'] : '';
     $credentialPresented = isset($_SERVER['HTTP_X_DOST_APP_CREDENTIAL']) && is_string($_SERVER['HTTP_X_DOST_APP_CREDENTIAL'])
@@ -186,13 +199,13 @@ if ($operation === 'log_message') {
     respond(200, array('saved' => true));
 }
 
-if (!dost_ai_friend_age_allowed(
-    isset($request['user_age']) ? $request['user_age'] : null,
-    isset($request['friend_age']) ? $request['friend_age'] : null
+if (!dost_explore_ai_friend_allowed(
+    $claims,
+    isset($request['friend_age']) ? $request['friend_age'] : null,
+    time()
 )) {
     respond(403, array('error' => 'This AI character is not available for your age group'));
 }
-
 $clientApiKey = isset($_SERVER['HTTP_X_OPENROUTER_KEY']) && is_string($_SERVER['HTTP_X_OPENROUTER_KEY'])
     ? trim($_SERVER['HTTP_X_OPENROUTER_KEY'])
     : '';
@@ -259,12 +272,10 @@ foreach ($messages as $message) {
 }
 
 $romanceAllowed = dost_romance_allowed_by_age(
-    isset($request['user_age']) ? $request['user_age'] : null,
+    $verifiedUserAge,
     isset($request['friend_age']) ? $request['friend_age'] : null
 );
-if ($operation !== 'log_message' && isset($request['user_age'])
-    && is_string($request['user_age']) && (int) $request['user_age'] >= 13 && (int) $request['user_age'] < 18
-) {
+if ($operation !== 'log_message' && !$adultAgeEligible) {
     array_unshift($messages, array(
         'role' => 'system',
         'content' => 'The user is a teenager. Keep the character clearly fictional and age-appropriate. Never create or engage in romance, flirting, sexual content, sexualized personas, or adult topics. Encourage healthy boundaries and breaks. Do not claim to be a real person.'
@@ -354,6 +365,24 @@ $upstreamBody = json_encode(array(
     'messages' => $providerMessages,
     'temperature' => $temperature
 ), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+
+if ($operation === 'profile_generation') {
+    $storageDirectory = dost_explore_storage_directory($config);
+    if ($storageDirectory === false || !isset($request['friend_id']) || !is_string($request['friend_id'])) {
+        respond(503, array('error' => 'Explore friend storage is unavailable'));
+    }
+    $registration = dost_explore_registry_change(
+        $storageDirectory,
+        $identity['uid'],
+        $request['friend_id'],
+        'custom',
+        'add',
+        $explorePlusActive
+    );
+    if ($registration['status'] !== 200) {
+        respond($registration['status'], array('error' => $registration['error']));
+    }
+}
 
 if ($safetyBlockedInput) {
     $upstreamStatus = 200;

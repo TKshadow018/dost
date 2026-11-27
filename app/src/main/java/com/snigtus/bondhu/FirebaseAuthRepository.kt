@@ -35,7 +35,7 @@ class FirebaseAuthRepository(context: Context) {
 
     suspend fun currentIdToken(forceRefresh: Boolean = false): String {
         val user = requireAuth().currentUser
-            ?: throw IllegalStateException("Sign in to manage Premium.")
+            ?: throw IllegalStateException("Sign in to manage Explore Plus.")
         return user.getIdToken(forceRefresh).awaitTask().token
             ?: throw IOException("Firebase did not return an ID token.")
     }

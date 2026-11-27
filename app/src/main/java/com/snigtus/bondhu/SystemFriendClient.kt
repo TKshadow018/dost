@@ -87,6 +87,39 @@ internal class SystemFriendClient(
         friend.copy(photoUri = Uri.fromFile(FriendPhotoLoader.saveRemotePhoto(context, friend.photoUri, friend.catalogId)).toString())
     }
 
+    suspend fun updateFriendRegistration(friendId: String, kind: String, add: Boolean) = withContext(Dispatchers.IO) {
+        check(exploreRequestAllowed(requestAllowed())) { "Explore mode is turned off." }
+        require(kind == "custom" || kind == "catalog")
+        val connection = URL(API_URL).openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 20_000
+        connection.useCaches = false
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty(
+            "Authorization",
+            listOf("Bearer", requireAuthToken()).joinToString(" ")
+        )
+        try {
+            val body = JSONObject().apply {
+                put("friend_id", friendId)
+                put("kind", kind)
+                put("action", if (add) "add" else "remove")
+            }.toString()
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) {
+                val message = runCatching { JSONObject(response).optString("error") }.getOrNull()
+                throw IOException(message?.takeIf(String::isNotBlank) ?: "Could not update friend registration (HTTP $status)")
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun getJson(query: String, authToken: String): JSONObject {
         val url = if (query.isBlank()) API_URL else "$API_URL?$query"
         val connection = URL(url).openConnection() as HttpURLConnection
@@ -109,10 +142,11 @@ internal class SystemFriendClient(
             connection.disconnect()
         }
 
-        private suspend fun requireAuthToken(): String =
+    }
+
+    private suspend fun requireAuthToken(): String =
             authTokenProvider()?.takeIf(String::isNotBlank)
                 ?: throw IllegalStateException("Sign in to use Explore.")
-    }
 
     private fun requiredText(profile: JSONObject, key: String): String =
         profile.optString(key).trim().takeIf(String::isNotBlank)

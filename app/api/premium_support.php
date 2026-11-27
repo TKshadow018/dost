@@ -164,7 +164,7 @@ function dost_premium_intro_claims($existing, $createdAt, $days, $now, $launchAt
     $existing['dostPremiumIntroGranted'] = true;
     $existing['dostPremiumIntroGrantedAt'] = $now;
     $lifetime = !empty($existing['dostPremiumLifetime']) || !empty($existing['dostExplorePlusLifetime']);
-    $until = $lifetime ? 0 : $existingExpiry;
+    $until = $lifetime ? 0 : max($existingExpiry, $hasBetterEntitlement ? 0 : $introExpiry);
     $existing['dostPremiumLifetime'] = $lifetime;
     $existing['dostPremiumUntil'] = $until;
     $existing['dostExplorePlusLifetime'] = $lifetime;
