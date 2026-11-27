@@ -69,7 +69,9 @@ function dost_call_config()
         'api_key' => $value('DOST_FIREBASE_WEB_API_KEY', 'firebase_web_api_key'),
         'service_account_path' => $value('DOST_CALL_SERVICE_ACCOUNT_PATH', 'call_service_account_path'),
         'turn_urls' => $value('DOST_TURN_URLS', 'turn_urls'),
-        'turn_secret' => $value('DOST_TURN_SHARED_SECRET', 'turn_shared_secret')
+        'turn_secret' => $value('DOST_TURN_SHARED_SECRET', 'turn_shared_secret'),
+        'cloudflare_turn_key_id' => $value('DOST_CLOUDFLARE_TURN_KEY_ID', 'cloudflare_turn_key_id'),
+        'cloudflare_turn_api_token' => $value('DOST_CLOUDFLARE_TURN_API_TOKEN', 'cloudflare_turn_api_token')
     );
     if ($settings['project_id'] === '' || $settings['api_key'] === ''
         || $settings['service_account_path'] === ''
@@ -154,11 +156,12 @@ function dost_call_service_account_token($credentials, $now = null)
     return $response['body']['access_token'];
 }
 
-function dost_call_http_json($method, $url, $headers = array(), $payload = null)
+function dost_call_http_json($method, $url, $headers = array(), $payload = null, $timeoutSeconds = 20)
 {
     if (!function_exists('curl_init')) {
         return false;
     }
+    $timeoutSeconds = is_int($timeoutSeconds) ? max(1, min(30, $timeoutSeconds)) : 20;
     $curl = curl_init($url);
     if ($curl === false) {
         return false;
@@ -167,8 +170,8 @@ function dost_call_http_json($method, $url, $headers = array(), $payload = null)
         CURLOPT_CUSTOMREQUEST => $method,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HTTPHEADER => array_merge(array('Accept: application/json'), $headers),
-        CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_TIMEOUT => 20,
+        CURLOPT_CONNECTTIMEOUT => min(10, $timeoutSeconds),
+        CURLOPT_TIMEOUT => $timeoutSeconds,
         CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
         CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
         CURLOPT_FOLLOWLOCATION => false
@@ -437,6 +440,172 @@ function dost_call_authorize($settings, $idToken, $chatId, $callId, $requireRing
         'call' => $call,
         'chat' => $chat,
         'service_token' => $serviceToken
+    );
+}
+
+function dost_call_turn_ttl_seconds()
+{
+    return 3600;
+}
+
+function dost_call_cloudflare_turn_settings_state($settings)
+{
+    if (!is_array($settings)) {
+        return 'absent';
+    }
+    $keyId = isset($settings['cloudflare_turn_key_id']) && is_string($settings['cloudflare_turn_key_id'])
+        ? $settings['cloudflare_turn_key_id']
+        : '';
+    $apiToken = isset($settings['cloudflare_turn_api_token']) && is_string($settings['cloudflare_turn_api_token'])
+        ? $settings['cloudflare_turn_api_token']
+        : '';
+    if ($keyId === '' && $apiToken === '') {
+        return 'absent';
+    }
+    if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9_-]{7,127}\z/', $keyId) !== 1
+        || preg_match('/\A[\x21-\x7E]{20,512}\z/', $apiToken) !== 1
+    ) {
+        return 'incomplete';
+    }
+    return 'configured';
+}
+
+function dost_call_coturn_configured($settings)
+{
+    return is_array($settings)
+        && isset($settings['turn_urls'], $settings['turn_secret'])
+        && is_array($settings['turn_urls'])
+        && count($settings['turn_urls']) > 0
+        && is_string($settings['turn_secret'])
+        && strlen($settings['turn_secret']) >= 32;
+}
+
+function dost_call_valid_ice_url($url)
+{
+    return is_string($url)
+        && preg_match('/\A(?:stun|stuns|turn|turns):[A-Za-z0-9.\-\[\]:]+(?:\?[A-Za-z0-9=&._-]+)?\z/', $url) === 1;
+}
+
+function dost_call_ice_url_needs_credentials($url)
+{
+    return is_string($url) && (strpos($url, 'turn:') === 0 || strpos($url, 'turns:') === 0);
+}
+
+function dost_call_normalize_cloudflare_ice_servers($body)
+{
+    if (!is_array($body) || !isset($body['iceServers']) || !is_array($body['iceServers'])
+        || count($body['iceServers']) < 1 || count($body['iceServers']) > 8
+    ) {
+        return false;
+    }
+    $servers = array();
+    $turnUrlCount = 0;
+    foreach ($body['iceServers'] as $server) {
+        if (!is_array($server) || !isset($server['urls'])) {
+            return false;
+        }
+        $urls = $server['urls'];
+        if (is_string($urls)) {
+            $urls = array($urls);
+        }
+        if (!is_array($urls) || count($urls) < 1 || count($urls) > 16) {
+            return false;
+        }
+        $cleanUrls = array();
+        $needsCredentials = false;
+        foreach ($urls as $url) {
+            if (!dost_call_valid_ice_url($url)) {
+                return false;
+            }
+            if (dost_call_ice_url_needs_credentials($url)) {
+                $needsCredentials = true;
+                $turnUrlCount++;
+            }
+            $cleanUrls[] = $url;
+        }
+        $username = isset($server['username']) && is_string($server['username']) ? $server['username'] : '';
+        $credential = isset($server['credential']) && is_string($server['credential']) ? $server['credential'] : '';
+        if (preg_match('/[\x00-\x1F\x7F]/', $username . $credential) === 1
+            || strlen($username) > 512
+            || strlen($credential) > 512
+        ) {
+            return false;
+        }
+        $entry = array('urls' => $cleanUrls);
+        if ($needsCredentials || $username !== '' || $credential !== '') {
+            if ($username === '' || $credential === '') {
+                return false;
+            }
+            $entry['username'] = $username;
+            $entry['credential'] = $credential;
+        }
+        $servers[] = $entry;
+    }
+    if ($turnUrlCount < 1) {
+        return false;
+    }
+    return $servers;
+}
+
+function dost_call_cloudflare_ice_servers($keyId, $apiToken, $ttlSeconds = 3600, $transport = null)
+{
+    if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9_-]{7,127}\z/', $keyId) !== 1
+        || preg_match('/\A[\x21-\x7E]{20,512}\z/', $apiToken) !== 1
+        || !is_int($ttlSeconds) || $ttlSeconds < 60 || $ttlSeconds > 3600
+    ) {
+        return false;
+    }
+    $transport = is_callable($transport) ? $transport : 'dost_call_http_json';
+    $response = call_user_func(
+        $transport,
+        'POST',
+        'https://rtc.live.cloudflare.com/v1/turn/keys/' . rawurlencode($keyId) . '/credentials/generate-ice-servers',
+        array('Authorization: Bearer ' . $apiToken),
+        array('ttl' => $ttlSeconds),
+        8
+    );
+    if (!is_array($response) || !isset($response['status'], $response['body'])
+        || ($response['status'] !== 200 && $response['status'] !== 201)
+    ) {
+        return false;
+    }
+    $servers = dost_call_normalize_cloudflare_ice_servers($response['body']);
+    if ($servers === false) {
+        return false;
+    }
+    return array(
+        'ice_servers' => $servers,
+        'expires_in' => $ttlSeconds
+    );
+}
+
+function dost_call_issue_ice_servers($settings, $uid, $now, $transport = null)
+{
+    $cloudflareState = dost_call_cloudflare_turn_settings_state($settings);
+    if ($cloudflareState === 'configured') {
+        return dost_call_cloudflare_ice_servers(
+            $settings['cloudflare_turn_key_id'],
+            $settings['cloudflare_turn_api_token'],
+            dost_call_turn_ttl_seconds(),
+            $transport
+        );
+    }
+    if ($cloudflareState === 'incomplete' || !dost_call_coturn_configured($settings)) {
+        return false;
+    }
+    $credentials = dost_call_turn_credentials(
+        $settings['turn_urls'],
+        $settings['turn_secret'],
+        $uid,
+        $now,
+        dost_call_turn_ttl_seconds()
+    );
+    if ($credentials === false) {
+        return false;
+    }
+    return array(
+        'ice_servers' => $credentials,
+        'expires_in' => dost_call_turn_ttl_seconds()
     );
 }
 

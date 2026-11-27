@@ -54,9 +54,12 @@ internal class PeopleCallApiClient(
             val urls = server.optJSONArray("urls").asStrings()
             val username = server.optString("username")
             val credential = server.optString("credential")
-            if (urls.isEmpty() || urls.any { !it.startsWith("turn:") && !it.startsWith("turns:") }
-                || username.isBlank() || credential.isBlank()
-            ) {
+            val hasTurnUrl = urls.any { it.startsWith("turn:") || it.startsWith("turns:") }
+            val hasUnsupportedUrl = urls.any { url ->
+                !url.startsWith("stun:") && !url.startsWith("stuns:")
+                    && !url.startsWith("turn:") && !url.startsWith("turns:")
+            }
+            if (urls.isEmpty() || hasUnsupportedUrl || (hasTurnUrl && (username.isBlank() || credential.isBlank()))) {
                 throw IOException("The call service returned invalid TURN credentials.")
             }
             PeopleIceServer(urls, username, credential)
