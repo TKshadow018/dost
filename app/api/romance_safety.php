@@ -1,5 +1,62 @@
 <?php
 
+function dost_ai_age_cohort_from_claims($claims, $currentMonth, $currentYear)
+{
+    if (!is_array($claims)) {
+        return 'unknown';
+    }
+    if (!isset($claims['dostAgeCohort']) || !in_array($claims['dostAgeCohort'], array('teen', 'adult'), true)) {
+        return 'unknown';
+    }
+    if ($claims['dostAgeCohort'] === 'adult') {
+        return 'adult';
+    }
+    if (!isset($claims['dostBirthMonth'], $claims['dostBirthYear'])
+        || !is_int($claims['dostBirthMonth']) || !is_int($claims['dostBirthYear'])
+    ) {
+        return 'teen';
+    }
+    if (!function_exists('dost_age_from_birth_month_year')) {
+        return 'teen';
+    }
+    $age = dost_age_from_birth_month_year(
+        $claims['dostBirthMonth'],
+        $claims['dostBirthYear'],
+        $currentMonth,
+        $currentYear
+    );
+    return is_int($age) && $age >= 18 ? 'adult' : 'teen';
+}
+
+function dost_teen_policy_prompt()
+{
+    return 'The account is in the teen age cohort or its age cohort cannot be verified. The fictional AI character must remain clearly an AI, friendly, and age-appropriate. Never create or continue romance, flirting, sexual content, sexualized descriptions, or sexual personas. Decline such requests briefly and redirect to a friendly topic.';
+}
+
+function dost_filter_ai_profile_content($content, $romanceAllowed)
+{
+    if (!is_string($content)) {
+        return false;
+    }
+    if ($romanceAllowed || !dost_content_requires_safety_block($content, false)) {
+        return $content;
+    }
+    return json_encode(array(
+        'personality' => 'Friendly, curious, respectful, and age-appropriate.',
+        'interests' => 'Games, stories, music, and creative hobbies.',
+        'family' => 'Fictional details not set.',
+        'familyMembers' => 'Fictional details not set.',
+        'familyActivities' => 'Fictional details not set.',
+        'financialCondition' => 'Fictional details not set.',
+        'address' => 'Fictional setting.',
+        'height' => 'Not specified.',
+        'weight' => 'Not specified.',
+        'facialFeatures' => 'Not specified.',
+        'bodyFeatures' => 'Not specified.',
+        'conversationStyle' => 'Warm, friendly, and age-appropriate.'
+    ), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+}
+
 function dost_romance_allowed_by_age($userAge, $friendAge)
 {
     foreach (array($userAge, $friendAge) as $age) {
@@ -16,6 +73,11 @@ function dost_romance_allowed_by_age($userAge, $friendAge)
         }
     }
     return true;
+}
+
+function dost_ai_profile_age_allowed($friendAge)
+{
+    return dost_romance_allowed_by_age('18', $friendAge);
 }
 
 function dost_classify_romance_safety($text)
