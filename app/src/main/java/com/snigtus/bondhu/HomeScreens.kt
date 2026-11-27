@@ -57,6 +57,9 @@ internal fun mainNavigationTabs(exploreEnabled: Boolean): List<MainTab> =
 
 internal enum class HomeInboxFilter { ALL, AI_FRIENDS, PEOPLE, ARCHIVED }
 
+internal fun shouldShowCircleContactsComingSoon(ageCohort: String): Boolean =
+    ageCohort == "teen"
+
 internal fun circleInboxFilter(selectedFilter: HomeInboxFilter): HomeInboxFilter =
     if (selectedFilter == HomeInboxFilter.ARCHIVED) selectedFilter else HomeInboxFilter.PEOPLE
 private enum class ConversationMenuAction { PIN, MUTE, ARCHIVE }
@@ -181,6 +184,7 @@ internal fun HomeScreen(
     archivedConversationIds: Set<String>,
     peopleInboxLoading: Boolean,
     peopleInboxError: String?,
+    circleContactsComingSoon: Boolean = false,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     selectedFilter: HomeInboxFilter,
@@ -281,7 +285,7 @@ internal fun HomeScreen(
                             contentDescription = when { bangla -> "খেলা"; hindi -> "खेल"; else -> "Games" }
                         )
                     }
-                    TextButton(onClick = if (circleOnly) onOpenPeople else onOpenDiscover) {
+                    if (!circleContactsComingSoon) TextButton(onClick = if (circleOnly) onOpenPeople else onOpenDiscover) {
                         Text(when {
                             circleOnly && bangla -> "যোগাযোগ যোগ করুন"
                             circleOnly && hindi -> "संपर्क जोड़ें"
@@ -295,7 +299,7 @@ internal fun HomeScreen(
             )
         },
         floatingActionButton = {
-            if (canAddAnyFriend || peopleEnabled) {
+            if (!circleContactsComingSoon && (canAddAnyFriend || peopleEnabled)) {
                 FloatingActionButton(
                     onClick = if (circleOnly) onOpenPeople else onOpenDiscover,
                     modifier = Modifier.semantics {
@@ -441,7 +445,7 @@ internal fun HomeScreen(
                 }
             }
             item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
-            if (peopleEnabled && selectedFilter != HomeInboxFilter.AI_FRIENDS
+            if (!circleContactsComingSoon && peopleEnabled && selectedFilter != HomeInboxFilter.AI_FRIENDS
                 && (peopleInboxLoading || peopleInboxError != null)
             ) {
                 item {
@@ -560,7 +564,12 @@ internal fun HomeScreen(
                             if (allInboxEntries.any { it.key.startsWith("people:") && it.key in archivedConversationIds }) {
                                 ArchivedChatsShortcut(language) { onSelectedFilterChange(HomeInboxFilter.ARCHIVED) }
                             } else {
-                                EmptyPeopleInboxState(language, onDiscover = onOpenPeople, circleOnly = circleOnly)
+                                EmptyPeopleInboxState(
+                                    language,
+                                    onDiscover = onOpenPeople,
+                                    circleOnly = circleOnly,
+                                    contactsComingSoon = circleContactsComingSoon
+                                )
                             }
                         }
                     }
@@ -872,7 +881,8 @@ private fun EmptyArchivedChats(language: AppLanguage) {
 private fun EmptyPeopleInboxState(
     language: AppLanguage,
     onDiscover: () -> Unit,
-    circleOnly: Boolean
+    circleOnly: Boolean,
+    contactsComingSoon: Boolean
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -881,13 +891,25 @@ private fun EmptyPeopleInboxState(
     ) {
         Text(
             when (language) {
-                AppLanguage.BANGLA -> if (circleOnly) "আপনার Circle এখনো খালি" else "এখনো মানুষের সঙ্গে কোনো চ্যাট নেই"
-                AppLanguage.HINDI -> if (circleOnly) "आपका Circle अभी खाली है" else "अभी लोगों के साथ कोई चैट नहीं है"
-                AppLanguage.ENGLISH -> if (circleOnly) "Your Circle is empty" else "No People chats yet"
+                AppLanguage.BANGLA -> when {
+                    contactsComingSoon -> "কিশোরদের জন্য Circle যোগাযোগ শিগগিরই আসছে"
+                    circleOnly -> "আপনার Circle এখনো খালি"
+                    else -> "এখনো মানুষের সঙ্গে কোনো চ্যাট নেই"
+                }
+                AppLanguage.HINDI -> when {
+                    contactsComingSoon -> "किशोरों के लिए Circle संपर्क जल्द आ रहे हैं"
+                    circleOnly -> "आपका Circle अभी खाली है"
+                    else -> "अभी लोगों के साथ कोई चैट नहीं है"
+                }
+                AppLanguage.ENGLISH -> when {
+                    contactsComingSoon -> "Circle contacts are coming soon for teens."
+                    circleOnly -> "Your Circle is empty"
+                    else -> "No People chats yet"
+                }
             },
             style = MaterialTheme.typography.titleLarge
         )
-        Button(onClick = onDiscover) {
+        if (!contactsComingSoon) Button(onClick = onDiscover) {
             Text(when {
                 circleOnly && language == AppLanguage.BANGLA -> "যোগাযোগ যোগ করুন"
                 circleOnly && language == AppLanguage.HINDI -> "संपर्क जोड़ें"
@@ -1492,7 +1514,8 @@ internal fun SettingsScreen(
     onCopyInstallationId: () -> Unit,
     onExportLocalData: () -> Unit,
     onImportLocalData: () -> Unit,
-    onDeleteServerArchive: () -> Unit
+    onDeleteServerArchive: () -> Unit,
+    onOpenPrivacy: () -> Unit
 ) {
     var showAiSettings by remember { mutableStateOf(false) }
     var confirmArchiveDelete by remember { mutableStateOf(false) }
@@ -1833,6 +1856,17 @@ internal fun SettingsScreen(
                 }
             }
             item {
+                SettingsSection("Privacy") {
+                    Text(
+                        "Dost is for ages 13 and older. Teens can use teen-safe AI, but not stranger discovery or Explore Plus; both require server-verified 18+ eligibility.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onOpenPrivacy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Privacy & mode disclosures")
+                    }
+                }
+            }
+            item {
                 SettingsSection("Local data") {
                     Text("Move your profile, friends, routines, reminders, memories, summaries, and chat history with a passphrase-encrypted backup. Your API key and installation id are not included. Keep the passphrase separate; it cannot be recovered.", style = MaterialTheme.typography.bodySmall)
                     Text("Installation ID for deletion and support requests: $installationId", style = MaterialTheme.typography.bodySmall)
@@ -1956,6 +1990,45 @@ internal fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+internal fun PrivacyScreen(onBack: () -> Unit, onOpenPrivacyPolicy: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Privacy") },
+                navigationIcon = { DostBackButton(AppLanguage.ENGLISH, onBack) }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                SettingsSection("Age and audience") {
+                    Text(
+                        "Under-13 users cannot create an account. Teens aged 13–17 have private-by-default settings and can use teen-safe AI, but not stranger discovery or Explore Plus. Stranger discovery and Explore Plus require server-verified 18+ eligibility."
+                    )
+                }
+            }
+            items(ModePrivacyDisclosures.all) { disclosure ->
+                SettingsSection(disclosure.title) {
+                    Text(disclosure.text)
+                }
+            }
+            item {
+                SettingsSection("Full policy") {
+                    Text("The full policy explains purposes, retention, deletion, and service-provider sharing.")
+                    OutlinedButton(onClick = onOpenPrivacyPolicy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Read the full Privacy Policy")
+                    }
+                }
+            }
+        }
     }
 }
 

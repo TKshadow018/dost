@@ -23,6 +23,13 @@ class HomeInboxTest {
     }
 
     @Test
+    fun teenCircleInboxShowsComingSoonWithoutAdultEligibility() {
+        assertEquals(true, shouldShowCircleContactsComingSoon("teen"))
+        assertEquals(false, shouldShowCircleContactsComingSoon("adult"))
+        assertEquals(false, shouldShowCircleContactsComingSoon(""))
+    }
+
+    @Test
     fun circleInboxContainsOnlyPeopleConversations() {
         val person = PublicPersonProfile(
             uid = "person-uid",

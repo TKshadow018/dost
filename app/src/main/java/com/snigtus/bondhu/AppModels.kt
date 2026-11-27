@@ -4,7 +4,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, PREMIUM, SYSTEM_FRIEND_PICKER, CHAT, PEOPLE, PEOPLE_CHAT, SUPER_SECURE, GAMES, KNOWLEDGE }
+enum class AppScreen { LANGUAGE_SETUP, SPLASH, AUTH, REGISTER, HOME, FRIEND_PROFILE, SETTINGS, PRIVACY, PREMIUM, SYSTEM_FRIEND_PICKER, CHAT, PEOPLE, PEOPLE_CHAT, SUPER_SECURE, GAMES, KNOWLEDGE }
 enum class AppLanguage { ENGLISH, BANGLA, HINDI }
 enum class AuthMode { SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD, VERIFY_EMAIL }
 
@@ -56,9 +56,20 @@ internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 internal const val GLOBAL_PROACTIVE_SPACING_MILLIS = 15 * 60_000L
 
 internal fun premiumClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
-    if (claims["dostPremiumLifetime"] == true) return true
-    val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong() ?: return false
+    if (claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true) return true
+    val expiresAt = ((claims["dostExplorePlusUntil"] ?: claims["dostPremiumUntil"]) as? Number)
+        ?.toLong() ?: return false
     return expiresAt > nowEpochSeconds
+}
+
+internal fun planClaimIsActive(claims: Map<String, Any>, plan: String, nowEpochSeconds: Long): Boolean {
+    val until = when (plan) {
+        "cipher" -> "dostCipherUntil"
+        "shield" -> "dostShieldUntil"
+        else -> return premiumClaimIsActive(claims, nowEpochSeconds)
+    }
+    val expiresAt = (claims[until] as? Number)?.toLong() ?: return false
+    return expiresAt > nowEpochSeconds && (plan != "shield" || ((claims["dostShieldSeats"] as? Number)?.toInt() ?: 0) > 0)
 }
 
 internal fun stableIdempotencyKey(value: String): String =
