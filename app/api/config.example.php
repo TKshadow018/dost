@@ -13,5 +13,8 @@ return array(
     'app_credential_secret' => 'REPLACE_WITH_RANDOM_SECRET_AT_LEAST_16_CHARS',
     'firebase_project_id' => 'REPLACE_WITH_FIREBASE_PROJECT_ID',
     'firebase_web_api_key' => 'REPLACE_WITH_FIREBASE_WEB_API_KEY',
-    'firebase_service_account_path' => '/home/ACCOUNT/private/firebase-service-account.json'
+    'firebase_service_account_path' => '/home/ACCOUNT/private/firebase-service-account.json',
+    // Optional debug-build People testing; keep disabled unless you explicitly add tester UIDs.
+    // 'age_eligibility_test_mode' => false,
+    // 'age_eligibility_test_uids' => array()
 );
