@@ -1251,6 +1251,10 @@ test("Cipher chat creation requires its server claim and default-off feature fla
   await assertFails(setDoc(doc(teenEntitled, "cipherChats/circle-chat"), chat));
   await setCipherFeatureEnabled(true);
   await assertFails(setDoc(doc(user("alice"), "cipherChats/circle-chat"), chat));
+  const expiredCipherClaim = user("alice", {
+    dostCipherUntil: Math.floor(Date.now() / 1000) - 3600,
+  });
+  await assertFails(setDoc(doc(expiredCipherClaim, "cipherChats/circle-chat"), chat));
   await assertSucceeds(setDoc(doc(teenEntitled, "cipherChats/circle-chat"), chat));
 });
 
