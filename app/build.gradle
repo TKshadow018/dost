@@ -50,6 +50,10 @@ android {
     if (!dostPeopleEnabledValue.equalsIgnoreCase("true") && !dostPeopleEnabledValue.equalsIgnoreCase("false")) {
         throw new GradleException("DOST_PEOPLE_ENABLED must be either true or false.")
     }
+    def dostExploreEnabledValue = System.getenv("DOST_EXPLORE_ENABLED") ?: providers.gradleProperty("DOST_EXPLORE_ENABLED").orNull ?: "false"
+    if (!dostExploreEnabledValue.equalsIgnoreCase("true") && !dostExploreEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_EXPLORE_ENABLED must be either true or false.")
+    }
     def dostPremiumEnabledValue = System.getenv("DOST_PREMIUM_ENABLED") ?: providers.gradleProperty("DOST_PREMIUM_ENABLED").orNull ?: "false"
     if (!dostPremiumEnabledValue.equalsIgnoreCase("true") && !dostPremiumEnabledValue.equalsIgnoreCase("false")) {
         throw new GradleException("DOST_PREMIUM_ENABLED must be either true or false.")
@@ -63,6 +67,7 @@ android {
         throw new GradleException("DOST_CIPHER_ENABLED must be either true or false.")
     }
     def dostPeopleEnabled = dostPeopleEnabledValue.equalsIgnoreCase("true")
+    def dostExploreEnabled = dostExploreEnabledValue.equalsIgnoreCase("true")
     def dostPremiumEnabled = dostPremiumEnabledValue.equalsIgnoreCase("true")
     def dostSuperSecureEnabled = dostSuperSecureEnabledValue.equalsIgnoreCase("true")
     def dostCipherEnabled = dostCipherEnabledValue.equalsIgnoreCase("true")
@@ -87,6 +92,7 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
         buildConfigField "boolean", "DOST_PEOPLE_ENABLED", dostPeopleEnabled.toString()
+        buildConfigField "boolean", "DOST_EXPLORE_ENABLED", dostExploreEnabled.toString()
         buildConfigField "boolean", "DOST_PREMIUM_ENABLED", dostPremiumEnabled.toString()
         buildConfigField "boolean", "DOST_SUPER_SECURE_ENABLED", dostSuperSecureEnabled.toString()
         buildConfigField "boolean", "DOST_CIPHER_ENABLED", dostCipherEnabled.toString()

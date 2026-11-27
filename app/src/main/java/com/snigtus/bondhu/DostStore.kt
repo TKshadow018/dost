@@ -336,9 +336,22 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     fun saveAiModel(model: String) {
         preferences.edit().putString("ai_model", model.trim()).apply()
     }
+    fun exploreEnabled(): Boolean =
+        BuildConfig.DOST_EXPLORE_ENABLED && preferences.getBoolean("explore_enabled", false)
+    fun setExploreEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("explore_enabled", enabled).apply()
+    }
+    fun exploreDisclosureAccepted(): Boolean = preferences.getBoolean("explore_disclosure_accepted", false)
+    fun setExploreDisclosureAccepted() {
+        preferences.edit().putBoolean("explore_disclosure_accepted", true).apply()
+    }
     fun anonymousTelemetryEnabled(): Boolean = preferences.getBoolean("anonymous_telemetry_enabled", false)
     fun setAnonymousTelemetryEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("anonymous_telemetry_enabled", enabled).apply()
+    }
+    fun shieldModeEnabled(): Boolean = preferences.getBoolean("shield_mode_enabled", false)
+    fun setShieldModeEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("shield_mode_enabled", enabled).apply()
     }
     fun peopleCallAlertsEnabled(defaultEnabled: Boolean): Boolean =
         preferences.getBoolean("people_call_alerts_enabled", defaultEnabled)

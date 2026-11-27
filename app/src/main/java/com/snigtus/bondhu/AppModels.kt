@@ -55,8 +55,15 @@ internal const val MAX_SYSTEM_FRIENDS = 7
 internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 internal const val GLOBAL_PROACTIVE_SPACING_MILLIS = 15 * 60_000L
 
+internal fun premiumClaimIsLifetime(claims: Map<String, Any>): Boolean =
+    if (claims.containsKey("dostExplorePlusLifetime")) {
+        claims["dostExplorePlusLifetime"] == true
+    } else {
+        claims["dostPremiumLifetime"] == true
+    }
+
 internal fun premiumClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
-    if (claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true) return true
+    if (premiumClaimIsLifetime(claims)) return true
     val expiresAt = ((claims["dostExplorePlusUntil"] ?: claims["dostPremiumUntil"]) as? Number)
         ?.toLong() ?: return false
     return expiresAt > nowEpochSeconds

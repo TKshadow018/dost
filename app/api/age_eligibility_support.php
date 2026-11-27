@@ -172,10 +172,14 @@ function dost_age_custom_attributes($eligible, $now, $ttlSeconds)
     if (!is_bool($eligible) || !is_int($now) || !is_int($ttlSeconds) || $ttlSeconds < 60 || $ttlSeconds > 86400) {
         return '';
     }
-    $attributes = json_encode(array(
+    $attributes = array(
         'dostAgeEligible' => $eligible,
         'dostAgeEligibleUntil' => $now + $ttlSeconds
-    ), JSON_UNESCAPED_SLASHES);
+    );
+    if ($eligible) {
+        $attributes['dostAgeCohort'] = 'adult';
+    }
+    $attributes = json_encode($attributes, JSON_UNESCAPED_SLASHES);
     return is_string($attributes) ? $attributes : '';
 }
 

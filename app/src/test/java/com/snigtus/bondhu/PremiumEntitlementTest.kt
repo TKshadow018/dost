@@ -11,8 +11,10 @@ class PremiumEntitlementTest {
 
         assertTrue(premiumClaimIsActive(mapOf("dostPremiumLifetime" to true), now))
         assertTrue(premiumClaimIsActive(mapOf("dostExplorePlusLifetime" to true), now))
+        assertFalse(premiumClaimIsActive(mapOf("dostExplorePlusLifetime" to false, "dostPremiumLifetime" to true), now))
         assertTrue(premiumClaimIsActive(mapOf("dostExplorePlusUntil" to now + 1), now))
         assertTrue(premiumClaimIsActive(mapOf("dostPremiumUntil" to now + 1), now))
+        assertFalse(premiumClaimIsActive(mapOf("dostExplorePlusUntil" to now, "dostPremiumUntil" to now + 1), now))
         assertFalse(premiumClaimIsActive(mapOf("dostPremiumUntil" to now), now))
         assertFalse(premiumClaimIsActive(mapOf("dostPremiumUntil" to (now - 1).toDouble()), now))
         assertFalse(premiumClaimIsActive(emptyMap(), now))

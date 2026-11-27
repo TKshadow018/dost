@@ -45,7 +45,7 @@ internal fun PremiumScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text(premiumText(language, "Dost Premium", "দোস্ত প্রিমিয়াম", "दोस्त प्रीमियम")) },
+                    title = { Text(premiumText(language, "Explore Plus", "Explore Plus", "Explore Plus")) },
                     navigationIcon = { DostBackButton(language, onBack) }
                 )
             }
@@ -57,12 +57,12 @@ internal fun PremiumScreen(
                 Text(
                     premiumText(
                         language,
-                        if (isPremium) "Premium is active. New purchases are temporarily disabled."
-                        else "Premium purchases are not available yet. The selected benefits are being prepared.",
-                        if (isPremium) "প্রিমিয়াম চালু আছে। নতুন কেনাকাটা সাময়িকভাবে বন্ধ।"
-                        else "প্রিমিয়াম কেনাকাটা এখনো চালু হয়নি। নির্বাচিত সুবিধাগুলো প্রস্তুত করা হচ্ছে।",
-                        if (isPremium) "प्रीमियम सक्रिय है। नई खरीदारी अस्थायी रूप से बंद है।"
-                        else "प्रीमियम खरीदारी अभी उपलब्ध नहीं है। चुनी गई सुविधाएँ तैयार की जा रही हैं।"
+                        if (isPremium) "Explore Plus is active. New purchases are temporarily disabled."
+                        else "Explore Plus purchases are not available yet.",
+                        if (isPremium) "Explore Plus চালু আছে। নতুন কেনাকাটা সাময়িকভাবে বন্ধ।"
+                        else "Explore Plus কেনাকাটা এখনো চালু হয়নি।",
+                        if (isPremium) "Explore Plus सक्रिय है। नई खरीदारी अस्थायी रूप से बंद है।"
+                        else "Explore Plus की खरीदारी अभी उपलब्ध नहीं है।"
                     ),
                     style = MaterialTheme.typography.bodyLarge
                 )
@@ -83,7 +83,7 @@ internal fun PremiumScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(premiumText(language, "Dost Premium", "দোস্ত প্রিমিয়াম", "दोस्त प्रीमियम")) },
+                title = { Text(premiumText(language, "Explore Plus", "Explore Plus", "Explore Plus")) },
                 navigationIcon = { DostBackButton(language, onBack) }
             )
         }
@@ -123,13 +123,19 @@ internal fun PremiumScreen(
                                 "Cipher सदस्यता सक्रिय है। केवल चैट बनाने वाले को इसकी आवश्यकता है।"
                             ))
                         }
+                        Text(premiumText(
+                            language,
+                            "Explore Plus removes the free AI-friend limits (3 custom and 7 catalog friends).",
+                            "Explore Plus বিনামূল্যের AI বন্ধু সীমা (৩টি কাস্টম ও ৭টি ক্যাটালগ বন্ধু) সরিয়ে দেয়।",
+                            "Explore Plus AI दोस्तों की मुफ्त सीमा (3 कस्टम और 7 कैटलॉग दोस्त) हटाता है।"
+                        ))
                     }
                 }
             }
             if (uid.isBlank()) {
                 item {
                     Text(
-                        premiumText(language, "Sign in to purchase and restore Premium.", "প্রিমিয়াম কিনতে ও পুনরুদ্ধার করতে সাইন ইন করুন।", "प्रीमियम खरीदने और पुनर्स्थापित करने के लिए साइन इन करें।"),
+                        premiumText(language, "Sign in to purchase and restore Explore Plus.", "Explore Plus কিনতে ও পুনরুদ্ধার করতে সাইন ইন করুন।", "Explore Plus खरीदने और पुनर्स्थापित करने के लिए साइन इन करें।"),
                         color = MaterialTheme.colorScheme.error
                     )
                 }
