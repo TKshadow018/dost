@@ -157,6 +157,11 @@ if ($entitlement === false) {
     dost_premium_respond(403, array('error' => 'This purchase is not active for this account'));
 }
 
+$claimLock = dost_firebase_claim_lock($request['uid']);
+if ($claimLock === false) {
+    error_log('Dost Premium custom-claim lock could not be acquired.');
+    dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
+}
 $adminLookup = dost_age_http_json(
     'https://identitytoolkit.googleapis.com/v1/projects/' . rawurlencode($projectId) . '/accounts:lookup',
     array('Authorization: Bearer ' . $serviceToken),
@@ -200,9 +205,12 @@ if ($claimUpdate === false || $claimUpdate['status'] !== 200) {
     error_log('Dost Premium custom-claim update failed.');
     dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
 }
+dost_firebase_claim_unlock($claimLock);
 
 dost_premium_respond(200, array(
     'premium' => true,
+    'source' => 'play',
     'lifetime' => !empty($updatedClaims['dostPremiumLifetime']),
-    'premium_until' => isset($updatedClaims['dostPremiumUntil']) ? (int) $updatedClaims['dostPremiumUntil'] : null
+    'premium_until' => isset($updatedClaims['dostPremiumUntil']) ? (int) $updatedClaims['dostPremiumUntil'] : null,
+    'intro_granted' => !empty($updatedClaims['dostPremiumIntroGranted'])
 ));

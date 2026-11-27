@@ -157,6 +157,11 @@ if (!dost_age_integrity_allows(
     dost_age_respond(403, $failure);
 }
 
+$claimLock = dost_firebase_claim_lock($request['uid']);
+if ($claimLock === false) {
+    error_log('Dost age eligibility custom-claim lock could not be acquired.');
+    dost_age_respond(503, array('error' => 'Age eligibility service is unavailable'));
+}
 $adminLookup = dost_age_http_json(
     'https://identitytoolkit.googleapis.com/v1/projects/' . rawurlencode($firebaseProjectId) . '/accounts:lookup',
     array('Authorization: Bearer ' . $serviceToken),
@@ -209,6 +214,7 @@ if ($claimUpdate === false || $claimUpdate['status'] !== 200) {
     error_log('Dost age eligibility custom claim update failed.');
     dost_age_respond(503, array('error' => 'Age eligibility service is unavailable'));
 }
+dost_firebase_claim_unlock($claimLock);
 
 dost_age_respond(200, array(
     'eligible' => $request['eligible'],
