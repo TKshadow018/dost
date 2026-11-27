@@ -277,6 +277,7 @@ internal object ConversationWorkScheduler {
 
 internal class ConversationTaskWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
+        if (!superSecureSessionAllowsAi()) return Result.success()
         val profileNamespace = inputData.getString("profile_namespace") ?: LEGACY_PROFILE_NAMESPACE
         if (profileNamespace != activeProfileNamespace(applicationContext)) return Result.success()
         val friendId = inputData.getString("friend_id") ?: return Result.failure()
@@ -384,6 +385,7 @@ internal class ConversationTaskWorker(context: Context, parameters: WorkerParame
 
 internal class ConversationLogWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
+        if (!superSecureSessionAllowsAi()) return Result.success()
         val profileNamespace = inputData.getString("profile_namespace") ?: LEGACY_PROFILE_NAMESPACE
         if (profileNamespace != activeProfileNamespace(applicationContext)) return Result.success()
         val friendId = inputData.getString("friend_id") ?: return Result.failure()

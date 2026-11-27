@@ -8,6 +8,7 @@
         <!-- Chat history, photos, profile data, and the encrypted API key stay on the device. -->
         <exclude domain="sharedpref" path="dost_local_data.xml"/>
         <exclude domain="sharedpref" path="dost_account_registry.xml"/>
+        <exclude domain="database" path="."/>
         <exclude domain="file" path="messages/"/>
         <exclude domain="file" path="chat_images/"/>
         <exclude domain="file" path="system-friend-photos/"/>
@@ -16,6 +17,7 @@
     <device-transfer>
         <exclude domain="sharedpref" path="dost_local_data.xml"/>
         <exclude domain="sharedpref" path="dost_account_registry.xml"/>
+        <exclude domain="database" path="."/>
         <exclude domain="file" path="messages/"/>
         <exclude domain="file" path="chat_images/"/>
         <exclude domain="file" path="system-friend-photos/"/>

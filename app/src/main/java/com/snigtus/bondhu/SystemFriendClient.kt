@@ -13,6 +13,7 @@ import java.util.UUID
 
 internal class SystemFriendClient {
     suspend fun getCatalog(chatLanguage: AppLanguage): List<SystemFriendListing> = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Super Secure mode." }
         val languageCode = chatLanguageCode(chatLanguage)
         val profiles = getJson("chat_language=$languageCode").getJSONArray("profiles")
         List(profiles.length()) { index ->
@@ -39,6 +40,7 @@ internal class SystemFriendClient {
     }
 
     suspend fun getProfile(catalogId: String, chatLanguage: AppLanguage): Friend = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Super Secure mode." }
         val query = "id=${URLEncoder.encode(catalogId, "UTF-8")}&chat_language=${chatLanguageCode(chatLanguage)}"
         val profile = getJson(query).getJSONObject("profile")
         val id = profile.getString("id").takeIf(String::isNotBlank)

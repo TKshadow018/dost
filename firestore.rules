@@ -148,7 +148,8 @@ service cloud.firestore {
 
     function validContactRequestCreate(recipientUid, senderUid) {
       let data = request.resource.data;
-      return ageEligible()
+      return secureFeatureEnabled()
+        && ageEligible()
         && request.auth.uid == senderUid
         && recipientUid != senderUid
         && data.keys().hasAll([
@@ -178,7 +179,8 @@ service cloud.firestore {
 
     function validContactRequestUpdate(recipientUid, senderUid) {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
-      return ageEligible()
+      return secureFeatureEnabled()
+        && ageEligible()
         && request.auth.uid == recipientUid
         && resource.data.senderUid == senderUid
         && resource.data.recipientUid == recipientUid
@@ -193,7 +195,8 @@ service cloud.firestore {
     function validContactApproval(chatId) {
       let data = request.resource.data;
       let acceptedRequestPath = contactRequestPath(data.recipientUid, data.senderUid);
-      return ageEligible()
+      return secureFeatureEnabled()
+        && ageEligible()
         && data.keys().hasAll([
           'conversationId', 'recipientUid', 'senderUid', 'members', 'createdBy', 'createdAt'
         ])
@@ -610,6 +613,428 @@ service cloud.firestore {
             && profile(request.auth.uid).ageCohort == 'adult')
         );
       allow get, list, update, delete: if false;
+    }
+
+    match /secureOrgs/{orgId} {
+      function featureConfigPath() {
+        return /databases/$(database)/documents/secureOrgConfig/superSecure;
+      }
+
+      function secureFeatureEnabled() {
+        return exists(featureConfigPath())
+          && get(featureConfigPath()).data.enabled == true;
+      }
+
+      function orgPath() {
+        return /databases/$(database)/documents/secureOrgs/$(orgId);
+      }
+
+      function memberPath(uid) {
+        return /databases/$(database)/documents/secureOrgs/$(orgId)/members/$(uid);
+      }
+
+      function auditPath(auditId) {
+        return /databases/$(database)/documents/secureOrgs/$(orgId)/auditLog/$(auditId);
+      }
+
+      function memberCountTransition(auditId, targetUid, action, delta) {
+        let targetPath = memberPath(targetUid);
+        let eventPath = auditPath(auditId);
+        let orgBefore = get(orgPath()).data;
+        let orgAfter = getAfter(orgPath()).data;
+        return existsAfter(targetPath)
+          && existsAfter(eventPath)
+          && orgBefore.memberCount is int
+          && orgAfter.memberCount == orgBefore.memberCount + delta
+          && orgAfter.memberCount >= 1
+          && orgAfter.memberCount <= 25
+          && orgAfter.memberCountAuditEventId == auditId
+          && getAfter(targetPath).data.auditEventId == auditId
+          && getAfter(targetPath).data.actorUid == request.auth.uid
+          && getAfter(eventPath).data.actorUid == request.auth.uid
+          && getAfter(eventPath).data.targetUid == targetUid
+          && getAfter(eventPath).data.action == action
+          && getAfter(eventPath).data.createdAt == request.time;
+      }
+
+      function activeMember(uid) {
+        return secureFeatureEnabled()
+          && ageEligible()
+          && exists(memberPath(uid))
+          && get(memberPath(uid)).data.status == 'active'
+          && get(memberPath(uid)).data.uid == uid;
+      }
+
+      function isMember() {
+        return activeMember(request.auth.uid);
+      }
+
+      function isOwner() {
+        return isMember() && get(memberPath(request.auth.uid)).data.role == 'owner';
+      }
+
+      function isManager() {
+        return isMember()
+          && get(memberPath(request.auth.uid)).data.role in ['owner', 'manager'];
+      }
+
+      function validOrgMemberCountUpdate() {
+        let data = request.resource.data;
+        let changed = data.diff(resource.data).affectedKeys();
+        let auditId = data.memberCountAuditEventId;
+        let delta = data.memberCount - resource.data.memberCount;
+        return ageEligible()
+          && isManager()
+          && changed.hasOnly(['memberCount', 'memberCountAuditEventId'])
+          && changed.hasAll(['memberCount', 'memberCountAuditEventId'])
+          && auditId is string
+          && auditId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && existsAfter(auditPath(auditId))
+          && getAfter(auditPath(auditId)).data.targetUid is string
+          && (
+            (delta == 1
+              && getAfter(auditPath(auditId)).data.action in ['member_added', 'manager_added']
+              && memberCountTransition(
+                auditId,
+                getAfter(auditPath(auditId)).data.targetUid,
+                getAfter(auditPath(auditId)).data.action,
+                1
+              ))
+            ||
+            (delta == -1
+              && getAfter(auditPath(auditId)).data.action in ['member_removed', 'manager_removed']
+              && memberCountTransition(
+                auditId,
+                getAfter(auditPath(auditId)).data.targetUid,
+                getAfter(auditPath(auditId)).data.action,
+                -1
+              ))
+          );
+      }
+
+      function auditMatches(auditId, targetUid, action, role, status) {
+        let targetPath = memberPath(targetUid);
+        let eventPath = auditPath(auditId);
+        return existsAfter(targetPath)
+          && getAfter(targetPath).data.auditEventId == auditId
+          && getAfter(targetPath).data.actorUid == request.auth.uid
+          && getAfter(targetPath).data.role == role
+          && getAfter(targetPath).data.status == status
+          && existsAfter(eventPath)
+          && getAfter(eventPath).data.actorUid == request.auth.uid
+          && getAfter(eventPath).data.targetUid == targetUid
+          && getAfter(eventPath).data.action == action
+          && getAfter(eventPath).data.createdAt == request.time;
+      }
+
+      function validAuditCreate(auditId) {
+        let data = request.resource.data;
+        let targetUid = data.targetUid;
+        return secureFeatureEnabled()
+          && ageEligible()
+          && data.keys().hasAll(['actorUid', 'targetUid', 'action', 'createdAt'])
+          && data.keys().hasOnly(['actorUid', 'targetUid', 'action', 'createdAt'])
+          && data.actorUid == request.auth.uid
+          && data.targetUid is string
+          && data.createdAt == request.time
+          && (
+            (data.action == 'org_created'
+              && existsAfter(orgPath())
+              && getAfter(orgPath()).data.ownerUid == request.auth.uid
+              && targetUid == request.auth.uid
+              && auditMatches(auditId, targetUid, 'org_created', 'owner', 'active'))
+            ||
+            (data.action == 'member_added'
+              && isManager()
+              && auditMatches(auditId, targetUid, 'member_added', 'member', 'active')
+              && memberCountTransition(auditId, targetUid, 'member_added', 1))
+            ||
+            (data.action == 'manager_added'
+              && isOwner()
+              && auditMatches(auditId, targetUid, 'manager_added', 'manager', 'active')
+              && memberCountTransition(auditId, targetUid, 'manager_added', 1))
+            ||
+            (data.action == 'manager_promoted'
+              && isOwner()
+              && auditMatches(auditId, targetUid, 'manager_promoted', 'manager', 'active'))
+            ||
+            (data.action == 'manager_demoted'
+              && isOwner()
+              && auditMatches(auditId, targetUid, 'manager_demoted', 'member', 'active'))
+            ||
+            (data.action == 'member_removed'
+              && isManager()
+              && auditMatches(auditId, targetUid, 'member_removed', 'member', 'removed')
+              && memberCountTransition(auditId, targetUid, 'member_removed', -1))
+            ||
+            (data.action == 'manager_removed'
+              && isOwner()
+              && auditMatches(auditId, targetUid, 'manager_removed', 'manager', 'removed')
+              && memberCountTransition(auditId, targetUid, 'manager_removed', -1))
+          );
+      }
+
+      function validMemberCreate(memberUid) {
+        let data = request.resource.data;
+        let isOwnerBootstrap = memberUid == request.auth.uid
+          && data.role == 'owner'
+          && existsAfter(orgPath())
+          && getAfter(orgPath()).data.ownerUid == request.auth.uid
+          && auditMatches(data.auditEventId, memberUid, 'org_created', 'owner', 'active');
+        let isMemberAdmission = isManager()
+          && data.role == 'member'
+          && auditMatches(data.auditEventId, memberUid, 'member_added', 'member', 'active')
+          && memberCountTransition(data.auditEventId, memberUid, 'member_added', 1);
+        let isManagerAdmission = isOwner()
+          && data.role == 'manager'
+          && auditMatches(data.auditEventId, memberUid, 'manager_added', 'manager', 'active')
+          && memberCountTransition(data.auditEventId, memberUid, 'manager_added', 1);
+        return secureFeatureEnabled()
+          && ageEligible()
+          && data.keys().hasAll([
+            'uid', 'displayName', 'role', 'status', 'actorUid',
+            'auditEventId', 'organizationName', 'createdAt', 'updatedAt'
+          ])
+          && data.keys().hasOnly([
+            'uid', 'displayName', 'role', 'status', 'actorUid',
+            'auditEventId', 'organizationName', 'createdAt', 'updatedAt'
+          ])
+          && data.uid == memberUid
+          && data.displayName is string
+          && data.displayName.size() > 0
+          && data.displayName.size() <= 60
+          && data.role in ['owner', 'manager', 'member']
+          && data.status == 'active'
+          && data.actorUid == request.auth.uid
+          && data.auditEventId is string
+          && data.auditEventId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.organizationName is string
+          && data.organizationName.size() >= 2
+          && data.organizationName.size() <= 80
+          && data.createdAt == request.time
+          && data.updatedAt == request.time
+          && (isOwnerBootstrap || isMemberAdmission || isManagerAdmission);
+      }
+
+      function validMemberUpdate(memberUid) {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let data = request.resource.data;
+        let oldRole = resource.data.role;
+        let roleAndStatusValid =
+          (resource.data.status == 'active'
+            && data.status == 'removed'
+            && oldRole == 'member'
+            && isManager()
+            && auditMatches(data.auditEventId, memberUid, 'member_removed', 'member', 'removed')
+            && memberCountTransition(data.auditEventId, memberUid, 'member_removed', -1))
+          ||
+          (resource.data.status == 'active'
+            && data.status == 'removed'
+            && oldRole == 'manager'
+            && isOwner()
+            && auditMatches(data.auditEventId, memberUid, 'manager_removed', 'manager', 'removed')
+            && memberCountTransition(data.auditEventId, memberUid, 'manager_removed', -1))
+          ||
+          (resource.data.status == 'active'
+            && data.status == 'active'
+            && oldRole == 'member'
+            && data.role == 'manager'
+            && isOwner()
+            && auditMatches(data.auditEventId, memberUid, 'manager_promoted', 'manager', 'active'))
+          ||
+          (resource.data.status == 'active'
+            && data.status == 'active'
+            && oldRole == 'manager'
+            && data.role == 'member'
+            && isOwner()
+            && auditMatches(data.auditEventId, memberUid, 'manager_demoted', 'member', 'active'))
+          ||
+          (resource.data.status == 'removed'
+            && data.status == 'active'
+            && data.role == 'member'
+            && isManager()
+            && auditMatches(data.auditEventId, memberUid, 'member_added', 'member', 'active')
+            && memberCountTransition(data.auditEventId, memberUid, 'member_added', 1))
+          ||
+          (resource.data.status == 'removed'
+            && data.status == 'active'
+            && data.role == 'manager'
+            && isOwner()
+            && auditMatches(data.auditEventId, memberUid, 'manager_added', 'manager', 'active')
+            && memberCountTransition(data.auditEventId, memberUid, 'manager_added', 1));
+        return ageEligible()
+          && isManager()
+          && resource.data.uid == memberUid
+          && memberUid != get(orgPath()).data.ownerUid
+          && data.uid == resource.data.uid
+          && data.createdAt == resource.data.createdAt
+          && data.displayName is string
+          && data.displayName.size() > 0
+          && data.displayName.size() <= 60
+          && data.organizationName is string
+          && data.organizationName.size() >= 2
+          && data.organizationName.size() <= 80
+          && data.actorUid == request.auth.uid
+          && data.updatedAt == request.time
+          && data.auditEventId is string
+          && data.auditEventId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && changed.hasOnly([
+            'displayName', 'role', 'status', 'actorUid',
+            'auditEventId', 'organizationName', 'updatedAt'
+          ])
+          && changed.hasAll(['auditEventId', 'updatedAt'])
+          && roleAndStatusValid;
+      }
+
+      function validOrgCreate() {
+        let data = request.resource.data;
+        let ownerPath = memberPath(request.auth.uid);
+        let groupPath = /databases/$(database)/documents/secureOrgs/$(orgId)/groupChats/main;
+        return secureFeatureEnabled()
+          && ageEligible()
+          && data.keys().hasAll([
+            'name', 'ownerUid', 'memberCount', 'memberCountAuditEventId', 'createdAt'
+          ])
+          && data.keys().hasOnly([
+            'name', 'ownerUid', 'memberCount', 'memberCountAuditEventId', 'createdAt'
+          ])
+          && data.name is string
+          && data.name.size() >= 2
+          && data.name.size() <= 80
+          && data.ownerUid == request.auth.uid
+          && data.memberCount == 1
+          && data.memberCountAuditEventId is string
+          && data.memberCountAuditEventId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.createdAt == request.time
+          && existsAfter(ownerPath)
+          && getAfter(ownerPath).data.role == 'owner'
+          && getAfter(ownerPath).data.status == 'active'
+          && getAfter(ownerPath).data.auditEventId == data.memberCountAuditEventId
+          && existsAfter(groupPath)
+          && getAfter(groupPath).data.createdBy == request.auth.uid
+          && getAfter(groupPath).data.createdAt == request.time;
+      }
+
+      allow get: if isMember();
+      allow list: if false;
+      allow create: if signedIn() && validOrgCreate();
+      allow update: validOrgMemberCountUpdate();
+      allow delete: if false;
+
+      match /members/{memberUid} {
+        allow get: if (isMember() && isManager())
+          || (isMember() && resource.data.status == 'active')
+          || (signedIn() && request.auth.uid == memberUid && secureFeatureEnabled());
+        allow list: if isMember() && resource.data.status == 'active';
+        allow create: if signedIn() && validMemberCreate(memberUid);
+        allow update: if signedIn() && validMemberUpdate(memberUid);
+        allow delete: if false;
+      }
+
+      match /auditLog/{auditId} {
+        allow get, list: if isManager();
+        allow create: if signedIn() && validAuditCreate(auditId);
+        allow update, delete: if false;
+      }
+
+      match /groupChats/{chatId} {
+        function initialOwnerGroup() {
+          let ownerPath = memberPath(request.auth.uid);
+          return signedIn()
+            && secureFeatureEnabled()
+            && existsAfter(orgPath())
+            && getAfter(orgPath()).data.ownerUid == request.auth.uid
+            && existsAfter(ownerPath)
+            && getAfter(ownerPath).data.role == 'owner'
+            && getAfter(ownerPath).data.status == 'active';
+        }
+
+        allow get, list: if chatId == 'main' && isMember();
+        allow create: if chatId == 'main'
+          && request.resource.data.keys().hasAll(['createdBy', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['createdBy', 'createdAt'])
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && (isManager() || initialOwnerGroup());
+        allow update, delete: if false;
+
+        match /messages/{messageId} {
+          function validTextMessage() {
+            let data = request.resource.data;
+            return data.keys().hasAll(['senderUid', 'text', 'createdAt'])
+              && data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+              && data.senderUid == request.auth.uid
+              && data.text is string
+              && data.text.size() > 0
+              && data.text.size() <= 4000
+              && data.createdAt == request.time;
+          }
+
+          allow get, list: if chatId == 'main' && isMember();
+          allow create: if chatId == 'main' && isMember()
+            && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/groupChats/main)
+            && validTextMessage();
+          allow update, delete: if false;
+        }
+      }
+
+      match /directChats/{chatId} {
+        function validDirectMembers(members) {
+          return members is list
+            && members.size() == 2
+            && members[0] is string
+            && members[1] is string
+            && members[0] != members[1]
+            && request.auth.uid in members
+            && activeMember(members[0])
+            && activeMember(members[1]);
+        }
+
+        allow get, list: if isMember()
+          && resource.data.members is list
+          && request.auth.uid in resource.data.members
+          && activeMember(resource.data.members[0])
+          && activeMember(resource.data.members[1]);
+        allow create: if isMember()
+          && request.resource.data.keys().hasAll(['members', 'createdBy', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['members', 'createdBy', 'createdAt'])
+          && validDirectMembers(request.resource.data.members)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+
+        match /messages/{messageId} {
+          function directMembers() {
+            let path = /databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId);
+            return existsAfter(path) ? getAfter(path).data.members : [];
+          }
+
+          function validDirectTextMessage() {
+            let data = request.resource.data;
+            let members = directMembers();
+            return data.keys().hasAll(['senderUid', 'text', 'createdAt'])
+              && data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+              && data.senderUid == request.auth.uid
+              && data.text is string
+              && data.text.size() > 0
+              && data.text.size() <= 4000
+              && data.createdAt == request.time
+              && members is list
+              && request.auth.uid in members
+              && members.size() == 2
+              && activeMember(members[0])
+              && activeMember(members[1]);
+          }
+
+          allow get, list: if isMember()
+            && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId))
+            && request.auth.uid in get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members
+            && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[0])
+            && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[1]);
+          allow create: if isMember() && validDirectTextMessage();
+          allow update, delete: if false;
+        }
+      }
     }
   }
 }
