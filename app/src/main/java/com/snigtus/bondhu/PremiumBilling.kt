@@ -38,6 +38,7 @@ internal data class PremiumBillingState(
     val isLoading: Boolean = true,
     val isBusy: Boolean = false,
     val isPremium: Boolean = false,
+    val isCipher: Boolean = false,
     val message: String? = null
 )
 
@@ -71,7 +72,8 @@ internal class PremiumBillingManager(
         scope.launch {
             try {
                 val active = authRepository.hasPremiumEntitlement()
-                mutableState.value = mutableState.value.copy(isPremium = active)
+                val cipherActive = authRepository.hasPlanEntitlement(CIPHER_PRODUCT_ID)
+                mutableState.value = mutableState.value.copy(isPremium = active, isCipher = cipherActive)
                 onEntitlementChanged(active)
                 connect()
                 val products = queryProducts(authRepository.hasAdultEligibility())
@@ -79,7 +81,8 @@ internal class PremiumBillingManager(
                     products = products,
                     isLoading = false,
                     isPremium = active,
-                    message = if (products.isEmpty()) "Explore Plus and other plans are not available right now." else null
+                    isCipher = cipherActive,
+                    message = if (products.isEmpty()) "Paid plans are not available right now." else null
                 )
             } catch (error: CancellationException) {
                 throw error
@@ -328,9 +331,15 @@ internal class PremiumBillingManager(
         }
         if (!verified) return
         val active = authRepository.hasPremiumEntitlement(forceRefresh = true)
+        val cipherActive = authRepository.hasPlanEntitlement(CIPHER_PRODUCT_ID, forceRefresh = true)
         val planActive = verifiedProducts.any { authRepository.hasPlanEntitlement(it, forceRefresh = true) }
         if (!planActive) throw IOException("The verified plan entitlement was not returned by Firebase.")
-        mutableState.value = mutableState.value.copy(isBusy = false, isPremium = active, message = null)
+        mutableState.value = mutableState.value.copy(
+            isBusy = false,
+            isPremium = active,
+            isCipher = cipherActive,
+            message = null
+        )
         onEntitlementChanged(active)
     }
 

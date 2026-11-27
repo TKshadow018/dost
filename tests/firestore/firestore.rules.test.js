@@ -177,6 +177,45 @@ async function setSecureFeatureEnabled(enabled) {
   });
 }
 
+async function setCipherFeatureEnabled(enabled) {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "cipherConfig/cipher"), { enabled });
+  });
+}
+
+async function seedCircleChat(chatId = "circle-chat") {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), `peopleChats/${chatId}`), {
+      members: ["alice", "bob"],
+    });
+  });
+}
+
+function cipherChat({
+  createdBy = "alice",
+  extra = {},
+} = {}) {
+  return {
+    members: ["alice", "bob"],
+    createdBy,
+    sourceCircleChatId: "circle-chat",
+    salt: "AAAAAAAAAAAAAAAAAAAAAA==",
+    keyCheck: "A".repeat(64),
+    v: 1,
+    createdAt: serverTimestamp(),
+    ...extra,
+  };
+}
+
+async function seedCipherChat() {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "cipherChats/circle-chat"), {
+      ...cipherChat(),
+      createdAt: new Date(),
+    });
+  });
+}
+
 async function createSecureOrg(
   orgId,
   ownerUid,
@@ -1308,6 +1347,70 @@ test("public profile reports require public adult profiles and a single profile 
     setDoc(doc(user("alice"), "peopleReports/mixed-context-report"), {
       ...report,
       conversationId: "alice-bob",
+    }),
+  );
+});
+
+test("Cipher chat creation requires its server claim and default-off feature flag", async () => {
+  await seedCircleChat();
+  const chat = cipherChat();
+  const teenEntitled = user("alice", {
+    dostAgeCohort: "teen",
+    dostAgeEligible: false,
+    dostAgeEligibleUntil: 0,
+    dostCipherUntil: Math.floor(Date.now() / 1000) + 3600,
+  });
+
+  await assertFails(setDoc(doc(user("alice"), "cipherChats/circle-chat"), chat));
+  await assertFails(setDoc(doc(teenEntitled, "cipherChats/circle-chat"), chat));
+  await setCipherFeatureEnabled(true);
+  await assertFails(setDoc(doc(user("alice"), "cipherChats/circle-chat"), chat));
+  const expiredCipherClaim = user("alice", {
+    dostCipherUntil: Math.floor(Date.now() / 1000) - 3600,
+  });
+  await assertFails(setDoc(doc(expiredCipherClaim, "cipherChats/circle-chat"), chat));
+  await assertSucceeds(setDoc(doc(teenEntitled, "cipherChats/circle-chat"), chat));
+});
+
+test("Cipher chats are restricted to source Circle members and ciphertext-only messages", async () => {
+  await setCipherFeatureEnabled(true);
+  await seedCircleChat();
+  await seedCipherChat();
+
+  const ciphertext = {
+    ct: "A".repeat(24),
+    nonce: "A".repeat(16),
+    v: 1,
+    senderUid: "bob",
+    createdAt: serverTimestamp(),
+  };
+  await assertSucceeds(
+    getDoc(doc(user("alice", {
+      dostAgeCohort: "teen",
+      dostAgeEligible: false,
+      dostAgeEligibleUntil: 0,
+    }), "cipherChats/circle-chat/messages/message-1")),
+  );
+  await assertFails(getDoc(doc(user("mallory"), "cipherChats/circle-chat")));
+  await assertSucceeds(
+    setDoc(doc(user("bob"), "cipherChats/circle-chat/messages/message-1"), ciphertext),
+  );
+  await assertFails(
+    setDoc(doc(user("mallory"), "cipherChats/circle-chat/messages/message-2"), {
+      ...ciphertext,
+      senderUid: "mallory",
+    }),
+  );
+  await assertFails(
+    setDoc(doc(user("bob"), "cipherChats/circle-chat/messages/plaintext"), {
+      ...ciphertext,
+      text: "must not be stored",
+    }),
+  );
+  await assertFails(
+    setDoc(doc(user("bob"), "cipherChats/circle-chat/messages/oversized"), {
+      ...ciphertext,
+      ct: "A".repeat(2689),
     }),
   );
 });

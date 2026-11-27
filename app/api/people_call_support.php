@@ -69,7 +69,8 @@ function dost_call_config()
         'api_key' => $value('DOST_FIREBASE_WEB_API_KEY', 'firebase_web_api_key'),
         'service_account_path' => $value('DOST_CALL_SERVICE_ACCOUNT_PATH', 'call_service_account_path'),
         'turn_urls' => $value('DOST_TURN_URLS', 'turn_urls'),
-        'turn_secret' => $value('DOST_TURN_SHARED_SECRET', 'turn_shared_secret')
+        'turn_secret' => $value('DOST_TURN_SHARED_SECRET', 'turn_shared_secret'),
+        'cipher_enabled' => strtolower($value('DOST_CIPHER_ENABLED', 'cipher_enabled'))
     );
     if ($settings['project_id'] === '' || $settings['api_key'] === ''
         || $settings['service_account_path'] === ''
@@ -267,12 +268,53 @@ function dost_call_document_fields($response)
 function dost_message_push_request_is_valid($request)
 {
     return is_array($request)
-        && count($request) === 2
+        && (count($request) === 2
+            || (count($request) === 3 && isset($request['cipher']) && $request['cipher'] === true))
         && isset($request['chat_id'], $request['message_id'])
         && is_string($request['chat_id'])
         && is_string($request['message_id'])
         && preg_match('/\A[A-Za-z0-9_-]{1,128}\z/', $request['chat_id']) === 1
         && preg_match('/\A[A-Za-z0-9_-]{1,128}\z/', $request['message_id']) === 1;
+}
+
+function dost_cipher_message_push_context_is_valid($chat, $message, $uid, $chatId)
+{
+    $messageFields = array('ct', 'nonce', 'v', 'senderUid', 'createdAt');
+    if (!is_array($chat) || !is_array($message)
+        || !isset($chat['members'], $chat['sourceCircleChatId'], $chat['salt'], $chat['keyCheck'])
+        || !is_array($chat['members'])
+        || count($chat['members']) !== 2
+        || !is_string($chat['members'][0])
+        || !is_string($chat['members'][1])
+        || $chat['members'][0] === $chat['members'][1]
+        || !in_array($uid, $chat['members'], true)
+        || $chat['sourceCircleChatId'] !== $chatId
+        || !is_string($chat['salt'])
+        || strlen($chat['salt']) !== 24
+        || !is_string($chat['keyCheck'])
+        || !is_string($uid)
+        || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1
+        || count($message) !== count($messageFields)
+        || array_diff(array_keys($message), $messageFields) !== array()
+        || !isset($message['ct'], $message['nonce'], $message['v'], $message['senderUid'], $message['createdAt'])
+        || !is_string($message['ct'])
+        || strlen($message['ct']) < 24
+        || strlen($message['ct']) > 2688
+        || !is_string($message['nonce'])
+        || strlen($message['nonce']) !== 16
+        || $message['v'] !== 1
+        || $message['senderUid'] !== $uid
+        || !is_int($message['createdAt'])
+    ) {
+        return false;
+    }
+    $ciphertext = base64_decode($message['ct'], true);
+    $nonce = base64_decode($message['nonce'], true);
+    return is_string($ciphertext)
+        && strlen($ciphertext) >= 17
+        && strlen($ciphertext) <= 2016
+        && is_string($nonce)
+        && strlen($nonce) === 12;
 }
 
 function dost_message_push_context_is_valid($chat, $message, $uid)
@@ -353,6 +395,36 @@ function dost_call_user_is_eligible($projectId, $serviceToken, $uid, $now)
         && $claims['dostAgeEligible'] === true
         && is_numeric($claims['dostAgeEligibleUntil'])
         && (int) $claims['dostAgeEligibleUntil'] > $now;
+}
+
+function dost_call_cipher_cohort_is_eligible($claims)
+{
+    return is_array($claims)
+        && isset($claims['dostAgeCohort'])
+        && in_array($claims['dostAgeCohort'], array('teen', 'adult'), true);
+}
+
+function dost_call_user_is_cipher_eligible($projectId, $serviceToken, $uid)
+{
+    $response = dost_call_http_json(
+        'POST',
+        'https://identitytoolkit.googleapis.com/v1/projects/' . rawurlencode($projectId) . '/accounts:lookup',
+        array('Authorization: Bearer ' . $serviceToken),
+        array('localId' => array($uid))
+    );
+    if ($response === false || $response['status'] !== 200
+        || !isset($response['body']['users'][0]['localId'])
+        || !is_string($response['body']['users'][0]['localId'])
+        || !hash_equals($uid, $response['body']['users'][0]['localId'])
+    ) {
+        return false;
+    }
+    $customAttributes = $response['body']['users'][0]['customAttributes'] ?? '{}';
+    if (!is_string($customAttributes)) {
+        return false;
+    }
+    $claims = json_decode($customAttributes, true);
+    return dost_call_cipher_cohort_is_eligible($claims);
 }
 
 function dost_call_authorize($settings, $idToken, $chatId, $callId, $requireRinging, $rateLimitScope = '', $rateLimit = 0)

@@ -102,6 +102,8 @@ internal fun PremiumScreen(
                         Text(
                             if (state.isPremium) {
                                 premiumText(language, "Explore Plus is active", "Explore Plus চালু আছে", "Explore Plus सक्रिय है")
+                            } else if (state.isCipher) {
+                                premiumText(language, "Cipher subscription is active", "Cipher সাবস্ক্রিপশন চালু আছে", "Cipher सदस्यता सक्रिय है")
                             } else {
                                 premiumText(language, "Plans for Explore, Cipher, and Shield", "Explore, Cipher ও Shield-এর প্ল্যান", "Explore, Cipher और Shield के प्लान")
                             },
@@ -113,6 +115,14 @@ internal fun PremiumScreen(
                             "প্রতিটি মোডের জন্য ঐচ্ছিক প্ল্যান বেছে নিন। Explore Plus, Dost Plus এবং Shield মালিকের প্ল্যানের জন্য যাচাইকৃত ১৮+ যোগ্যতা দরকার। আমন্ত্রিত Shield সদস্যদের বয়স ১৩ বা তার বেশি হতে পারে। কিশোরদের জন্য Cipher উপলভ্য।",
                             "हर मोड के लिए वैकल्पिक प्लान चुनें। Explore Plus, Dost Plus और Shield मालिक प्लान के लिए सत्यापित 18+ पात्रता चाहिए। आमंत्रित Shield सदस्य 13 वर्ष या उससे अधिक आयु के हो सकते हैं। Cipher किशोरों के लिए उपलब्ध है।"
                         ))
+                        if (BuildConfig.DOST_CIPHER_ENABLED && state.isCipher) {
+                            Text(premiumText(
+                                language,
+                                "Cipher subscription is active. Only the chat creator needs it.",
+                                "Cipher সাবস্ক্রিপশন চালু আছে। শুধু চ্যাটের নির্মাতার এটি দরকার।",
+                                "Cipher सदस्यता सक्रिय है। केवल चैट बनाने वाले को इसकी आवश्यकता है।"
+                            ))
+                        }
                         Text(premiumText(
                             language,
                             "Explore Plus removes the free AI-friend limits (3 custom and 7 catalog friends).",

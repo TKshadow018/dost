@@ -18,13 +18,21 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 internal object PeopleMessageNotificationWork {
-    fun enqueue(context: Context, profileNamespace: String, uid: String, chatId: String, messageId: String) {
+    fun enqueue(
+        context: Context,
+        profileNamespace: String,
+        uid: String,
+        chatId: String,
+        messageId: String,
+        cipher: Boolean = false
+    ) {
         val request = OneTimeWorkRequestBuilder<PeopleMessageNotificationWorker>()
             .setInputData(workDataOf(
                 PROFILE_NAMESPACE to profileNamespace,
                 UID to uid,
                 CONVERSATION_ID to chatId,
-                MESSAGE_ID to messageId
+                MESSAGE_ID to messageId,
+                CIPHER to cipher
             ))
             .setConstraints(
                 Constraints.Builder()
@@ -51,6 +59,7 @@ internal object PeopleMessageNotificationWork {
     private const val UID = "uid"
     private const val CONVERSATION_ID = "conversation_id"
     private const val MESSAGE_ID = "message_id"
+    private const val CIPHER = "cipher"
 }
 
 internal class PeopleMessageNotificationWorker(context: Context, parameters: WorkerParameters) :
@@ -62,10 +71,15 @@ internal class PeopleMessageNotificationWorker(context: Context, parameters: Wor
         val uid = inputData.getString("uid") ?: return Result.failure()
         val conversationId = inputData.getString("conversation_id") ?: return Result.failure()
         val messageId = inputData.getString("message_id") ?: return Result.failure()
+        val cipher = inputData.getBoolean("cipher", false)
         if (FirebaseAuth.getInstance().currentUser?.uid != uid) return Result.success()
 
         return try {
-            PeopleRepository(applicationContext).notifyNewMessage(uid, conversationId, messageId)
+            if (cipher) {
+                CipherRepository(applicationContext).notifyNewMessage(uid, conversationId, messageId)
+            } else {
+                PeopleRepository(applicationContext).notifyNewMessage(uid, conversationId, messageId)
+            }
             Result.success()
         } catch (exception: CancellationException) {
             throw exception

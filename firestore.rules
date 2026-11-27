@@ -44,6 +44,71 @@ service cloud.firestore {
         && !exists(blockPath(secondUid, firstUid));
     }
 
+    function cipherFeatureEnabled() {
+      let configPath = /databases/$(database)/documents/cipherConfig/cipher;
+      return exists(configPath) && get(configPath).data.enabled == true;
+    }
+
+    function cipherCreatorEntitled() {
+      return request.auth.token.get('dostCipherUntil', 0) is int
+        && request.auth.token.get('dostCipherUntil', 0) * 1000 > request.time.toMillis();
+    }
+
+    function cipherAgeEligible() {
+      return signedIn()
+        && request.auth.token.get('dostAgeCohort', '') in ['teen', 'adult'];
+    }
+
+    function cipherSourceChatPath(sourceChatId) {
+      return /databases/$(database)/documents/peopleChats/$(sourceChatId);
+    }
+
+    function validCipherChatCreate(chatId) {
+      let data = request.resource.data;
+      let sourcePath = cipherSourceChatPath(data.sourceCircleChatId);
+      let members = data.members;
+      return cipherFeatureEnabled()
+        && cipherAgeEligible()
+        && cipherCreatorEntitled()
+        && data.keys().hasAll([
+          'members', 'createdBy', 'sourceCircleChatId', 'salt', 'keyCheck', 'v', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'members', 'createdBy', 'sourceCircleChatId', 'salt', 'keyCheck', 'v', 'createdAt'
+        ])
+        && chatId == data.sourceCircleChatId
+        && members is list
+        && members.size() == 2
+        && members[0] is string
+        && members[1] is string
+        && members[0] != members[1]
+        && request.auth.uid in members
+        && data.createdBy == request.auth.uid
+        && data.salt is string
+        && data.salt.size() == 24
+        && data.keyCheck is string
+        && data.keyCheck.size() >= 40
+        && data.keyCheck.size() <= 128
+        && data.v == 1
+        && data.createdAt == request.time
+        && exists(sourcePath)
+        && get(sourcePath).data.members == members
+        && get(sourcePath).data.members.size() == 2
+        && neitherBlocked(members[0], members[1]);
+    }
+
+    function cipherMember(chatData) {
+      let members = chatData.members;
+      return cipherFeatureEnabled()
+        && cipherAgeEligible()
+        && members is list
+        && members.size() == 2
+        && request.auth.uid in members
+        && exists(cipherSourceChatPath(chatData.sourceCircleChatId))
+        && get(cipherSourceChatPath(chatData.sourceCircleChatId)).data.members == members
+        && neitherBlocked(members[0], members[1]);
+    }
+
     function contactRequestPath(recipientUid, senderUid) {
       return /databases/$(database)/documents/peopleContactRequests/$(recipientUid)/incoming/$(senderUid);
     }
@@ -611,6 +676,32 @@ service cloud.firestore {
             && profile(request.auth.uid).ageCohort == 'adult')
         );
       allow get, list, update, delete: if false;
+    }
+
+    match /cipherChats/{chatId} {
+      allow create: if validCipherChatCreate(chatId);
+      allow get: if cipherMember(resource.data);
+      allow list, update, delete: if false;
+
+      match /messages/{messageId} {
+        function parentChat() {
+          return get(/databases/$(database)/documents/cipherChats/$(chatId)).data;
+        }
+
+        allow get, list: if cipherMember(parentChat());
+        allow create: if cipherMember(parentChat())
+          && request.resource.data.keys().hasAll(['ct', 'nonce', 'v', 'senderUid', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['ct', 'nonce', 'v', 'senderUid', 'createdAt'])
+          && request.resource.data.ct is string
+          && request.resource.data.ct.size() >= 24
+          && request.resource.data.ct.size() <= 2688
+          && request.resource.data.nonce is string
+          && request.resource.data.nonce.size() == 16
+          && request.resource.data.v == 1
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
     }
 
     match /secureOrgConfig/superSecure {

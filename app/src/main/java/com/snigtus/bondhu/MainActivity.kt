@@ -219,6 +219,7 @@ fun DostApp(
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var backupPasswordError by remember { mutableStateOf("") }
     var settingsReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var premiumReturnScreen by rememberSaveable { mutableStateOf(AppScreen.SETTINGS) }
     var friendProfileReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     var knowledgeReturnScreen by rememberSaveable { mutableStateOf(AppScreen.SETTINGS) }
     var knowledgeFriendFilter by rememberSaveable { mutableStateOf<String?>(null) }
@@ -510,6 +511,7 @@ fun DostApp(
             AppScreen.CHAT,
             AppScreen.PEOPLE,
             AppScreen.PEOPLE_CHAT,
+            AppScreen.CIPHER,
             AppScreen.SUPER_SECURE,
             AppScreen.FRIEND_PROFILE,
             AppScreen.SYSTEM_FRIEND_PICKER,
@@ -524,6 +526,7 @@ fun DostApp(
         when (screen) {
             AppScreen.CHAT -> screen = chatReturnScreen
             AppScreen.PEOPLE_CHAT -> screen = peopleChatReturnScreen
+            AppScreen.CIPHER -> screen = AppScreen.PEOPLE_CHAT
             AppScreen.SUPER_SECURE -> {
                 closeSuperSecure()
             }
@@ -533,8 +536,8 @@ fun DostApp(
             AppScreen.GAMES -> screen = gameReturnScreen
             AppScreen.KNOWLEDGE -> screen = knowledgeReturnScreen
             AppScreen.SETTINGS -> screen = settingsReturnScreen
+            AppScreen.PREMIUM -> screen = premiumReturnScreen
             AppScreen.PRIVACY -> screen = AppScreen.SETTINGS
-            AppScreen.PREMIUM -> screen = AppScreen.SETTINGS
             AppScreen.REGISTER -> screen = AppScreen.AUTH
             AppScreen.AUTH -> authMode = AuthMode.SIGN_IN
             else -> Unit
@@ -1544,7 +1547,7 @@ fun DostApp(
             uid = activeFirebaseUid,
             isPremium = isPremium,
             authRepository = authRepository,
-            onBack = { screen = AppScreen.SETTINGS },
+            onBack = { screen = premiumReturnScreen },
             onEntitlementChanged = { isPremium = it }
         )
         AppScreen.SYSTEM_FRIEND_PICKER -> if (hasLocalAccountAccess() && exploreEnabled) SystemFriendPickerScreen(
@@ -1615,10 +1618,29 @@ fun DostApp(
                 language = language,
                 uid = authRepository.currentAccount?.uid.orEmpty(),
                 conversation = conversation,
-                onBack = { screen = peopleChatReturnScreen }
+                onBack = { screen = peopleChatReturnScreen },
+                onOpenCipher = {
+                    if (BuildConfig.DOST_CIPHER_ENABLED) screen = AppScreen.CIPHER
+                }
             )
         } ?: run { screen = AppScreen.PEOPLE } else {
             selectedPeopleConversation = null
+            screen = AppScreen.HOME
+        }
+        AppScreen.CIPHER -> if (BuildConfig.DOST_CIPHER_ENABLED && BuildConfig.DOST_PEOPLE_ENABLED
+            && hasLocalAccountAccess()
+        ) selectedPeopleConversation?.let { conversation ->
+            CipherScreen(
+                language = language,
+                uid = activeFirebaseUid,
+                conversation = conversation,
+                onBack = { screen = AppScreen.PEOPLE_CHAT },
+                onOpenPlans = {
+                    premiumReturnScreen = AppScreen.CIPHER
+                    screen = AppScreen.PREMIUM
+                }
+            )
+        } ?: run { screen = AppScreen.PEOPLE } else {
             screen = AppScreen.HOME
         }
         AppScreen.SUPER_SECURE -> if (BuildConfig.DOST_SUPER_SECURE_ENABLED && shieldEnabled && hasLocalAccountAccess()) {

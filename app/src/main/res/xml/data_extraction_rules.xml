@@ -13,6 +13,9 @@
         <exclude domain="file" path="chat_images/"/>
         <exclude domain="file" path="system-friend-photos/"/>
         <exclude domain="file" path="profiles/"/>
+        <exclude domain="file" path="cipher/"/>
+        <exclude domain="file" path="cipher_keys/"/>
+        <exclude domain="sharedpref" path="cipher_keys.xml"/>
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="dost_local_data.xml"/>
@@ -22,5 +25,8 @@
         <exclude domain="file" path="chat_images/"/>
         <exclude domain="file" path="system-friend-photos/"/>
         <exclude domain="file" path="profiles/"/>
+        <exclude domain="file" path="cipher/"/>
+        <exclude domain="file" path="cipher_keys/"/>
+        <exclude domain="sharedpref" path="cipher_keys.xml"/>
     </device-transfer>
 </data-extraction-rules>
