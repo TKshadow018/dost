@@ -56,12 +56,8 @@ internal const val MAX_TOTAL_FRIENDS = MAX_CUSTOM_FRIENDS + MAX_SYSTEM_FRIENDS
 internal const val GLOBAL_PROACTIVE_SPACING_MILLIS = 15 * 60_000L
 
 internal fun premiumClaimIsActive(claims: Map<String, Any>, nowEpochSeconds: Long): Boolean {
-    if (claims["dostExplorePlusLifetime"] == true || claims["dostPremiumLifetime"] == true) return true
-    val expiresAt = maxOf(
-        (claims["dostExplorePlusUntil"] as? Number)?.toLong() ?: 0L,
-        (claims["dostPremiumUntil"] as? Number)?.toLong() ?: 0L
-    )
-    if (expiresAt == 0L) return false
+    if (claims["dostPremiumLifetime"] == true) return true
+    val expiresAt = (claims["dostPremiumUntil"] as? Number)?.toLong() ?: return false
     return expiresAt > nowEpochSeconds
 }
 
@@ -782,7 +778,7 @@ fun loveLevel(score: Int): String = when (score.coerceIn(0, 100)) {
     else -> "Beloved"
 }
 
-/** The app is for people aged 13 and older; adult-only Explore features use a separate gate. */
+/** Users under 13 cannot create an account. People and romance keep their own adult-only gates. */
 const val MINIMUM_ACCOUNT_AGE = 13
 
 /** Love meter and the romantic prompt ladder require both the user and the friend to be at least this age. */
@@ -792,13 +788,29 @@ const val MAX_PROFILE_AGE = 120
 
 enum class AccountAgeResult { VALID, EMPTY, NOT_A_WHOLE_NUMBER, UNDER_MINIMUM, ABOVE_MAXIMUM }
 
+enum class DostAgeCohort { TEEN, ADULT }
+
+fun birthMonthYearAge(month: String, year: String, currentMonth: Int, currentYear: Int): Int? {
+    val birthMonth = month.trim().toIntOrNull() ?: return null
+    val birthYear = year.trim().toIntOrNull() ?: return null
+    if (birthMonth !in 1..12 || birthYear !in 1900..currentYear || currentMonth !in 1..12) return null
+    val completedYears = currentYear - birthYear - if (birthMonth >= currentMonth) 1 else 0
+    return completedYears.takeIf { it in 0..MAX_PROFILE_AGE }
+}
+
+fun ageCohortForAge(age: Int): DostAgeCohort? = when {
+    age in MINIMUM_ACCOUNT_AGE until ROMANCE_MINIMUM_AGE -> DostAgeCohort.TEEN
+    age in ROMANCE_MINIMUM_AGE..MAX_PROFILE_AGE -> DostAgeCohort.ADULT
+    else -> null
+}
+
 fun accountAgeResult(age: String): AccountAgeResult {
     val years = profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)
     if (years < MINIMUM_ACCOUNT_AGE) return AccountAgeResult.UNDER_MINIMUM
     return AccountAgeResult.VALID
 }
 
-/** New AI friend profiles must be at least 13; legacy underage profiles remain readable but cannot be messaged. */
+/** New friend profiles must be adults; legacy underage profiles remain readable but cannot be messaged. */
 fun friendAgeResult(age: String): AccountAgeResult {
     val years = profileAgeOrNull(age) ?: return if (age.isBlank()) AccountAgeResult.EMPTY else classifyUnusableAge(age)
     if (years < MINIMUM_ACCOUNT_AGE) return AccountAgeResult.UNDER_MINIMUM
@@ -818,25 +830,6 @@ fun isUnderRomanceAge(age: String): Boolean {
 
 fun romanceAllowed(userAge: String, friendAge: String): Boolean =
     !isUnderRomanceAge(userAge) && !isUnderRomanceAge(friendAge)
-
-internal fun exploreRequestAllowed(exploreEnabled: Boolean): Boolean = exploreEnabled
-
-internal fun exploreDisclosureRequired(exploreEnabled: Boolean, disclosureAccepted: Boolean): Boolean =
-    exploreEnabled && !disclosureAccepted
-
-internal fun adultExploreFeatureAllowed(exploreEnabled: Boolean, userAge: String): Boolean =
-    exploreEnabled && (profileAgeOrNull(userAge) ?: 0) >= ROMANCE_MINIMUM_AGE
-
-internal fun teenAiSafetyRequired(userAge: String): Boolean =
-    (profileAgeOrNull(userAge) ?: 0) in MINIMUM_ACCOUNT_AGE until ROMANCE_MINIMUM_AGE
-
-internal fun aiFriendAgeAllowed(userAge: String, friendAge: String): Boolean {
-    val age = profileAgeOrNull(friendAge) ?: return false
-    return friendAgeResult(friendAge) == AccountAgeResult.VALID
-        && (!teenAiSafetyRequired(userAge) || age < ROMANCE_MINIMUM_AGE)
-}
-
-internal const val TEEN_LONG_SESSION_REMINDER_MILLIS = 30L * 60L * 1000L
 
 fun Friend.withLoveMeterGated(userAge: String): Friend =
     if (romanceAllowed(userAge, age)) this else copy(loveScore = 0)

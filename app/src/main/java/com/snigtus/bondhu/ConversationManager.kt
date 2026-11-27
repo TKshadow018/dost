@@ -2,6 +2,7 @@ package com.snigtus.dost
 
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -101,8 +102,8 @@ object ConversationManager {
         }
     }
 
-    private fun isAdultFriend(friend: Friend): Boolean =
-        aiFriendAgeAllowed(store.userAge(), friend.age)
+    private fun isValidAiFriend(friend: Friend): Boolean =
+        friendAgeResult(friend.age) == AccountAgeResult.VALID
 
     fun messagesFor(friendId: String): List<ChatMessage> = messageState.value[friendId] ?: store.loadMessages(friendId)
 
@@ -143,7 +144,7 @@ object ConversationManager {
     fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "", sendImmediately: Boolean = false) {
         if (!store.exploreEnabled()) return
         if (text.isBlank() && imagePath.isBlank()) return
-        if (friend.profilePending || !isAdultFriend(friend)) return
+        if (friend.profilePending || !isValidAiFriend(friend)) return
         val requestGeneration = dataImportGeneration
         lateinit var selectedModel: String
         val messageContent = text.ifBlank { "Shared an image" }
@@ -271,7 +272,7 @@ object ConversationManager {
     }
 
     fun refreshBusyReply(friend: Friend) {
-        if (!isAdultFriend(friend)) return
+        if (!isValidAiFriend(friend)) return
         if (store.hasScheduledReply(friend.id)) {
             val sessionId = store.currentSessionId(friend.id)
             if (sessionId != null) ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language())
@@ -287,7 +288,7 @@ object ConversationManager {
     fun resumeFriendProactive(friendId: String) {
         store.resumeProactive(friendId)
         store.loadFriends().firstOrNull { it.id == friendId }?.let {
-            if (!isAdultFriend(it)) return@let
+            if (!isValidAiFriend(it)) return@let
             ConversationWorkScheduler.scheduleMorningGreeting(appContext, it, store.language())
             refreshScheduledFollowUp(it)
         }
@@ -303,7 +304,7 @@ object ConversationManager {
                 sendingState.update { it - friend.id }
                 return@forEach
             }
-            if (!isAdultFriend(friend)) {
+            if (!isValidAiFriend(friend)) {
                 ConversationWorkScheduler.cancelProactiveForFriend(appContext, friend.id)
                 store.setScheduledReply(friend.id, false)
                 waitingForScheduleState.update { it - friend.id }
@@ -323,7 +324,7 @@ object ConversationManager {
     }
 
     private fun refreshScheduledFollowUp(friend: Friend) {
-        if (!isAdultFriend(friend) || !store.proactiveEnabled() || store.isProactivePaused(friend.id)) return
+        if (!isValidAiFriend(friend) || !store.proactiveEnabled() || store.isProactivePaused(friend.id)) return
         val followUp = store.loadProactiveMessages(friend.id)
             .filter {
                 it.trigger == ProactiveTrigger.FOLLOW_UP &&
@@ -344,7 +345,7 @@ object ConversationManager {
     }
 
     private fun scheduleInactivityQuestion(friend: Friend, language: AppLanguage, sessionId: String, delayMillis: Long = store.automaticFollowUpMinutes() * 60_000L) {
-        if (!isAdultFriend(friend)) return
+        if (!isValidAiFriend(friend)) return
         val latestUserMessage = messagesFor(friend.id).lastOrNull { it.sessionId == sessionId && it.role == "user" } ?: return
         ConversationWorkScheduler.scheduleCheckIn(appContext, friend, sessionId, language, delayMillis, latestUserMessage.timestampMillis)
     }
@@ -480,7 +481,6 @@ object ConversationManager {
 
     private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null, ephemeralInstruction: String = ""): AiReply {
         check(store.exploreEnabled()) { "Explore mode is turned off." }
-        check(isAdultFriend(friend)) { "Messaging is disabled for friend profiles under 13." }
         val client = OpenRouterClient(
             requestAllowed = { store.exploreEnabled() },
             authTokenProvider = { FirebaseAuthRepository(appContext).currentIdToken() }
@@ -494,13 +494,20 @@ object ConversationManager {
         val memories = store.loadUserMemories(friend.id)
         val sessionSummaries = store.loadSessionSummaries(friend.id)
         val structuredUserProfile = store.loadStructuredUserProfile(friend.id, store.userName())
+        val firebaseIdToken = try {
+            FirebaseAuthRepository(appContext).currentIdToken()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            ""
+        }
         try {
             return client.reply(
                 apiKey, selectedModel, store.installationId(), store.userName(), friend, history, store.chatLanguage(),
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
-                structuredUserProfile = structuredUserProfile
+                structuredUserProfile = structuredUserProfile, firebaseIdToken = firebaseIdToken
             )
         } catch (firstFailure: Throwable) {
             if (selectedModel == OpenRouterClient.FALLBACK_FREE_MODEL) throw firstFailure
@@ -510,7 +517,7 @@ object ConversationManager {
                 memories, friend.friendshipScore, friend.loveScore,
                 sessionSummaries, userTimeZoneId = store.userTimeZoneId(), forceFollowUp = forceFollowUp,
                 sessionId = sessionId, ephemeralInstruction = ephemeralInstruction, userAge = store.userAge(),
-                structuredUserProfile = structuredUserProfile
+                structuredUserProfile = structuredUserProfile, firebaseIdToken = firebaseIdToken
             )
         }
     }
@@ -521,7 +528,7 @@ object ConversationManager {
 
     fun replyScheduledMessageNow(friendId: String) {
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return
-        if (!isAdultFriend(friend)) return
+        if (!isValidAiFriend(friend)) return
         val sessionId = store.currentSessionId(friendId) ?: return
         if (!store.hasScheduledReply(friendId)) return
         ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language(), sendImmediately = true)
@@ -543,7 +550,7 @@ object ConversationManager {
             store.setScheduledReply(friendId, false)
             return true
         }
-        if (!isAdultFriend(friend)) {
+        if (!isValidAiFriend(friend)) {
             store.setScheduledReply(friendId, false)
             waitingForScheduleState.update { it - friendId }
             sendingState.update { it - friendId }
@@ -643,13 +650,12 @@ object ConversationManager {
         val remaining = SESSION_INACTIVITY_MILLIS - (System.currentTimeMillis() - latestMessage.timestampMillis)
         if (remaining > 0L) return false
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
-        if (!isAdultFriend(friend)) {
+        if (!isValidAiFriend(friend)) {
             withCurrentImportGeneration(requestGeneration) {
                 if (store.currentSessionId(friendId) == sessionId) store.saveCurrentSessionId(friendId, null)
             }
             return true
         }
-        val friendName = friend.name
         val summaryInput = messagesForPrompt(sessionMessages)
         if (summaryInput.isEmpty()) {
             withCurrentImportGeneration(requestGeneration) {
@@ -662,10 +668,9 @@ object ConversationManager {
             requestAllowed = { store.exploreEnabled() },
             authTokenProvider = { FirebaseAuthRepository(appContext).currentIdToken() }
         )
-            .summarizeSession(
-                store.openRouterApiKey(), store.aiModel(), friendName, summaryInput, store.language(),
-                store.userAge(), friend.age, store.installationId()
-            )
+        .summarizeSession(
+            store.openRouterApiKey(), store.aiModel(), friend, store.installationId(), summaryInput, store.language()
+        )
         var shouldRetry = false
         val imported = !withCurrentImportGeneration(requestGeneration) {
             val latestAfterSummary = messagesFor(friendId).lastOrNull { it.sessionId == sessionId }
@@ -721,7 +726,7 @@ object ConversationManager {
         val proactiveMessage = proactiveMessageId?.takeIf { it.isNotBlank() }?.let(store::proactiveMessage)
         if (proactiveMessage != null && messagesFor(friendId).any { it.messageId == proactiveMessage.idempotencyKey }) return true
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
-        if (!isAdultFriend(friend)) return true
+        if (!isValidAiFriend(friend)) return true
         if (!store.proactiveEnabled() || store.isProactivePaused(friendId)) return true
         if (!store.canSendProactive(friendId)) {
             ConversationWorkScheduler.scheduleMorningGreeting(appContext, friend, language)
@@ -776,7 +781,7 @@ object ConversationManager {
             return true
         }
         val friend = store.loadFriends().firstOrNull { it.id == friendId } ?: return true
-        if (!isAdultFriend(friend)) return true
+        if (!isValidAiFriend(friend)) return true
         if (!jobs.add(friendId)) return false
         sendingState.update { it + friendId }
         try {
@@ -849,7 +854,7 @@ object ConversationManager {
             }
             return
         }
-        if (!isAdultFriend(friend)) {
+        if (!isValidAiFriend(friend)) {
             synchronized(dataImportGuard) {
                 outboundQueue.clear(friendId)
                 jobs.remove(friendId)

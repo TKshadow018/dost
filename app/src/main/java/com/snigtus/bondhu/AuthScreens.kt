@@ -426,7 +426,7 @@ private fun authLabel(language: AppLanguage, bangla: String, hindi: String, engl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RegisterScreen(language: AppLanguage, name: String, email: String, age: String, gender: String, onNameChange: (String) -> Unit, onEmailChange: (String) -> Unit, onAgeChange: (String) -> Unit, onGenderChange: (String) -> Unit, onFinish: () -> Unit, onBack: () -> Unit, emailEditable: Boolean = true) {
+fun RegisterScreen(language: AppLanguage, name: String, email: String, gender: String, onNameChange: (String) -> Unit, onEmailChange: (String) -> Unit, onGenderChange: (String) -> Unit, onFinish: () -> Unit, onBack: () -> Unit, emailEditable: Boolean = true, requestMessage: String? = null, loading: Boolean = false) {
     val hindi = language == AppLanguage.HINDI
     Scaffold(topBar = {
         TopAppBar(
@@ -459,22 +459,27 @@ fun RegisterScreen(language: AppLanguage, name: String, email: String, age: Stri
                     else -> "Tell us a little about yourself."
                 }
             )
+            requestMessage?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             OutlinedTextField(name, onNameChange, label = { Text(when { language == AppLanguage.BANGLA -> "নাম"; hindi -> "नाम"; else -> "Name" }) }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(email, onEmailChange, readOnly = !emailEditable, label = { Text(when { language == AppLanguage.BANGLA -> "ইমেইল"; hindi -> "ईमेल"; else -> "Email" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
-            OutlinedTextField(age, onAgeChange, label = { Text(when { language == AppLanguage.BANGLA -> "বয়স"; hindi -> "उम्र"; else -> "Age" }) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            accountAgeError(age, language)?.let { message ->
-                Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            } ?: Text(accountAgeHint(language), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             GenderField(gender, onGenderChange, language)
             Button(
                 onClick = onFinish,
-                enabled = name.isNotBlank() && email.isNotBlank() && accountAgeResult(age) == AccountAgeResult.VALID && gender.isNotBlank(),
+                enabled = !loading && name.isNotBlank() && email.isNotBlank() && gender.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(when {
-                    language == AppLanguage.BANGLA -> "শেষ করুন"
-                    hindi -> "पूरा करें"
-                    else -> "Finish"
+                Text(if (loading) {
+                    when (language) {
+                        AppLanguage.BANGLA -> "অপেক্ষা করুন…"
+                        AppLanguage.HINDI -> "कृपया प्रतीक्षा करें…"
+                        AppLanguage.ENGLISH -> "Please wait…"
+                    }
+                } else {
+                    when {
+                        language == AppLanguage.BANGLA -> "শেষ করুন"
+                        hindi -> "पूरा करें"
+                        else -> "Finish"
+                    }
                 })
             }
         }
@@ -499,16 +504,16 @@ fun GenderField(value: String, onValueChange: (String) -> Unit, language: AppLan
 }
 
 fun accountAgeHint(language: AppLanguage): String = when (language) {
-    AppLanguage.BANGLA -> "দোস্ত ১৮ বছর বা তার বেশি বয়সীদের জন্য।"
-    AppLanguage.HINDI -> "दोस्त 18 साल या उससे बड़े लोगों के लिए है।"
-    AppLanguage.ENGLISH -> "Dost is for people 18 and older."
+    AppLanguage.BANGLA -> "দোস্ত ১৩ বছর বা তার বেশি বয়সীদের জন্য।"
+    AppLanguage.HINDI -> "दोस्त 13 साल या उससे बड़े लोगों के लिए है।"
+    AppLanguage.ENGLISH -> "Dost is for people 13 and older."
 }
 
 fun accountAgeError(age: String, language: AppLanguage): String? = when (accountAgeResult(age)) {
     AccountAgeResult.VALID, AccountAgeResult.EMPTY -> null
     AccountAgeResult.UNDER_MINIMUM -> when (language) {
-        AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি করতে কমপক্ষে ১৮ বছর বয়স লাগবে।"
-        AppLanguage.HINDI -> "खाता बनाने के लिए कम से कम 18 साल की उम्र होनी चाहिए।"
+        AppLanguage.BANGLA -> "অ্যাকাউন্ট তৈরি করতে কমপক্ষে ১৩ বছর বয়স লাগবে।"
+        AppLanguage.HINDI -> "खाता बनाने के लिए कम से कम 13 साल की उम्र होनी चाहिए।"
         AppLanguage.ENGLISH -> "You need to be 13 or older to create an account."
     }
     AccountAgeResult.NOT_A_WHOLE_NUMBER -> when (language) {

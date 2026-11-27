@@ -127,11 +127,32 @@ if (!is_dir($catalogDirectory) || !is_readable($catalogDirectory)) {
     respond_json(503, array('error' => 'System friend catalog is unavailable'));
 }
 
+if (isset($_SERVER['CONTENT_LENGTH']) && (int) $_SERVER['CONTENT_LENGTH'] > 4096) {
+    respond_json(413, array('error' => 'Request is too large'));
+}
+$config = array();
+$configPath = __DIR__ . DIRECTORY_SEPARATOR . 'config.php';
+if (is_file($configPath)) {
+    $loadedConfig = require $configPath;
+    if (is_array($loadedConfig)) {
+        $config = $loadedConfig;
+    }
+}
+$authorization = dost_explore_authorization_header($_SERVER);
+$identity = dost_explore_authorize($authorization, $config, time());
+if ($identity['status'] !== 200) {
+    respond_json($identity['status'], array('error' => $identity['error']));
+}
+if (!dost_explore_enabled($config)) {
+    respond_json(503, array('error' => 'Explore is not enabled'));
+}
+$explorePlusActive = dost_explore_plus_active($identity['claims'], time());
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['photo'])) {
     $chatLanguage = isset($_GET['chat_language']) ? $_GET['chat_language'] : 'en';
     $loaded = load_system_friend($_GET['photo'], $catalogDirectory, $chatLanguage);
     if ($loaded['status'] !== 200) {
-        respond_json($loaded['status'], array('error' => $loaded['error']));
+        respond_json(404, array('error' => 'Friend photo not found'));
     }
     $photoPath = $loaded['profile']['_photo_path'];
     if (!is_string($photoPath) || $photoPath === '' || !is_readable($photoPath) || filesize($photoPath) > 5242880) {
@@ -148,32 +169,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['photo'])) {
     }
     header('Content-Type: ' . $mime);
     header('Content-Length: ' . (string) filesize($photoPath));
-    header('Cache-Control: public, max-age=86400');
+    header('Cache-Control: private, max-age=86400');
     header('X-Content-Type-Options: nosniff');
     readfile($photoPath);
     exit;
 }
-
-if (isset($_SERVER['CONTENT_LENGTH']) && (int) $_SERVER['CONTENT_LENGTH'] > 4096) {
-    respond_json(413, array('error' => 'Request is too large'));
-}
-$config = array();
-$configPath = __DIR__ . DIRECTORY_SEPARATOR . 'config.php';
-if (is_file($configPath)) {
-    $loadedConfig = require $configPath;
-    if (is_array($loadedConfig)) {
-        $config = $loadedConfig;
-    }
-}
-if (!dost_explore_enabled($config)) {
-    respond_json(503, array('error' => 'Explore is not enabled'));
-}
-$authorization = dost_explore_authorization_header($_SERVER);
-$identity = dost_explore_authorize($authorization, $config, time());
-if ($identity['status'] !== 200) {
-    respond_json($identity['status'], array('error' => $identity['error']));
-}
-$explorePlusActive = dost_explore_plus_active($identity['claims'], time());
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $body = file_get_contents('php://input', false, null, 0, 4097);
@@ -187,6 +187,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         || !is_string($request['action'])
     ) {
         respond_json(400, array('error' => 'Invalid friend registration'));
+    }
+    if ($request['kind'] === 'catalog') {
+        $catalogProfile = load_system_friend($request['friend_id'], $catalogDirectory);
+        if ($catalogProfile['status'] !== 200) {
+            respond_json(400, array('error' => 'Invalid catalog friend ID'));
+        }
+    } elseif ($request['kind'] !== 'custom' || !dost_explore_valid_uuid($request['friend_id'])) {
+        respond_json(400, array('error' => 'Invalid custom friend ID'));
     }
     $storageDirectory = dost_explore_storage_directory($config);
     if ($storageDirectory === false) {
@@ -209,9 +217,6 @@ if (isset($_GET['id'])) {
     if ($loaded['status'] !== 200) {
         respond_json($loaded['status'], array('error' => $loaded['error']));
     }
-    if (!dost_explore_catalog_profile_allowed($identity['claims'], $loaded['profile'], time())) {
-        respond_json(404, array('error' => 'Friend profile not found'));
-    }
     respond_json(200, array('profile' => public_friend_profile($loaded['profile'])));
 }
 
@@ -228,9 +233,6 @@ foreach ($files as $file) {
     if ($loaded['status'] !== 200) {
         error_log('Dost system friend catalog contains an invalid profile: ' . basename($file));
         respond_json(500, array('error' => 'Invalid system friend profile: ' . basename($file)));
-    }
-    if (!dost_explore_catalog_profile_allowed($identity['claims'], $loaded['profile'], time())) {
-        continue;
     }
     $profiles[] = public_friend_listing($loaded['profile']);
 }

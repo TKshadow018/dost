@@ -2,7 +2,6 @@
 
 require_once __DIR__ . '/age_eligibility_support.php';
 require_once __DIR__ . '/premium_support.php';
-require_once __DIR__ . '/romance_safety.php';
 
 if (!defined('DOST_MAX_CUSTOM_FRIENDS')) {
     define('DOST_MAX_CUSTOM_FRIENDS', 3);
@@ -24,7 +23,8 @@ function dost_explore_setting($environmentKey, $configKey, $config)
 
 function dost_explore_enabled($config)
 {
-    return strtolower(dost_explore_setting('DOST_EXPLORE_ENABLED', 'explore_enabled', $config)) === 'true';
+    $value = getenv('DOST_EXPLORE_ENABLED');
+    return is_string($value) && strtolower(trim($value)) === 'true';
 }
 
 function dost_explore_authorization_header($server)
@@ -35,6 +35,12 @@ function dost_explore_authorization_header($server)
         }
     }
     return '';
+}
+
+function dost_explore_valid_uuid($value)
+{
+    return is_string($value)
+        && preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i', $value) === 1;
 }
 
 function dost_explore_storage_directory($config)
@@ -153,29 +159,6 @@ function dost_explore_plus_active($claims, $now)
     return dost_explore_plus_claim_active($claims, $now);
 }
 
-function dost_explore_user_age($claims, $now)
-{
-    return dost_age_eligibility_claim_active($claims, $now) ? '18' : '13';
-}
-
-function dost_explore_ai_friend_allowed($claims, $friendAge, $now)
-{
-    return dost_ai_friend_age_allowed(dost_explore_user_age($claims, $now), $friendAge);
-}
-
-function dost_explore_catalog_profile_allowed($claims, $profile, $now)
-{
-    if (dost_age_eligibility_claim_active($claims, $now)) {
-        return true;
-    }
-    return is_array($profile)
-        && isset($profile['age'])
-        && is_scalar($profile['age'])
-        && preg_match('/\A[0-9]{1,3}\z/', trim((string) $profile['age'])) === 1
-        && (int) trim((string) $profile['age']) >= 13
-        && (int) trim((string) $profile['age']) < 18;
-}
-
 function dost_explore_registry_change($directory, $uid, $friendId, $kind, $action, $hasPlus)
 {
     if (!is_string($directory) || $directory === ''
@@ -253,4 +236,33 @@ function dost_explore_registry_change($directory, $uid, $friendId, $kind, $actio
     return $saved
         ? array('status' => 200, 'registered' => $action === 'add')
         : array('status' => 503, 'error' => 'Explore friend storage is unavailable');
+}
+
+function dost_explore_registry_contains($directory, $uid, $friendId, $kind)
+{
+    if (!is_string($directory) || $directory === ''
+        || !is_string($uid) || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1
+        || !is_string($friendId) || preg_match('/\A[A-Za-z0-9_-]{1,80}\z/', $friendId) !== 1
+        || !in_array($kind, array('custom', 'catalog'), true)
+    ) {
+        return false;
+    }
+    $path = rtrim($directory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR
+        . hash('sha256', $uid) . '.json';
+    $lock = @fopen($path . '.lock', 'c');
+    if ($lock === false || !flock($lock, LOCK_SH)) {
+        if (is_resource($lock)) {
+            fclose($lock);
+        }
+        return false;
+    }
+    $contents = is_file($path) && filesize($path) <= 262144 ? file_get_contents($path) : false;
+    $registry = is_string($contents) ? json_decode($contents, true) : null;
+    $ids = is_array($registry) && isset($registry[$kind]) && is_array($registry[$kind])
+        ? $registry[$kind]
+        : array();
+    $found = in_array($friendId, $ids, true);
+    flock($lock, LOCK_UN);
+    fclose($lock);
+    return $found;
 }

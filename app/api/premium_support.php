@@ -12,6 +12,21 @@ function dost_premium_product_type($productId)
     return isset($products[$productId]) ? $products[$productId] : false;
 }
 
+function dost_premium_user_adult_eligible($claims, $now)
+{
+    return is_array($claims)
+        && is_int($now)
+        && isset(
+            $claims['dostAgeCohort'],
+            $claims['dostAgeEligible'],
+            $claims['dostAgeEligibleUntil']
+        )
+        && $claims['dostAgeCohort'] === 'adult'
+        && $claims['dostAgeEligible'] === true
+        && is_int($claims['dostAgeEligibleUntil'])
+        && $claims['dostAgeEligibleUntil'] > $now;
+}
+
 function dost_premium_obfuscated_account_id($uid)
 {
     if (!is_string($uid) || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1) {
@@ -200,8 +215,10 @@ function dost_premium_intro_response($claims, $now)
     $source = is_array($claims) && isset($claims['dostPremiumSource']) && is_string($claims['dostPremiumSource'])
         ? $claims['dostPremiumSource']
         : (is_array($claims) && !empty($claims['dostPremiumProductId']) ? 'play' : null);
+    $active = $lifetime || ($until !== null && $until > $now);
     return array(
-        'premium' => $lifetime || ($until !== null && $until > $now),
+        'premium' => $active,
+        'explore_plus' => $active,
         'source' => $source,
         'lifetime' => $lifetime,
         'premium_until' => $until,

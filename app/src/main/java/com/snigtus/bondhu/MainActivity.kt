@@ -182,8 +182,21 @@ fun DostApp(
     }
     var selectedMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
     var exploreEnabled by remember { mutableStateOf(store.exploreEnabled()) }
-    val currentUserAge = age.ifBlank { store.userAge() }
-    val canUseAdultExploreFeature = adultExploreFeatureAllowed(exploreEnabled, currentUserAge)
+    LaunchedEffect(exploreEnabled) {
+        if (!exploreEnabled && selectedMainTab == MainTab.DISCOVER) selectedMainTab = MainTab.CHATS
+    }
+    val today = java.time.LocalDate.now()
+    val currentAccountAge = birthMonthYearAge(
+        store.birthMonth(),
+        store.birthYear(),
+        today.monthValue,
+        today.year
+    ) ?: store.userAge().toIntOrNull() ?: age.toIntOrNull() ?: 0
+    val currentAgeCohort = ageCohortForAge(currentAccountAge)
+    val canUseExplorePlus = exploreEnabled && currentAgeCohort == DostAgeCohort.ADULT
+        && BuildConfig.DOST_PREMIUM_ENABLED
+    val canUsePeopleDiscovery = exploreEnabled && currentAgeCohort == DostAgeCohort.ADULT
+        && BuildConfig.DOST_PEOPLE_ENABLED
     var homeInboxFilter by remember { mutableStateOf(HomeInboxFilter.ALL) }
     var homeInboxSearchQuery by remember { mutableStateOf("") }
     var pinnedConversationIds by remember { mutableStateOf(store.pinnedConversationIds()) }
@@ -227,6 +240,17 @@ fun DostApp(
     val activeFirebaseUid = authRepository.currentAccount?.uid.orEmpty()
     var isPremium by remember(activeFirebaseUid) { mutableStateOf(false) }
 
+    LaunchedEffect(activeFirebaseUid, store.birthMonth(), store.birthYear()) {
+        if (activeFirebaseUid.isBlank()) return@LaunchedEffect
+        try {
+            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            Unit
+        }
+    }
+
     LaunchedEffect(activeFirebaseUid, isPremium) {
         if (activeFirebaseUid.isBlank()) {
             isPremium = false
@@ -234,18 +258,19 @@ fun DostApp(
         }
         try {
             val entitlement = authRepository.premiumEntitlement()
-            isPremium = entitlement.isActive
+            isPremium = BuildConfig.DOST_PREMIUM_ENABLED && entitlement.isActive
             if (entitlement.isActive && !entitlement.isLifetime) {
                 val expiry = entitlement.expiresAtEpochSeconds ?: return@LaunchedEffect
                 val remainingMillis = expiry * 1000 - System.currentTimeMillis()
                 if (remainingMillis > 0) delay(remainingMillis)
-                isPremium = authRepository.hasPremiumEntitlement(forceRefresh = true)
+                isPremium = BuildConfig.DOST_PREMIUM_ENABLED
+                    && authRepository.hasPremiumEntitlement(forceRefresh = true)
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             isPremium = false
-            settingsNotice = "Explore Plus status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
+            settingsNotice = "Premium status could not be refreshed: ${error.message?.take(120) ?: "try again"}"
         }
     }
 
@@ -279,6 +304,7 @@ fun DostApp(
             checkingPeopleEligibility = true
             peopleEligibilityError = null
             try {
+                authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
                 authRepository.ensureAdultEligibility()
                 peopleInboxEligibleUid = authRepository.currentAccount?.uid.orEmpty()
                 action()
@@ -292,17 +318,17 @@ fun DostApp(
         }
     }
 
-    fun openExplorePlus() {
-        if (!canUseAdultExploreFeature || !BuildConfig.DOST_PREMIUM_ENABLED) return
-        withAdultEligibility { screen = AppScreen.PREMIUM }
-    }
-
     fun openSuperSecure() {
         if (!BuildConfig.DOST_SUPER_SECURE_ENABLED) return
         withAdultEligibility {
             SuperSecureSession.active = true
             screen = AppScreen.SUPER_SECURE
         }
+    }
+
+    fun openExplorePlus() {
+        if (!canUseExplorePlus) return
+        withAdultEligibility { screen = AppScreen.PREMIUM }
     }
 
     fun closeSuperSecure() {
@@ -333,8 +359,8 @@ fun DostApp(
     }
 
     LaunchedEffect(screen, selectedMainTab, activeFirebaseUid, peopleInboxRefreshKey, exploreEnabled) {
-        if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS || !exploreEnabled
-            || !adultExploreFeatureAllowed(exploreEnabled, currentUserAge) || !BuildConfig.DOST_PEOPLE_ENABLED
+        if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS
+            || !canUsePeopleDiscovery
         ) {
             return@LaunchedEffect
         }
@@ -352,6 +378,7 @@ fun DostApp(
         peopleInboxLoading = true
         peopleInboxError = null
         try {
+            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
             authRepository.ensureAdultEligibility()
             peopleInboxEligibleUid = activeFirebaseUid
         } catch (error: Exception) {
@@ -372,9 +399,7 @@ fun DostApp(
         exploreEnabled
     ) {
         if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS
-            || !exploreEnabled
-            || !adultExploreFeatureAllowed(exploreEnabled, currentUserAge)
-            || !BuildConfig.DOST_PEOPLE_ENABLED
+            || !canUsePeopleDiscovery
             || activeFirebaseUid.isBlank()
             || peopleInboxEligibleUid != activeFirebaseUid
         ) {
@@ -464,6 +489,18 @@ fun DostApp(
             requestAllowed = { store.exploreEnabled() },
             authTokenProvider = { authRepository.currentIdToken() }
         )
+    }
+    LaunchedEffect(exploreEnabled, friends.size, activeFirebaseUid) {
+        if (!exploreRequestAllowed(exploreEnabled) || activeFirebaseUid.isBlank()) return@LaunchedEffect
+        friends.forEach { friend ->
+            runCatching {
+                systemFriendClient.updateFriendRegistration(
+                    if (friend.catalogId.isBlank()) friend.id else friend.catalogId,
+                    if (friend.catalogId.isBlank()) "custom" else "catalog",
+                    add = true
+                )
+            }
+        }
     }
     val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
@@ -792,12 +829,21 @@ fun DostApp(
         generatingProfileIds = generatingProfileIds + friendId
         scope.launch {
             try {
+                val firebaseIdToken = try {
+                    authRepository.currentIdToken()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    ""
+                }
                 val profile = OpenRouterClient(
                     requestAllowed = { store.exploreEnabled() },
                     authTokenProvider = { authRepository.currentIdToken() }
                 ).generateFriendProfile(
-                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender, friend.personality,
-                    requestLanguage, store.userAge(), friend.id, store.installationId()
+                    store.openRouterApiKey(), store.aiModel(), friend.name, friend.age, friend.gender,
+                    friend.personality, requestLanguage, firebaseIdToken,
+                    friendId = friend.id,
+                    installationId = store.installationId()
                 )
                 val index = friends.indexOfFirst { it.id == friendId }
                 if (index >= 0 && friends[index].profilePending) {
@@ -848,7 +894,6 @@ fun DostApp(
 
     fun addFriendWithProfile(friend: Friend) {
         if (!exploreRequestAllowed(exploreEnabled)) return
-        if (!aiFriendAgeAllowed(currentUserAge, friend.age)) return
         val safeFriend = friend.withLoveMeterGated(store.userAge())
         if (!isPremium && friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS) return
         val pending = safeFriend.copy(profilePending = true)
@@ -869,7 +914,7 @@ fun DostApp(
             scope.launch {
                 runCatching {
                     systemFriendClient.updateFriendRegistration(
-                        friend.id,
+                        if (friend.catalogId.isBlank()) friend.id else friend.catalogId,
                         if (friend.catalogId.isBlank()) "custom" else "catalog",
                         add = false
                     )
@@ -890,12 +935,12 @@ fun DostApp(
     }
 
     suspend fun addSystemFriend(friend: Friend): Friend? {
-        if (!exploreRequestAllowed(exploreEnabled) || !aiFriendAgeAllowed(currentUserAge, friend.age) || friend.catalogId.isBlank()
+        if (!exploreRequestAllowed(exploreEnabled) || friend.catalogId.isBlank()
             || (!isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS)
             || friends.any { it.catalogId == friend.catalogId }
         ) return null
         val addedFriend = friend.copy(id = java.util.UUID.randomUUID().toString()).withLoveMeterGated(store.userAge())
-        systemFriendClient.updateFriendRegistration(addedFriend.id, "catalog", add = true)
+        systemFriendClient.updateFriendRegistration(addedFriend.catalogId, "catalog", add = true)
         friends.add(addedFriend)
         store.saveFriends(friends)
         ConversationWorkScheduler.scheduleMorningGreeting(context, addedFriend, language)
@@ -909,12 +954,7 @@ fun DostApp(
         systemFriendAddError = null
         scope.launch {
             try {
-                val catalog = systemFriendClient.getCatalog(chatLanguage)
-                systemFriendCatalog = if (teenAiSafetyRequired(currentUserAge)) {
-                    catalog.filter { (profileAgeOrNull(it.age) ?: 0) < ROMANCE_MINIMUM_AGE }
-                } else {
-                    catalog
-                }
+                systemFriendCatalog = systemFriendClient.getCatalog(chatLanguage)
             } catch (error: java.io.IOException) {
                 systemFriendCatalogError = LocalizedText.LOAD_FRIENDS_FAILED.resolve(language)
             } catch (error: org.json.JSONException) {
@@ -927,9 +967,6 @@ fun DostApp(
 
     fun addCatalogFriend(listing: SystemFriendListing) {
         if (!exploreRequestAllowed(exploreEnabled)) return
-        if (!adultExploreFeatureAllowed(exploreEnabled, currentUserAge)
-            && (profileAgeOrNull(listing.age) ?: 0) >= ROMANCE_MINIMUM_AGE
-        ) return
         val addedCatalogIds = friends.mapNotNull { it.catalogId.takeIf(String::isNotBlank) }.toSet()
         if (addingSystemFriendId != null || listing.id in addedCatalogIds
             || (!isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS)
@@ -1111,19 +1148,39 @@ fun DostApp(
             language = language,
             name = name,
             email = email,
-            age = age,
             gender = gender,
             onNameChange = { name = it },
             onEmailChange = { email = it },
-            onAgeChange = { age = it },
             onGenderChange = { gender = it },
             onFinish = finish@{
-                if (name.isBlank() || email.isBlank() || accountAgeResult(age) != AccountAgeResult.VALID || gender.isBlank()) return@finish
-                store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
-                screen = AppScreen.HOME
+                if (name.isBlank() || email.isBlank()
+                    || ageCohortForAge(age.toIntOrNull() ?: 0) == null
+                    || gender.isBlank()
+                    || authRequestState == AuthRequestState.Loading
+                ) return@finish
+                scope.launch {
+                    authRequestState = AuthRequestState.Loading
+                    try {
+                        authRepository.currentAccount?.let {
+                            authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+                        }
+                        store.saveUserProfile(name, email, age.trim(), gender, authRepository.currentAccount?.uid)
+                        authRequestState = AuthRequestState.Idle
+                        screen = AppScreen.HOME
+                    } catch (error: CancellationException) {
+                        authRequestState = AuthRequestState.Idle
+                        throw error
+                    } catch (error: Exception) {
+                        authRequestState = AuthRequestState.Error(
+                            error.message?.take(160) ?: "Could not save your age cohort."
+                        )
+                    }
+                }
             },
             onBack = { screen = AppScreen.AUTH },
-            emailEditable = false
+            emailEditable = false,
+            requestMessage = (authRequestState as? AuthRequestState.Error)?.message,
+            loading = authRequestState == AuthRequestState.Loading
         )
         AppScreen.HOME -> if (hasLocalAccountAccess()) MainNavigationScaffold(
             language = language,
@@ -1142,12 +1199,8 @@ fun DostApp(
                     showFriendCount = showFriendCount,
                     isPremium = isPremium,
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
-                    friends = if (!exploreEnabled) emptyList() else if (teenAiSafetyRequired(currentUserAge)) {
-                        friends.filter { aiFriendAgeAllowed(currentUserAge, it.age) }
-                    } else {
-                        friends
-                    },
-                    peopleConversations = if (canUseAdultExploreFeature) peopleInboxConversations else emptyList(),
+                    friends = if (exploreEnabled) friends else emptyList(),
+                    peopleConversations = if (exploreEnabled) peopleInboxConversations else emptyList(),
                     pinnedConversationIds = pinnedConversationIds,
                     mutedConversationIds = mutedConversationIds,
                     archivedConversationIds = archivedConversationIds,
@@ -1165,14 +1218,14 @@ fun DostApp(
                         if (exploreEnabled) selectedMainTab = MainTab.DISCOVER
                     },
                     onOpenPeople = {
-                        if (canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED) {
+                        if (canUsePeopleDiscovery) {
                             selectedMainTab = MainTab.DISCOVER
                             withAdultEligibility { screen = AppScreen.PEOPLE }
                         }
                     },
                     onRetryPeopleInbox = { peopleInboxRefreshKey++ },
                     onOpenPeopleConversation = {
-                        if (canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED) {
+                        if (canUsePeopleDiscovery) {
                             withAdultEligibility {
                                 selectedPeopleConversation = it
                                 peopleChatReturnScreen = AppScreen.HOME
@@ -1195,30 +1248,28 @@ fun DostApp(
                     onToggleConversationPinned = ::toggleConversationPinned,
                     onToggleConversationMuted = ::toggleConversationMuted,
                     onToggleConversationArchived = ::toggleConversationArchived,
-                    onOpenChat = { friend ->
+                    onOpenChat = {
                         if (!exploreEnabled) return@HomeScreen
                         recentlyAddedSystemFriend = null
                         chatReturnScreen = AppScreen.HOME
-                        selectedFriend = friend
+                        selectedFriend = it
                         screen = AppScreen.CHAT
                     },
                     generatingProfileIds = generatingProfileIds,
                     profileFailedIds = profileErrors.keys,
-                    peopleEnabled = canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED,
-                    showExplorePlus = canUseAdultExploreFeature && BuildConfig.DOST_PREMIUM_ENABLED,
+                    peopleEnabled = canUsePeopleDiscovery,
+                    showExplorePlus = canUseExplorePlus,
                     onOpenPremium = ::openExplorePlus
                 )
                 MainTab.DISCOVER -> if (exploreEnabled) DiscoverHomeScreen(
                     language = language,
-                    peopleEnabled = canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED,
+                    peopleEnabled = canUsePeopleDiscovery,
                     onOpenAiFriends = {
                         screen = AppScreen.SYSTEM_FRIEND_PICKER
                         loadSystemFriendCatalog()
                     },
                     onOpenPeople = {
-                        if (canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED) {
-                            withAdultEligibility { screen = AppScreen.PEOPLE }
-                        }
+                        if (canUsePeopleDiscovery) withAdultEligibility { screen = AppScreen.PEOPLE }
                     }
                 ) else Unit
                 MainTab.PROFILE -> ProfileHomeScreen(
@@ -1237,9 +1288,10 @@ fun DostApp(
         AppScreen.SETTINGS -> if (hasLocalAccountAccess()) SettingsScreen(
             language = language,
             chatLanguage = chatLanguage,
+            exploreAvailable = BuildConfig.DOST_EXPLORE_ENABLED,
             exploreEnabled = exploreEnabled,
             exploreDisclosureAccepted = store.exploreDisclosureAccepted(),
-            showExplorePlus = canUseAdultExploreFeature && BuildConfig.DOST_PREMIUM_ENABLED,
+            showExplorePlus = canUseExplorePlus,
             showFriendCount = showFriendCount,
             friends = friends,
             userTimeZoneId = userTimeZoneId,
@@ -1258,16 +1310,20 @@ fun DostApp(
             onBack = { screen = settingsReturnScreen },
             onOpenPremium = ::openExplorePlus,
             onExploreEnabledChange = {
-                exploreEnabled = it
-                store.setExploreEnabled(it)
-                if (!it) {
-                    selectedMainTab = MainTab.CHATS
-                    if (screen in setOf(AppScreen.CHAT, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT)) {
-                        screen = AppScreen.HOME
-                    }
-                    friends.forEach { friend ->
-                        ConversationWorkScheduler.cancelAllForFriend(context, friend.id)
-                        ReplyNotifier.cancelReply(context, friend.id)
+                if (BuildConfig.DOST_EXPLORE_ENABLED) {
+                    exploreEnabled = it
+                    store.setExploreEnabled(it)
+                    if (!it) {
+                        selectedMainTab = MainTab.CHATS
+                        if (screen in setOf(
+                                AppScreen.CHAT, AppScreen.SYSTEM_FRIEND_PICKER,
+                                AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.FRIEND_PROFILE
+                            )
+                        ) screen = AppScreen.HOME
+                        friends.forEach { friend ->
+                            ConversationWorkScheduler.cancelAllForFriend(context, friend.id)
+                            ReplyNotifier.cancelReply(context, friend.id)
+                        }
                     }
                     ConversationManager.refreshProactiveWork()
                 }
@@ -1393,7 +1449,7 @@ fun DostApp(
                 }
             }
         )
-        AppScreen.PREMIUM -> if (hasLocalAccountAccess() && canUseAdultExploreFeature) PremiumScreen(
+        AppScreen.PREMIUM -> if (hasLocalAccountAccess() && canUseExplorePlus) PremiumScreen(
             language = language,
             uid = activeFirebaseUid,
             isPremium = isPremium,
@@ -1412,7 +1468,7 @@ fun DostApp(
             addingCatalogId = addingSystemFriendId,
             systemLimitReached = !isPremium && friends.count { it.catalogId.isNotBlank() } >= MAX_SYSTEM_FRIENDS,
             customLimitReached = !isPremium && friends.count { it.catalogId.isBlank() } >= MAX_CUSTOM_FRIENDS,
-            showExplorePlus = canUseAdultExploreFeature && BuildConfig.DOST_PREMIUM_ENABLED,
+            showExplorePlus = canUseExplorePlus,
             onRefresh = ::loadSystemFriendCatalog,
             onSelect = ::addCatalogFriend,
             onPassCatalogFriend = {
@@ -1434,7 +1490,9 @@ fun DostApp(
             },
             onBack = { screen = AppScreen.HOME }
         )
-        AppScreen.PEOPLE -> if (canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) PeopleScreen(
+        AppScreen.PEOPLE -> if (exploreEnabled && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
+        ) PeopleScreen(
             language = language,
             uid = authRepository.currentAccount?.uid.orEmpty(),
             userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
@@ -1453,7 +1511,9 @@ fun DostApp(
             selectedPeopleConversation = null
             screen = AppScreen.HOME
         }
-        AppScreen.PEOPLE_CHAT -> if (canUseAdultExploreFeature && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()) selectedPeopleConversation?.let { conversation ->
+        AppScreen.PEOPLE_CHAT -> if (exploreEnabled && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
+        ) selectedPeopleConversation?.let { conversation ->
             PeopleChatScreen(
                 language = language,
                 uid = authRepository.currentAccount?.uid.orEmpty(),

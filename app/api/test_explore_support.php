@@ -33,16 +33,32 @@ foreach ($limits as $limit) {
     $plus = dost_explore_registry_change($directory, 'plus-' . $kind, $kind . '-extra', $kind, 'add', true);
     dost_explore_test_assert($plus['status'] === 200, 'Explore Plus accounts are not subject to the free friend limit.');
 }
+dost_explore_test_assert(
+    dost_explore_registry_contains($directory, $uid, 'custom-0', 'custom')
+        && !dost_explore_registry_contains($directory, $uid, 'custom-0', 'catalog')
+        && dost_explore_registry_contains($directory, $uid, 'catalog-0', 'catalog')
+        && !dost_explore_registry_contains($directory, $uid, 'catalog-0', 'custom'),
+    'Only friends registered in their server-enforced category can make AI requests.'
+);
 $removed = dost_explore_registry_change($directory, $uid, 'custom-0', 'custom', 'remove', false);
 $afterRemoval = dost_explore_registry_change($directory, $uid, 'custom-new', 'custom', 'add', false);
 dost_explore_test_assert(
     $removed['status'] === 200 && $afterRemoval['status'] === 200,
     'Removing a friend frees a server-tracked slot.'
 );
+$previousExploreFlag = getenv('DOST_EXPLORE_ENABLED');
+putenv('DOST_EXPLORE_ENABLED=false');
 dost_explore_test_assert(
-    !dost_explore_enabled(array()) && dost_explore_enabled(array('explore_enabled' => 'true')),
-    'Explore is disabled unless the server feature flag is explicitly enabled.'
+    !dost_explore_enabled(array('explore_enabled' => 'true')),
+    'Explore ignores configuration aliases when its server feature flag is false.'
 );
+putenv('DOST_EXPLORE_ENABLED=true');
+dost_explore_test_assert(dost_explore_enabled(array()), 'The server Explore flag enables the feature.');
+if ($previousExploreFlag === false) {
+    putenv('DOST_EXPLORE_ENABLED');
+} else {
+    putenv('DOST_EXPLORE_ENABLED=' . $previousExploreFlag);
+}
 dost_explore_test_assert(
     dost_explore_authorize('invalid token', array(), time())['status'] === 401,
     'Explore endpoints reject requests without a Firebase bearer token.'
@@ -50,27 +66,7 @@ dost_explore_test_assert(
 dost_explore_test_assert(
     dost_explore_plus_active(array('dostExplorePlusUntil' => time() + 60), time())
         && !dost_explore_plus_active(array('dostExplorePlusUntil' => time()), time()),
-    'Explore Plus access comes only from active server-side claims.'
-);
-dost_explore_test_assert(
-    dost_explore_ai_friend_allowed(array(), '17', time())
-        && !dost_explore_ai_friend_allowed(array(), '18', time())
-        && dost_explore_ai_friend_allowed(
-            array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => time() + 60),
-            '18',
-            time()
-        ),
-    'Only an active adult-eligibility claim unlocks adult AI characters.'
-);
-dost_explore_test_assert(
-    dost_explore_catalog_profile_allowed(array(), array('age' => '17'), time())
-        && !dost_explore_catalog_profile_allowed(array(), array('age' => '18'), time())
-        && dost_explore_catalog_profile_allowed(
-            array('dostAgeEligible' => true, 'dostAgeEligibleUntil' => time() + 60),
-            array('age' => '18'),
-            time()
-        ),
-    'Teen accounts receive only age-appropriate catalog profiles.'
+    'Friend limits use only active server-side Explore Plus claims.'
 );
 
 foreach (glob($directory . DIRECTORY_SEPARATOR . '*') ?: array() as $file) {

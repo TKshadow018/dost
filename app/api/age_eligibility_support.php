@@ -67,15 +67,6 @@ function dost_age_authenticated_uid_matches($requestUid, $authenticatedUid)
         && hash_equals($requestUid, $authenticatedUid);
 }
 
-function dost_age_eligibility_claim_active($claims, $now)
-{
-    return is_array($claims)
-        && isset($claims['dostAgeEligible'], $claims['dostAgeEligibleUntil'])
-        && $claims['dostAgeEligible'] === true
-        && is_numeric($claims['dostAgeEligibleUntil'])
-        && (int) $claims['dostAgeEligibleUntil'] > $now;
-}
-
 function dost_age_integrity_failure_field($payload, $uid, $eligible, $nonce, $now, $allowTestAppVerdicts = false)
 {
     if (!is_array($payload) || !isset($payload['tokenPayloadExternal']) || !is_array($payload['tokenPayloadExternal'])) {
@@ -186,6 +177,52 @@ function dost_age_custom_attributes($eligible, $now, $ttlSeconds)
         'dostAgeEligibleUntil' => $now + $ttlSeconds
     ), JSON_UNESCAPED_SLASHES);
     return is_string($attributes) ? $attributes : '';
+}
+
+function dost_age_from_birth_month_year($birthMonth, $birthYear, $currentMonth, $currentYear)
+{
+    if (!is_int($birthMonth) || $birthMonth < 1 || $birthMonth > 12
+        || !is_int($birthYear) || !is_int($currentMonth) || $currentMonth < 1 || $currentMonth > 12
+        || !is_int($currentYear) || $birthYear < 1900 || $birthYear > $currentYear
+    ) {
+        return false;
+    }
+    $age = $currentYear - $birthYear - ($birthMonth >= $currentMonth ? 1 : 0);
+    return $age >= 0 && $age <= 120 ? $age : false;
+}
+
+function dost_age_cohort_claims($existing, $birthMonth, $birthYear, $currentMonth, $currentYear)
+{
+    if (!is_array($existing)) {
+        return false;
+    }
+    $age = dost_age_from_birth_month_year($birthMonth, $birthYear, $currentMonth, $currentYear);
+    if ($age === false || $age < 13) {
+        return false;
+    }
+    if (isset($existing['dostAgeCohort'])
+        && (!isset($existing['dostBirthMonth'], $existing['dostBirthYear'])
+            || !is_int($existing['dostBirthMonth']) || !is_int($existing['dostBirthYear']))
+    ) {
+        return false;
+    }
+    if (isset($existing['dostBirthMonth']) || isset($existing['dostBirthYear'])) {
+        if (!isset($existing['dostBirthMonth'], $existing['dostBirthYear'])
+            || !is_int($existing['dostBirthMonth']) || !is_int($existing['dostBirthYear'])
+            || $existing['dostBirthMonth'] !== $birthMonth || $existing['dostBirthYear'] !== $birthYear
+        ) return false;
+    }
+    $cohort = $age >= 18 ? 'adult' : 'teen';
+    if (isset($existing['dostAgeCohort'])
+        && (!in_array($existing['dostAgeCohort'], array('teen', 'adult'), true)
+            || ($existing['dostAgeCohort'] === 'adult' && $cohort !== 'adult'))
+    ) {
+        return false;
+    }
+    $existing['dostAgeCohort'] = $cohort;
+    $existing['dostBirthMonth'] = $birthMonth;
+    $existing['dostBirthYear'] = $birthYear;
+    return $existing;
 }
 
 function dost_firebase_claim_lock($uid)

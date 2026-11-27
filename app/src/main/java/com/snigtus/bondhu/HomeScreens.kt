@@ -1404,6 +1404,7 @@ internal fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange:
 internal fun SettingsScreen(
     language: AppLanguage,
     chatLanguage: AppLanguage,
+    exploreAvailable: Boolean,
     exploreEnabled: Boolean,
     exploreDisclosureAccepted: Boolean,
     showExplorePlus: Boolean,
@@ -1469,7 +1470,7 @@ internal fun SettingsScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
+            if (exploreAvailable) item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1655,7 +1656,7 @@ internal fun SettingsScreen(
                     )
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "বন্ধুর বার্তা"
                     AppLanguage.HINDI -> "दोस्तों के संदेश"
@@ -1791,7 +1792,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) {
                     Button(onClick = { showAiSettings = true }, modifier = Modifier.fillMaxWidth()) {
                         Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language))
@@ -1827,7 +1828,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "আপনার তথ্য"
                     AppLanguage.HINDI -> "आपकी जानकारी"
@@ -1842,7 +1843,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "বন্ধু পরিচালনা"
                     AppLanguage.HINDI -> "दोस्त प्रबंधित करें"

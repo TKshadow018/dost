@@ -1,7 +1,6 @@
 <?php
 
 require_once __DIR__ . '/premium_support.php';
-require_once __DIR__ . '/explore_support.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -52,9 +51,6 @@ if (is_file($configPath)) {
     if (is_array($loaded)) {
         $config = $loaded;
     }
-}
-if (!dost_explore_enabled($config)) {
-    dost_premium_intro_respond(503, array('error' => 'Explore is not enabled'));
 }
 $setting = function ($environmentKey, $configKey) use ($config) {
     $value = getenv($environmentKey);
@@ -189,8 +185,9 @@ if (!is_array($customClaims)) {
     dost_premium_intro_respond(503, array('error' => 'Premium intro grants are unavailable'));
 }
 $now = time();
-if (!dost_age_eligibility_claim_active($customClaims, $now)) {
-    dost_premium_intro_respond(403, array('error' => 'Explore Plus is available only to age-eligible adults'));
+if (!dost_premium_user_adult_eligible($customClaims, $now)) {
+    dost_firebase_claim_unlock($claimLock);
+    dost_premium_intro_respond(403, array('error' => 'Explore Plus requires verified adult eligibility'));
 }
 if (empty($customClaims['dostPremiumIntroGranted'])) {
     $updatedClaims = dost_premium_intro_claims($customClaims, $createdAt, $days, $now, $launchAt);

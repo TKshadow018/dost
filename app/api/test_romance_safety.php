@@ -7,6 +7,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require_once __DIR__ . '/romance_safety.php';
+require_once __DIR__ . '/age_eligibility_support.php';
 
 function dost_assert(bool $condition, string $message): void
 {
@@ -18,7 +19,42 @@ function dost_assert(bool $condition, string $message): void
     }
 }
 
+// AI age policy is derived from trusted claims, never request age fields.
+dost_assert(
+    dost_ai_age_cohort_from_claims(array('dostAgeCohort' => 'teen'), 11, 2026) === 'teen'
+    && dost_ai_age_cohort_from_claims(array('dostAgeCohort' => 'adult'), 11, 2026) === 'adult'
+    && dost_ai_age_cohort_from_claims(array(), 11, 2026) === 'unknown',
+    'Missing cohorts must default to the strict AI safety policy.'
+);
+$turningEighteenClaims = array(
+    'dostAgeCohort' => 'teen',
+    'dostBirthMonth' => 10,
+    'dostBirthYear' => 2008
+);
+dost_assert(
+    dost_ai_age_cohort_from_claims($turningEighteenClaims, 9, 2026) === 'teen'
+    && dost_ai_age_cohort_from_claims($turningEighteenClaims, 11, 2026) === 'adult',
+    'A teen policy may change only after the stored birth month/year reaches 18.'
+);
+dost_assert(
+    dost_content_requires_safety_block('I have a crush on you', false)
+    && dost_content_requires_safety_block('Let us talk about sex', false)
+    && strpos(dost_teen_policy_prompt(), 'Never create or continue romance') !== false
+    && strpos(
+        dost_filter_ai_profile_content('{"personality":"seductive and romantic"}', false),
+        'age-appropriate'
+    ) !== false,
+    'Teen policy must block romantic/sexual personas and instruct the model accordingly.'
+);
+
 // Age gating: valid adult boundaries pass; malformed and underage values fail closed.
+dost_assert(
+    dost_ai_profile_age_allowed('18')
+    && dost_ai_profile_age_allowed('120')
+    && !dost_ai_profile_age_allowed('17')
+    && !dost_ai_profile_age_allowed('121'),
+    'Server-generated fictional AI friend profiles must remain 18+.'
+);
 $validAgePairs = array(
     array('18', '18', 'minimum adult ages'),
     array('120', '25', 'maximum user age'),
@@ -57,16 +93,6 @@ foreach ($invalidAgePairs as $case) {
         "Invalid age pair unexpectedly passed: {$label}"
     );
 }
-
-dost_assert(
-    dost_ai_friend_age_allowed('13', '17')
-        && dost_ai_friend_age_allowed('17', '13')
-        && !dost_ai_friend_age_allowed('17', '18')
-        && dost_ai_friend_age_allowed('18', '18')
-        && !dost_ai_friend_age_allowed('12', '17')
-        && !dost_ai_friend_age_allowed('teen', '17'),
-    'Teen AI requests require 13+ user and friend ages, and prohibit adult characters.'
-);
 
 // Content classification: romance depends on age; sexual content is blocked for everyone.
 $contentCases = array(
@@ -226,9 +252,7 @@ $apiSource = file_get_contents($apiPath);
 $apiPatterns = array(
     'latest-turn check' => '/dost_conversation_requires_safety_block\s*\(\s*\$messages\s*,\s*\$romanceAllowed\s*\)/',
     'history filtering' => '/dost_filter_unsafe_conversation_history\s*\(\s*\$messages\s*,\s*\$romanceAllowed\s*\)/',
-    'localized fallback' => '/dost_safety_fallback\s*\(\s*\$romanceAllowed\s*,\s*\$chatLanguage\s*\)/',
-    'server-claim AI age check' => '/dost_explore_ai_friend_allowed\s*\(/',
-    'teen safety policy' => '/The user is a teenager\. Keep the character clearly fictional/'
+    'localized fallback' => '/dost_safety_fallback\s*\(\s*\$romanceAllowed\s*,\s*\$chatLanguage\s*\)/'
 );
 foreach ($apiPatterns as $behavior => $pattern) {
     dost_assert(

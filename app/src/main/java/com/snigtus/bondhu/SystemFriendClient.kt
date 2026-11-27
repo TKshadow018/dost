@@ -12,7 +12,7 @@ import java.net.URLEncoder
 import java.util.UUID
 
 internal class SystemFriendClient(
-    private val requestAllowed: () -> Boolean = { true },
+    private val requestAllowed: () -> Boolean = { false },
     private val authTokenProvider: suspend () -> String? = { null }
 ) {
     suspend fun getCatalog(chatLanguage: AppLanguage): List<SystemFriendListing> = withContext(Dispatchers.IO) {
