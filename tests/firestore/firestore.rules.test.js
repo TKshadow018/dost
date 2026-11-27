@@ -328,6 +328,30 @@ test("only managers administer members, changes are audited, and removal revokes
 
   await assertFails(addSecureOrgMember("manager", "secure-a", "new-manager", "manager"));
   await assertSucceeds(addSecureOrgMember("alice", "secure-a", "carol"));
+  const alice = secureUser("alice");
+  const promotion = writeBatch(alice);
+  promotion.update(doc(alice, "secureOrgs/secure-a/members/carol"), {
+    role: "manager",
+    actorUid: "alice",
+    auditEventId: "evt-promote-carol",
+    updatedAt: serverTimestamp(),
+  });
+  promotion.set(doc(alice, "secureOrgs/secure-a/auditLog/evt-promote-carol"), {
+    actorUid: "alice",
+    targetUid: "carol",
+    action: "manager_promoted",
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(promotion.commit());
+  await assertFails(
+    updateDoc(doc(secureUser("manager"), "secureOrgs/secure-a/members/carol"), {
+      role: "manager",
+      status: "removed",
+      actorUid: "manager",
+      auditEventId: "evt-carol",
+      updatedAt: serverTimestamp(),
+    }),
+  );
   await assertFails(
     updateDoc(doc(secureUser("bob"), "secureOrgs/secure-a/members/bob"), {
       role: "manager",

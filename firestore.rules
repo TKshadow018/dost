@@ -788,41 +788,6 @@ service cloud.firestore {
       }
 
       function validMemberCountAudit(auditId, data) {
-        let actorRole = secureActorRole();
-        let targetPath = memberPath(data.targetUid);
-        let targetExists = existsAfter(targetPath);
-        let target = targetExists ? getAfter(targetPath).data : null;
-        let organizationExists = existsAfter(orgPath());
-        let organization = organizationExists ? getAfter(orgPath()).data : null;
-        let targetMatches = targetExists
-          && target.uid == data.targetUid
-          && target.auditEventId == auditId
-          && target.actorUid == request.auth.uid;
-        return organizationExists
-          && organization.memberCountAuditEventId == auditId
-          && targetMatches
-          && (
-            (data.action == 'member_added'
-              && target.role == 'member'
-              && target.status == 'active'
-              && actorRole in ['owner', 'manager'])
-            || (data.action == 'manager_added'
-              && target.role == 'manager'
-              && target.status == 'active'
-              && actorRole == 'owner')
-            || (data.action == 'member_removed'
-              && target.role == 'member'
-              && target.status == 'removed'
-              && actorRole in ['owner', 'manager'])
-            || (data.action == 'manager_removed'
-              && target.role == 'manager'
-              && target.status == 'removed'
-              && actorRole == 'owner')
-          );
-      }
-
-      function validManagerRoleAudit(auditId, data) {
-        let actorRole = secureActorRole();
         let targetPath = memberPath(data.targetUid);
         let targetExists = existsAfter(targetPath);
         let target = targetExists ? getAfter(targetPath).data : null;
@@ -831,7 +796,31 @@ service cloud.firestore {
           && target.auditEventId == auditId
           && target.actorUid == request.auth.uid;
         return targetMatches
-          && actorRole == 'owner'
+          && (
+            (data.action == 'member_added'
+              && target.role == 'member'
+              && target.status == 'active')
+            || (data.action == 'manager_added'
+              && target.role == 'manager'
+              && target.status == 'active')
+            || (data.action == 'member_removed'
+              && target.role == 'member'
+              && target.status == 'removed')
+            || (data.action == 'manager_removed'
+              && target.role == 'manager'
+              && target.status == 'removed')
+          );
+      }
+
+      function validManagerRoleAudit(auditId, data) {
+        let targetPath = memberPath(data.targetUid);
+        let targetExists = existsAfter(targetPath);
+        let target = targetExists ? getAfter(targetPath).data : null;
+        let targetMatches = targetExists
+          && target.uid == data.targetUid
+          && target.auditEventId == auditId
+          && target.actorUid == request.auth.uid;
+        return targetMatches
           && (
             (data.action == 'manager_promoted'
               && target.role == 'manager'
@@ -903,78 +892,76 @@ service cloud.firestore {
           && (isOwnerBootstrap || isMemberAdmission || isManagerAdmission);
       }
 
+      function validMemberCountMutation(memberUid, auditId, action) {
+        let eventPath = auditPath(auditId);
+        let eventExists = existsAfter(eventPath);
+        let event = eventExists ? getAfter(eventPath).data : null;
+        let organizationAfter = getAfter(orgPath()).data;
+        return eventExists
+          && event is map
+          && event.targetUid == memberUid
+          && event.action == action
+          && event.createdAt == request.time
+          && organizationAfter.memberCountAuditEventId == auditId;
+      }
+
+      function validManagerRoleMutation(memberUid, auditId, action) {
+        let eventPath = auditPath(auditId);
+        let eventExists = existsAfter(eventPath);
+        let event = eventExists ? getAfter(eventPath).data : null;
+        let actorRole = secureActorRole();
+        return eventExists
+          && actorRole == 'owner'
+          && event is map
+          && event.actorUid == request.auth.uid
+          && event.targetUid == memberUid
+          && event.action == action
+          && event.createdAt == request.time;
+      }
+
       function validMemberUpdate(memberUid) {
         let changed = request.resource.data.diff(resource.data).affectedKeys();
         let data = request.resource.data;
         let auditId = data.auditEventId;
-        let event = getAfter(auditPath(auditId)).data;
-        let organization = get(orgPath()).data;
-        let actorRole = secureActorRole();
-        let roleAndStatusValid =
-          (resource.data.status == 'active'
-            && data.status == 'removed'
-            && resource.data.role == 'member'
-            && data.role == 'member'
-            && actorRole in ['owner', 'manager']
-            && event.action == 'member_removed'
-          )
-          ||
-          (resource.data.status == 'active'
-            && data.status == 'removed'
-            && resource.data.role == 'manager'
-            && data.role == 'manager'
-            && actorRole == 'owner'
-            && event.action == 'manager_removed')
-          ||
-          (resource.data.status == 'active'
-            && data.status == 'active'
-            && resource.data.role == 'member'
-            && data.role == 'manager'
-            && actorRole == 'owner'
-            && event.action == 'manager_promoted')
-          ||
-          (resource.data.status == 'active'
-            && data.status == 'active'
-            && resource.data.role == 'manager'
-            && data.role == 'member'
-            && actorRole == 'owner'
-            && event.action == 'manager_demoted')
-          ||
-          (resource.data.status == 'removed'
-            && data.status == 'active'
-            && data.role == 'member'
-            && actorRole in ['owner', 'manager']
-            && event.action == 'member_added')
-          ||
-          (resource.data.status == 'removed'
-            && data.status == 'active'
-            && data.role == 'manager'
-            && actorRole == 'owner'
-            && event.action == 'manager_added');
-        return actorRole in ['owner', 'manager']
-          && resource.data.uid == memberUid
-          && memberUid != organization.ownerUid
+        return resource.data.uid == memberUid
           && data.uid == resource.data.uid
           && data.createdAt == resource.data.createdAt
-          && data.displayName is string
-          && data.displayName.size() > 0
-          && data.displayName.size() <= 60
-          && data.organizationName is string
-          && data.organizationName.size() >= 2
-          && data.organizationName.size() <= 80
           && data.actorUid == request.auth.uid
           && data.updatedAt == request.time
           && auditId is string
           && auditId.matches('^[A-Za-z0-9_-]{1,128}$')
-          && changed.hasOnly([
-            'displayName', 'role', 'status', 'actorUid',
-            'auditEventId', 'organizationName', 'updatedAt'
-          ])
+          && changed.hasOnly(['role', 'status', 'actorUid', 'auditEventId', 'updatedAt'])
           && changed.hasAll(['auditEventId', 'updatedAt'])
-          && event.actorUid == request.auth.uid
-          && event.targetUid == memberUid
-          && event.createdAt == request.time
-          && roleAndStatusValid;
+          && (
+            (resource.data.status == 'active'
+              && data.status == 'removed'
+              && resource.data.role == 'member'
+              && data.role == 'member'
+              && validMemberCountMutation(memberUid, auditId, 'member_removed'))
+            || (resource.data.status == 'active'
+              && data.status == 'removed'
+              && resource.data.role == 'manager'
+              && data.role == 'manager'
+              && validMemberCountMutation(memberUid, auditId, 'manager_removed'))
+            || (resource.data.status == 'removed'
+              && data.status == 'active'
+              && data.role == 'member'
+              && validMemberCountMutation(memberUid, auditId, 'member_added'))
+            || (resource.data.status == 'removed'
+              && data.status == 'active'
+              && data.role == 'manager'
+              && validMemberCountMutation(memberUid, auditId, 'manager_added'))
+            || (resource.data.status == 'active'
+              && data.status == 'active'
+              && resource.data.role == 'member'
+              && data.role == 'manager'
+              && validManagerRoleMutation(memberUid, auditId, 'manager_promoted'))
+            || (resource.data.status == 'active'
+              && data.status == 'active'
+              && resource.data.role == 'manager'
+              && data.role == 'member'
+              && validManagerRoleMutation(memberUid, auditId, 'manager_demoted'))
+          );
       }
 
       function validOrgCreate() {
