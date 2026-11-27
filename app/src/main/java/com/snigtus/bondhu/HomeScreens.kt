@@ -1423,7 +1423,8 @@ internal fun SettingsScreen(
     onCopyInstallationId: () -> Unit,
     onExportLocalData: () -> Unit,
     onImportLocalData: () -> Unit,
-    onDeleteServerArchive: () -> Unit
+    onDeleteServerArchive: () -> Unit,
+    onOpenPrivacy: () -> Unit
 ) {
     var showAiSettings by remember { mutableStateOf(false) }
     var confirmArchiveDelete by remember { mutableStateOf(false) }
@@ -1764,6 +1765,17 @@ internal fun SettingsScreen(
                 }
             }
             item {
+                SettingsSection("Privacy") {
+                    Text(
+                        "Dost is for ages 13 and older. Teens can use teen-safe AI, but not stranger discovery or Explore Plus; both require server-verified 18+ eligibility.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onOpenPrivacy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Privacy & mode disclosures")
+                    }
+                }
+            }
+            item {
                 SettingsSection("Local data") {
                     Text("Move your profile, friends, routines, reminders, memories, summaries, and chat history with a passphrase-encrypted backup. Your API key and installation id are not included. Keep the passphrase separate; it cannot be recovered.", style = MaterialTheme.typography.bodySmall)
                     Text("Installation ID for deletion and support requests: $installationId", style = MaterialTheme.typography.bodySmall)
@@ -1887,6 +1899,45 @@ internal fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+internal fun PrivacyScreen(onBack: () -> Unit, onOpenPrivacyPolicy: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Privacy") },
+                navigationIcon = { DostBackButton(AppLanguage.ENGLISH, onBack) }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                SettingsSection("Age and audience") {
+                    Text(
+                        "Under-13 users cannot create an account. Teens aged 13–17 have private-by-default settings and can use teen-safe AI, but not stranger discovery or Explore Plus. Stranger discovery and Explore Plus require server-verified 18+ eligibility."
+                    )
+                }
+            }
+            items(ModePrivacyDisclosures.all) { disclosure ->
+                SettingsSection(disclosure.title) {
+                    Text(disclosure.text)
+                }
+            }
+            item {
+                SettingsSection("Full policy") {
+                    Text("The full policy explains purposes, retention, deletion, and service-provider sharing.")
+                    OutlinedButton(onClick = onOpenPrivacyPolicy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Read the full Privacy Policy")
+                    }
+                }
+            }
+        }
     }
 }
 
