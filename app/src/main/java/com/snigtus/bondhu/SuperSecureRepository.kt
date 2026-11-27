@@ -10,7 +10,13 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Source
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -112,10 +118,20 @@ internal class SuperSecureRepository(context: Context) {
         }
         val orgSnapshot = organization.get(Source.SERVER).await()
         check(orgSnapshot.exists()) { "This organization is unavailable." }
+        val role = SecureOrgRole.parse(member.getString("role"))
+        if (role == SecureOrgRole.OWNER) {
+            try {
+                syncShieldPlan(uid, organizationId)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Firestore rules still enforce the last server-synchronized plan and grace period.
+            }
+        }
         return SecureOrgSummary(
             id = organizationId,
             name = orgSnapshot.getString("name") ?: error("Organization name is unavailable."),
-            role = SecureOrgRole.parse(member.getString("role")),
+            role = role,
             memberCount = orgSnapshot.getLong("memberCount")?.toInt()
                 ?.takeIf { it in 1..MAX_SECURE_ORG_MEMBERS }
                 ?: error("Organization membership is unavailable.")
@@ -158,7 +174,50 @@ internal class SuperSecureRepository(context: Context) {
             "org_created"
         ))
         batch.commit().await()
+        try {
+            syncShieldPlan(uid, organization.id)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Opening the committed organization retries sync; Firestore rules block plan-dependent writes.
+        }
         return SecureOrgSummary(organization.id, trimmedName, SecureOrgRole.OWNER, 1)
+    }
+
+    private suspend fun syncShieldPlan(uid: String, organizationId: String) {
+        val user = app?.let { FirebaseAuth.getInstance(it).currentUser }
+            ?: throw IllegalStateException("Sign in to sync the Shield plan.")
+        val idToken = user.getIdToken(true).await().token
+            ?: throw IOException("Firebase did not return an ID token.")
+        withContext(Dispatchers.IO) {
+            val connection = (URL("$PREMIUM_API_ROOT/shield_plan_sync.php")
+                .openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10_000
+                readTimeout = 20_000
+                instanceFollowRedirects = false
+                doOutput = true
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Authorization", "******")
+            }
+            try {
+                val body = JSONObject()
+                    .put("uid", uid)
+                    .put("org_id", organizationId)
+                connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                val response = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText().take(MAX_RESPONSE_CHARS) }
+                    .orEmpty()
+                if (status !in 200..299 || !runCatching { JSONObject(response).optBoolean("ok") }.getOrDefault(false)) {
+                    throw IOException("Shield plan could not be synchronized. Try again.")
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
     }
 
     fun listenMembership(
@@ -490,6 +549,8 @@ internal class SuperSecureRepository(context: Context) {
     internal enum class MemberAction { PROMOTE, DEMOTE, REMOVE }
 
     private companion object {
+        const val PREMIUM_API_ROOT = "https://bisque-bear-900175.hostingersite.com/api"
+        const val MAX_RESPONSE_CHARS = 32_768
         const val ORGS = "secureOrgs"
         const val MEMBERS = "members"
         const val GROUP_CHATS = "groupChats"

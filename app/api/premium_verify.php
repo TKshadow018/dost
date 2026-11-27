@@ -38,10 +38,11 @@ if (!is_array($request)
 ) {
     dost_premium_respond(400, array('error' => 'Invalid purchase verification request'));
 }
-$purchaseType = dost_premium_product_type($request['product_id']);
-if ($purchaseType === false) {
-    dost_premium_respond(400, array('error' => 'Unrecognized Premium product'));
+$product = dost_premium_product($request['product_id']);
+if ($product === false) {
+    dost_premium_respond(400, array('error' => 'Unrecognized Play product'));
 }
+$purchaseType = $product['type'];
 
 $authorization = isset($_SERVER['HTTP_AUTHORIZATION']) && is_string($_SERVER['HTTP_AUTHORIZATION'])
     ? trim($_SERVER['HTTP_AUTHORIZATION'])
@@ -72,6 +73,11 @@ $projectId = $setting('DOST_FIREBASE_PROJECT_ID', 'firebase_project_id');
 $apiKey = $setting('DOST_FIREBASE_WEB_API_KEY', 'firebase_web_api_key');
 $serviceAccountPath = $setting('DOST_PREMIUM_SERVICE_ACCOUNT_PATH', 'premium_service_account_path');
 $packageName = $setting('DOST_PLAY_PACKAGE_NAME', 'play_package_name');
+$purchaseMapDirectory = $setting('DOST_PREMIUM_PURCHASE_MAP_DIR', 'premium_purchase_map_dir');
+if ($purchaseMapDirectory === '') {
+    $purchaseMapDirectory = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+        . DIRECTORY_SEPARATOR . 'dost-premium-purchase-map';
+}
 $premiumEnabled = strtolower($setting('DOST_PREMIUM_ENABLED', 'premium_enabled'));
 if (!in_array($premiumEnabled, array('true', 'false'), true)) {
     error_log('Dost Premium enabled setting must be true or false.');
@@ -79,6 +85,24 @@ if (!in_array($premiumEnabled, array('true', 'false'), true)) {
 }
 if ($premiumEnabled !== 'true') {
     dost_premium_respond(503, array('error' => 'Premium purchases are not enabled'));
+}
+$planSetting = array(
+    'explore_plus' => array('DOST_PLAN_EXPLORE_PLUS_ENABLED', 'plan_explore_plus_enabled'),
+    'cipher' => array('DOST_PLAN_CIPHER_ENABLED', 'plan_cipher_enabled'),
+    'shield_team' => array('DOST_PLAN_SHIELD_ENABLED', 'plan_shield_enabled'),
+    'shield_business' => array('DOST_PLAN_SHIELD_ENABLED', 'plan_shield_enabled'),
+    'plus_bundle' => array('DOST_PLAN_EXPLORE_PLUS_ENABLED', 'plan_explore_plus_enabled')
+);
+$planFlag = isset($planSetting[$product['plan']])
+    ? strtolower($setting($planSetting[$product['plan']][0], $planSetting[$product['plan']][1]))
+    : 'false';
+if ($planFlag !== 'true') {
+    dost_premium_respond(503, array('error' => 'This plan is not enabled'));
+}
+if ($product['plan'] === 'plus_bundle'
+    && strtolower($setting('DOST_PLAN_CIPHER_ENABLED', 'plan_cipher_enabled')) !== 'true'
+) {
+    dost_premium_respond(503, array('error' => 'This plan is not enabled'));
 }
 if ($projectId === '' || $apiKey === '' || $serviceAccountPath === ''
     || $packageName !== 'com.snigtus.dost'
@@ -97,6 +121,18 @@ if (!is_string($realPath)
             || strpos($realPath, rtrim($documentRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR) === 0))
 ) {
     error_log('Dost Premium service account must be outside the web root.');
+    dost_premium_respond(503, array('error' => 'Premium verification is not configured'));
+}
+$mapReady = is_dir($purchaseMapDirectory)
+    || @mkdir($purchaseMapDirectory, 0700, true)
+    || is_dir($purchaseMapDirectory);
+$mapParent = $mapReady ? realpath($purchaseMapDirectory) : false;
+if (!is_string($mapParent) || !is_writable($mapParent)
+    || ($documentRoot !== false
+        && ($mapParent === $documentRoot
+            || strpos($mapParent, rtrim($documentRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR) === 0))
+) {
+    error_log('Dost Premium purchase map must be outside the web root.');
     dost_premium_respond(503, array('error' => 'Premium verification is not configured'));
 }
 $credentialContents = file_get_contents($realPath);
@@ -188,11 +224,40 @@ if (!is_array($customClaims)) {
     error_log('Dost Premium custom claims are malformed.');
     dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
 }
-if (!dost_premium_user_adult_eligible($customClaims, time())) {
+if (!empty($product['adult']) && !dost_premium_user_adult_eligible($customClaims, time())) {
+    if (!dost_premium_store_purchase_owner(
+        $request['purchase_token'],
+        $request['uid'],
+        $request['product_id'],
+        $purchaseMapDirectory,
+        true
+    )) {
+        dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
+    }
     dost_firebase_claim_unlock($claimLock);
-    dost_premium_respond(403, array('error' => 'Explore Plus requires verified adult eligibility'));
+    dost_premium_respond(403, array(
+        'error' => 'This purchase requires verified adult eligibility',
+        'refund_required' => true
+    ));
 }
-$updatedClaims = dost_premium_claims($customClaims, $request['product_id'], $entitlement, time());
+$updatedClaims = dost_premium_claims(
+    $customClaims,
+    $request['product_id'],
+    $entitlement,
+    time(),
+    $request['purchase_token']
+);
+if (!is_array($updatedClaims)
+    || !dost_premium_store_purchase_owner(
+        $request['purchase_token'],
+        $request['uid'],
+        $request['product_id'],
+        $purchaseMapDirectory
+    )
+) {
+    error_log('Dost Premium purchase ownership record could not be saved.');
+    dost_premium_respond(503, array('error' => 'Premium verification is unavailable'));
+}
 $customAttributes = is_array($updatedClaims)
     ? json_encode($updatedClaims, JSON_UNESCAPED_SLASHES)
     : false;
@@ -213,8 +278,10 @@ dost_firebase_claim_unlock($claimLock);
 
 dost_premium_respond(200, array(
     'premium' => true,
+    'plan' => $product['plan'],
     'source' => 'play',
-    'lifetime' => !empty($updatedClaims['dostPremiumLifetime']),
-    'premium_until' => isset($updatedClaims['dostPremiumUntil']) ? (int) $updatedClaims['dostPremiumUntil'] : null,
+    'lifetime' => !empty($updatedClaims['dostExplorePlusLifetime']),
+    'premium_until' => isset($updatedClaims['dostExplorePlusUntil'])
+        ? (int) $updatedClaims['dostExplorePlusUntil'] : null,
     'intro_granted' => !empty($updatedClaims['dostPremiumIntroGranted'])
 ));
