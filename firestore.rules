@@ -1,0 +1,1118 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ageEligible() {
+      return signedIn()
+        && request.auth.token.dostAgeEligible == true
+        && request.auth.token.dostAgeEligibleUntil is int
+        && request.auth.token.dostAgeEligibleUntil > request.time.seconds();
+    }
+
+    function profilePath(uid) {
+      return /databases/$(database)/documents/publicProfiles/$(uid);
+    }
+
+    function hasProfile(uid) {
+      return exists(profilePath(uid));
+    }
+
+    function profile(uid) {
+      return get(profilePath(uid)).data;
+    }
+
+    function profileIsPublic(uid) {
+      return hasProfile(uid) && profile(uid).isPublic == true;
+    }
+
+    function sameAgeCohort(firstUid, secondUid) {
+      return hasProfile(firstUid)
+        && hasProfile(secondUid)
+        && profile(firstUid).ageCohort == profile(secondUid).ageCohort;
+    }
+
+    function blockPath(ownerUid, blockedUid) {
+      return /databases/$(database)/documents/peopleBlocks/$(ownerUid)/blockedUsers/$(blockedUid);
+    }
+
+    function neitherBlocked(firstUid, secondUid) {
+      return !exists(blockPath(firstUid, secondUid))
+        && !exists(blockPath(secondUid, firstUid));
+    }
+
+    function contactRequestPath(recipientUid, senderUid) {
+      return /databases/$(database)/documents/peopleContactRequests/$(recipientUid)/incoming/$(senderUid);
+    }
+
+    function noPendingReverseContactRequest(recipientUid, senderUid) {
+      let reversePath = contactRequestPath(senderUid, recipientUid);
+      return (!exists(reversePath) || get(reversePath).data.get('status', '') != 'pending')
+        && (!existsAfter(reversePath) || getAfter(reversePath).data.get('status', '') != 'pending');
+    }
+
+    function contactApprovalPath(chatId) {
+      return /databases/$(database)/documents/peopleContactApprovals/$(chatId);
+    }
+
+    function approvedContactChat(chatId, members) {
+      let path = contactApprovalPath(chatId);
+      return existsAfter(path)
+        && getAfter(path).data.conversationId == chatId
+        && getAfter(path).data.members == members;
+    }
+
+    function validProfile(data) {
+      return data.keys().hasAll([
+          'displayName', 'ageBand', 'ageCohort', 'gender', 'country',
+          'bio', 'interests', 'isPublic', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'displayName', 'ageBand', 'ageCohort', 'gender', 'country',
+          'bio', 'interests', 'isPublic', 'updatedAt', 'contactPolicy'
+        ])
+        && data.displayName is string
+        && data.displayName.size() > 0
+        && data.displayName.size() <= 60
+        && data.ageBand in ['18–24', '25–34', '35+']
+        && data.ageCohort == 'adult'
+        && data.gender is string
+        && data.gender.size() > 0
+        && data.gender.size() <= 40
+        && data.country is string
+        && data.country.size() > 0
+        && data.country.size() <= 80
+        && data.bio is string
+        && data.bio.size() <= 500
+        && data.interests is string
+        && data.interests.size() <= 300
+        && data.isPublic is bool
+        && data.get('contactPolicy', 'everyone') in ['everyone', 'requests', 'matches', 'nobody']
+        && data.updatedAt == request.time;
+    }
+
+    function isMember(chatData) {
+      return signedIn()
+        && chatData.members is list
+        && request.auth.uid in chatData.members;
+    }
+
+    function isAdultChat(chatData) {
+      return chatData.ageCohort == 'adult';
+    }
+
+    function otherMember(members) {
+      return members[0] == request.auth.uid ? members[1] : members[0];
+    }
+
+    function unreadCount(chatData, memberUid) {
+      let counts = chatData.get('unreadCounts', {});
+      return counts is map && memberUid in counts && counts[memberUid] is int
+        ? counts[memberUid]
+        : 0;
+    }
+
+    function validUnreadCounts(chatData) {
+      let counts = chatData.unreadCounts;
+      let members = chatData.members;
+      return counts is map
+        && counts.keys().hasOnly(members)
+        && counts.keys().hasAll(members)
+        && counts[members[0]] is int
+        && counts[members[0]] >= 0
+        && counts[members[1]] is int
+        && counts[members[1]] >= 0;
+    }
+
+    function validProfileSnapshot(uid, snapshot) {
+      return hasProfile(uid)
+        && profileIsPublic(uid)
+        && snapshot.keys().hasAll([
+          'displayName', 'ageBand', 'ageCohort', 'gender', 'country', 'bio', 'interests'
+        ])
+        && snapshot.keys().hasOnly([
+          'displayName', 'ageBand', 'ageCohort', 'gender', 'country',
+          'bio', 'interests', 'contactPolicy'
+        ])
+        && snapshot.displayName == profile(uid).displayName
+        && snapshot.ageBand == profile(uid).ageBand
+        && snapshot.ageCohort == profile(uid).ageCohort
+        && snapshot.gender == profile(uid).gender
+        && snapshot.country == profile(uid).country
+        && snapshot.bio == profile(uid).bio
+        && snapshot.interests == profile(uid).interests
+        && snapshot.get('contactPolicy', 'everyone') == profile(uid).get('contactPolicy', 'everyone');
+    }
+
+    function validContactRequestCreate(recipientUid, senderUid) {
+      let data = request.resource.data;
+      return ageEligible()
+        && request.auth.uid == senderUid
+        && recipientUid != senderUid
+        && data.keys().hasAll([
+          'senderUid', 'recipientUid', 'conversationId', 'status',
+          'senderProfile', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'senderUid', 'recipientUid', 'conversationId', 'status',
+          'senderProfile', 'createdAt', 'updatedAt'
+        ])
+        && data.senderUid == senderUid
+        && data.recipientUid == recipientUid
+        && data.conversationId is string
+        && data.conversationId.size() > 0
+        && data.conversationId.size() <= 64
+        && data.status == 'pending'
+        && profileIsPublic(senderUid)
+        && profileIsPublic(recipientUid)
+        && sameAgeCohort(senderUid, recipientUid)
+        && profile(recipientUid).get('contactPolicy', 'everyone') in ['requests', 'matches']
+        && noPendingReverseContactRequest(recipientUid, senderUid)
+        && neitherBlocked(senderUid, recipientUid)
+        && validProfileSnapshot(senderUid, data.senderProfile)
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function validContactRequestUpdate(recipientUid, senderUid) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return ageEligible()
+        && request.auth.uid == recipientUid
+        && resource.data.senderUid == senderUid
+        && resource.data.recipientUid == recipientUid
+        && resource.data.status == 'pending'
+        && changed.hasOnly(['status', 'respondedBy', 'updatedAt'])
+        && changed.hasAll(['status', 'respondedBy', 'updatedAt'])
+        && request.resource.data.status in ['accepted', 'ignored']
+        && request.resource.data.respondedBy == recipientUid
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validContactApproval(chatId) {
+      let data = request.resource.data;
+      let acceptedRequestPath = contactRequestPath(data.recipientUid, data.senderUid);
+      return ageEligible()
+        && data.keys().hasAll([
+          'conversationId', 'recipientUid', 'senderUid', 'members', 'createdBy', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'conversationId', 'recipientUid', 'senderUid', 'members', 'createdBy', 'createdAt'
+        ])
+        && data.conversationId == chatId
+        && data.recipientUid == request.auth.uid
+        && data.senderUid is string
+        && data.senderUid != data.recipientUid
+        && data.members is list
+        && data.members.size() == 2
+        && request.auth.uid in data.members
+        && data.senderUid in data.members
+        && data.members[0] != data.members[1]
+        && data.createdBy == request.auth.uid
+        && data.createdAt == request.time
+        && existsAfter(acceptedRequestPath)
+        && getAfter(acceptedRequestPath).data.status == 'accepted'
+        && getAfter(acceptedRequestPath).data.respondedBy == data.recipientUid
+        && getAfter(acceptedRequestPath).data.conversationId == chatId;
+    }
+
+    function validNewChat(chatId) {
+      let members = request.resource.data.members;
+      let peerUid = otherMember(members);
+      return ageEligible()
+        && request.resource.data.keys().hasAll([
+          'members', 'ageCohort', 'memberProfiles', 'createdBy', 'createdAt',
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId',
+          'unreadCounts'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'members', 'ageCohort', 'memberProfiles', 'createdBy', 'createdAt',
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId',
+          'unreadCounts'
+        ])
+        && members is list
+        && members.size() == 2
+        && members[0] is string
+        && members[1] is string
+        && members[0] != members[1]
+        && request.auth.uid in members
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.ageCohort == 'adult'
+        && profileIsPublic(request.auth.uid)
+        && profileIsPublic(peerUid)
+        && sameAgeCohort(request.auth.uid, peerUid)
+        && request.resource.data.ageCohort == profile(request.auth.uid).ageCohort
+        && (profile(peerUid).get('contactPolicy', 'everyone') == 'everyone'
+          || approvedContactChat(chatId, members))
+        && neitherBlocked(request.auth.uid, peerUid)
+        && request.resource.data.memberProfiles is map
+        && validProfileSnapshot(request.auth.uid, request.resource.data.memberProfiles[request.auth.uid])
+        && validProfileSnapshot(peerUid, request.resource.data.memberProfiles[peerUid])
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.lastMessage == ''
+        && request.resource.data.lastMessageSenderUid == ''
+        && request.resource.data.lastMessageAt == request.time
+        && request.resource.data.lastMessageId == ''
+        && validUnreadCounts(request.resource.data)
+        && request.resource.data.unreadCounts[request.auth.uid] == 0
+        && request.resource.data.unreadCounts[peerUid] == 0;
+    }
+
+    function validMessageSend(chatId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let peerUid = otherMember(resource.data.members);
+      let messagePath = /databases/$(database)/documents/peopleChats/$(chatId)/messages/$(request.resource.data.lastMessageId);
+      return changed.hasOnly([
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId', 'unreadCounts'
+        ])
+        && changed.hasAll([
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId', 'unreadCounts'
+        ])
+        && request.resource.data.lastMessage is string
+        && request.resource.data.lastMessage.size() > 0
+        && request.resource.data.lastMessage.size() <= 2000
+        && request.resource.data.lastMessageSenderUid == request.auth.uid
+        && request.resource.data.lastMessageAt == request.time
+        && request.resource.data.lastMessageId is string
+        && request.resource.data.lastMessageId.size() > 0
+        && request.resource.data.lastMessageId.size() <= 1500
+        && validUnreadCounts(request.resource.data)
+        && request.resource.data.unreadCounts[request.auth.uid] == unreadCount(resource.data, request.auth.uid)
+        && request.resource.data.unreadCounts[peerUid] == unreadCount(resource.data, peerUid) + 1
+        && existsAfter(messagePath)
+        && getAfter(messagePath).data.senderUid == request.auth.uid
+        && getAfter(messagePath).data.text == request.resource.data.lastMessage
+        && getAfter(messagePath).data.createdAt == request.time;
+    }
+
+    function validReadUpdate() {
+      let peerUid = otherMember(resource.data.members);
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unreadCounts'])
+        && validUnreadCounts(request.resource.data)
+        && request.resource.data.unreadCounts[request.auth.uid] == 0
+        && request.resource.data.unreadCounts[peerUid] == unreadCount(resource.data, peerUid);
+    }
+
+    match /publicProfiles/{uid} {
+      allow get, list: if ageEligible()
+        && resource.data.ageCohort == 'adult'
+        && (request.auth.uid == uid
+          || (resource.data.isPublic == true
+            && hasProfile(request.auth.uid)
+            && profile(request.auth.uid).isPublic == true
+            && profile(request.auth.uid).ageCohort == 'adult'));
+
+      allow create: if ageEligible()
+        && request.auth.uid == uid
+        && validProfile(request.resource.data);
+
+      allow update: if ageEligible()
+        && request.auth.uid == uid
+        && validProfile(request.resource.data)
+        && request.resource.data.ageBand == resource.data.ageBand
+        && request.resource.data.ageCohort == resource.data.ageCohort;
+
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /peopleChats/{chatId} {
+      function callDocumentPath(callId) {
+        return /databases/$(database)/documents/peopleChats/$(chatId)/calls/$(callId);
+      }
+
+      function validCallParticipant(callData) {
+        let chat = get(/databases/$(database)/documents/peopleChats/$(chatId)).data;
+        return ageEligible()
+          && chat.ageCohort == 'adult'
+          && chat.members is list
+          && chat.members.size() == 2
+          && isMember(chat)
+          && callData.callerUid is string
+          && callData.calleeUid is string
+          && callData.callerUid != callData.calleeUid
+          && callData.callerUid in chat.members
+          && callData.calleeUid in chat.members
+          && request.auth.uid in [callData.callerUid, callData.calleeUid]
+          && neitherBlocked(callData.callerUid, callData.calleeUid);
+      }
+
+      function validCallDescription(description, expectedType) {
+        return description is map
+          && description.keys().hasAll(['type', 'sdp'])
+          && description.keys().hasOnly(['type', 'sdp'])
+          && description.type == expectedType
+          && description.sdp is string
+          && description.sdp.size() > 0
+          && description.sdp.size() <= 65536;
+      }
+
+      function validCallCreate(callId) {
+        let data = request.resource.data;
+        let members = get(/databases/$(database)/documents/peopleChats/$(chatId)).data.members;
+        return data.keys().hasAll([
+            'callerUid', 'calleeUid', 'status', 'offer',
+            'createdAt', 'updatedAt', 'ringExpiresAt', 'expiresAt'
+          ])
+          && data.keys().hasOnly([
+            'callerUid', 'calleeUid', 'mediaType', 'status', 'offer',
+            'createdAt', 'updatedAt', 'ringExpiresAt', 'expiresAt'
+          ])
+          && (!data.keys().hasAny(['mediaType']) || data.mediaType in ['audio', 'video'])
+          && callId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.callerUid == request.auth.uid
+          && data.calleeUid == otherMember(members)
+          && data.status == 'ringing'
+          && validCallDescription(data.offer, 'offer')
+          && data.createdAt == request.time
+          && data.updatedAt == request.time
+          && data.ringExpiresAt is timestamp
+          && data.ringExpiresAt > request.time
+          && data.ringExpiresAt <= request.time + duration.value(120, 's')
+          && data.expiresAt is timestamp
+          && data.expiresAt > data.ringExpiresAt
+          && data.expiresAt <= request.time + duration.value(3600, 's')
+          && validCallParticipant(data);
+      }
+
+      function validCallUpdate() {
+        let oldData = resource.data;
+        let newData = request.resource.data;
+        let changed = newData.diff(oldData).affectedKeys();
+        let accepting = newData.status == 'accepted'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.calleeUid
+          && changed.hasAll(['status', 'answer', 'updatedAt'])
+          && validCallDescription(newData.answer, 'answer');
+        let rejecting = newData.status == 'rejected'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.calleeUid
+          && changed.hasOnly(['status', 'updatedAt']);
+        let cancelling = newData.status == 'cancelled'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.callerUid
+          && changed.hasOnly(['status', 'updatedAt']);
+        let missing = newData.status == 'missed'
+          && oldData.status == 'ringing'
+          && request.auth.uid == oldData.calleeUid
+          && request.time >= oldData.ringExpiresAt
+          && changed.hasOnly(['status', 'updatedAt']);
+        let ending = newData.status == 'ended'
+          && oldData.status == 'accepted'
+          && changed.hasOnly(['status', 'updatedAt']);
+        return validCallParticipant(oldData)
+          && changed.hasOnly(['status', 'answer', 'updatedAt'])
+          && newData.callerUid == oldData.callerUid
+          && newData.calleeUid == oldData.calleeUid
+          && newData.offer == oldData.offer
+          && newData.createdAt == oldData.createdAt
+          && newData.ringExpiresAt == oldData.ringExpiresAt
+          && newData.expiresAt == oldData.expiresAt
+          && newData.updatedAt == request.time
+          && (accepting || rejecting || cancelling || missing || ending);
+      }
+
+      function validCallCandidate(candidate, callData, side) {
+        return candidate.keys().hasAll([
+            'sdp', 'sdpMid', 'sdpMLineIndex', 'createdAt', 'expiresAt'
+          ])
+          && candidate.keys().hasOnly([
+            'sdp', 'sdpMid', 'sdpMLineIndex', 'createdAt', 'expiresAt'
+          ])
+          && candidate.sdp is string
+          && candidate.sdp.size() > 0
+          && candidate.sdp.size() <= 4096
+          && (candidate.sdpMid == null || candidate.sdpMid is string)
+          && candidate.sdpMLineIndex is int
+          && candidate.sdpMLineIndex >= 0
+          && candidate.sdpMLineIndex <= 65535
+          && candidate.createdAt == request.time
+          && candidate.expiresAt == callData.expiresAt
+          && request.auth.uid == (side == 'caller' ? callData.callerUid : callData.calleeUid);
+      }
+
+      allow create: if validNewChat(chatId);
+      allow get, list: if ageEligible() && isAdultChat(resource.data) && isMember(resource.data);
+      allow update: if ageEligible() && isAdultChat(resource.data) && isMember(resource.data)
+        && neitherBlocked(request.auth.uid, otherMember(resource.data.members))
+        && request.resource.data.members == resource.data.members
+        && request.resource.data.ageCohort == resource.data.ageCohort
+        && request.resource.data.memberProfiles == resource.data.memberProfiles
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (validMessageSend(chatId) || validReadUpdate());
+
+      match /messages/{messageId} {
+        function parentChatPath() {
+          return /databases/$(database)/documents/peopleChats/$(chatId);
+        }
+
+        function parentChat() {
+          return get(parentChatPath()).data;
+        }
+
+        allow get, list: if ageEligible() && isAdultChat(parentChat()) && isMember(parentChat());
+        allow create: if ageEligible()
+          && isAdultChat(parentChat())
+          && isMember(parentChat())
+          && neitherBlocked(request.auth.uid, otherMember(parentChat().members))
+          && request.resource.data.keys().hasAll(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000
+          && request.resource.data.createdAt == request.time
+          && existsAfter(parentChatPath())
+          && getAfter(parentChatPath()).data.lastMessageId == messageId
+          && getAfter(parentChatPath()).data.lastMessage == request.resource.data.text
+          && getAfter(parentChatPath()).data.lastMessageSenderUid == request.auth.uid;
+      }
+
+      match /calls/{callId} {
+        allow create: if validCallCreate(callId);
+        allow get, list: if validCallParticipant(resource.data)
+          && resource.data.expiresAt is timestamp
+          && resource.data.expiresAt > request.time;
+        allow update: if validCallUpdate();
+        allow delete: if false;
+
+        match /callerCandidates/{candidateId} {
+          function parentCall() {
+            return get(callDocumentPath(callId)).data;
+          }
+
+          allow get, list: if validCallParticipant(parentCall())
+            && parentCall().expiresAt > request.time;
+          allow create: if validCallParticipant(parentCall())
+            && parentCall().status in ['ringing', 'accepted']
+            && parentCall().expiresAt > request.time
+            && validCallCandidate(request.resource.data, parentCall(), 'caller');
+          allow update, delete: if false;
+        }
+
+        match /calleeCandidates/{candidateId} {
+          function parentCall() {
+            return get(callDocumentPath(callId)).data;
+          }
+
+          allow get, list: if validCallParticipant(parentCall())
+            && parentCall().expiresAt > request.time;
+          allow create: if validCallParticipant(parentCall())
+            && parentCall().status in ['ringing', 'accepted']
+            && parentCall().expiresAt > request.time
+            && validCallCandidate(request.resource.data, parentCall(), 'callee');
+          allow update, delete: if false;
+        }
+      }
+    }
+
+    match /peopleContactRequests/{recipientUid}/incoming/{senderUid} {
+      allow get: if ageEligible()
+        && (request.auth.uid == recipientUid || request.auth.uid == senderUid)
+        && resource.data.recipientUid == recipientUid
+        && resource.data.senderUid == senderUid;
+      allow list: if ageEligible()
+        && request.auth.uid == recipientUid
+        && resource.data.recipientUid == recipientUid;
+      allow create: if validContactRequestCreate(recipientUid, senderUid);
+      allow update: if validContactRequestUpdate(recipientUid, senderUid);
+      allow delete: if false;
+    }
+
+    match /{path=**}/incoming/{senderUid} {
+      allow list: if ageEligible()
+        && resource.data.senderUid == request.auth.uid
+        && resource.data.status in ['pending', 'accepted', 'ignored'];
+    }
+
+    match /peopleContactApprovals/{chatId} {
+      allow get, list: if ageEligible() && resource.data.recipientUid == request.auth.uid;
+      allow create: if validContactApproval(chatId);
+      allow update, delete: if false;
+    }
+
+    match /peopleBlocks/{ownerUid}/blockedUsers/{blockedUid} {
+      allow get, list: if ageEligible() && request.auth.uid == ownerUid;
+      allow create, update: if ageEligible()
+        && request.auth.uid == ownerUid
+        && ownerUid != blockedUid
+        && request.resource.data.keys().hasOnly(['createdAt'])
+        && request.resource.data.createdAt == request.time;
+      allow delete: if signedIn() && request.auth.uid == ownerUid;
+    }
+
+    match /peopleCallTokens/{uid}/devices/{deviceId} {
+      allow get, list: if false;
+      allow create, update: if ageEligible()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasAll(['token', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 32
+        && request.resource.data.token.size() <= 4096
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /peopleMessageTokens/{uid}/devices/{deviceId} {
+      allow get, list: if false;
+      allow create, update: if ageEligible()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasAll(['token', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 32
+        && request.resource.data.token.size() <= 4096
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /peopleReports/{reportId} {
+      allow create: if ageEligible()
+        && request.resource.data.keys().hasAll([
+          'reporterUid', 'targetUid', 'reason', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'reporterUid', 'targetUid', 'conversationId', 'contactRequestId', 'profileUid', 'reason', 'createdAt'
+        ])
+        && request.resource.data.reporterUid == request.auth.uid
+        && request.resource.data.targetUid is string
+        && request.resource.data.targetUid != request.auth.uid
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() >= 3
+        && request.resource.data.reason.size() <= 500
+        && request.resource.data.createdAt == request.time
+        && (
+          (request.resource.data.keys().hasAny(['conversationId'])
+            && !request.resource.data.keys().hasAny(['contactRequestId', 'profileUid'])
+            && request.resource.data.conversationId is string
+            && exists(/databases/$(database)/documents/peopleChats/$(request.resource.data.conversationId))
+            && get(/databases/$(database)/documents/peopleChats/$(request.resource.data.conversationId)).data.ageCohort == 'adult'
+            && isMember(get(/databases/$(database)/documents/peopleChats/$(request.resource.data.conversationId)).data)
+            && request.resource.data.targetUid in get(/databases/$(database)/documents/peopleChats/$(request.resource.data.conversationId)).data.members)
+          ||
+          (request.resource.data.keys().hasAny(['contactRequestId'])
+            && !request.resource.data.keys().hasAny(['conversationId', 'profileUid'])
+            && request.resource.data.contactRequestId == request.resource.data.targetUid
+            && exists(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId))
+            && get(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId)).data.status == 'pending'
+            && get(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId)).data.recipientUid == request.auth.uid
+            && get(contactRequestPath(request.auth.uid, request.resource.data.contactRequestId)).data.senderUid == request.resource.data.targetUid)
+          ||
+          (request.resource.data.keys().hasAny(['profileUid'])
+            && !request.resource.data.keys().hasAny(['conversationId', 'contactRequestId'])
+            && request.resource.data.profileUid is string
+            && request.resource.data.profileUid == request.resource.data.targetUid
+            && profileIsPublic(request.resource.data.profileUid)
+            && profile(request.resource.data.profileUid).ageCohort == 'adult'
+            && profileIsPublic(request.auth.uid)
+            && profile(request.auth.uid).ageCohort == 'adult')
+        );
+      allow get, list, update, delete: if false;
+    }
+
+    match /secureOrgs/{orgId} {
+      function featureConfigPath() {
+        return /databases/$(database)/documents/secureOrgConfig/superSecure;
+      }
+
+      function secureFeatureEnabled() {
+        return exists(featureConfigPath())
+          && get(featureConfigPath()).data.enabled == true;
+      }
+
+      function orgPath() {
+        return /databases/$(database)/documents/secureOrgs/$(orgId);
+      }
+
+      function memberPath(uid) {
+        return /databases/$(database)/documents/secureOrgs/$(orgId)/members/$(uid);
+      }
+
+      function auditPath(auditId) {
+        return /databases/$(database)/documents/secureOrgs/$(orgId)/auditLog/$(auditId);
+      }
+
+      function memberCountTransition(auditId, targetUid, action, delta) {
+        let targetPath = memberPath(targetUid);
+        let eventPath = auditPath(auditId);
+        let orgBefore = get(orgPath()).data;
+        let orgAfter = getAfter(orgPath()).data;
+        return existsAfter(targetPath)
+          && existsAfter(eventPath)
+          && orgBefore.memberCount is int
+          && orgAfter.memberCount == orgBefore.memberCount + delta
+          && orgAfter.memberCount >= 1
+          && orgAfter.memberCount <= 25
+          && orgAfter.memberCountAuditEventId == auditId
+          && getAfter(targetPath).data.auditEventId == auditId
+          && getAfter(targetPath).data.actorUid == request.auth.uid
+          && getAfter(eventPath).data.actorUid == request.auth.uid
+          && getAfter(eventPath).data.targetUid == targetUid
+          && getAfter(eventPath).data.action == action
+          && getAfter(eventPath).data.createdAt == request.time;
+      }
+
+      function activeMember(uid) {
+        return secureFeatureEnabled()
+          && ageEligible()
+          && exists(memberPath(uid))
+          && get(memberPath(uid)).data.status == 'active'
+          && get(memberPath(uid)).data.uid == uid;
+      }
+
+      function isMember() {
+        return activeMember(request.auth.uid);
+      }
+
+      function isOwner() {
+        return isMember() && get(memberPath(request.auth.uid)).data.role == 'owner';
+      }
+
+      function isManager() {
+        return isMember()
+          && get(memberPath(request.auth.uid)).data.role in ['owner', 'manager'];
+      }
+
+      function secureActorRole() {
+        let path = memberPath(request.auth.uid);
+        let memberExists = exists(path);
+        let member = memberExists ? get(path).data : null;
+        return (secureFeatureEnabled()
+            && ageEligible()
+            && memberExists
+            && member.uid == request.auth.uid
+            && member.status == 'active')
+          ? member.role
+          : '';
+      }
+
+      function validCountAudit(auditId, delta, actorRole, ownerUid) {
+        let eventPath = auditPath(auditId);
+        let eventExists = existsAfter(eventPath);
+        let event = eventExists ? getAfter(eventPath).data : null;
+        let targetUid = event is map && event.targetUid is string
+          ? event.targetUid
+          : '';
+        let targetPath = memberPath(targetUid);
+        let targetExists = existsAfter(targetPath);
+        let target = targetExists ? getAfter(targetPath).data : null;
+        return eventExists
+          && targetExists
+          && event is map
+          && target is map
+          && event.actorUid == request.auth.uid
+          && event.targetUid == targetUid
+          && event.createdAt == request.time
+          && target.uid == targetUid
+          && target.auditEventId == auditId
+          && target.actorUid == request.auth.uid
+          && targetUid != ownerUid
+          && (
+            (delta == 1
+              && event.action == 'member_added'
+              && actorRole in ['owner', 'manager']
+              && target.role == 'member'
+              && target.status == 'active')
+            || (delta == 1
+              && event.action == 'manager_added'
+              && actorRole == 'owner'
+              && target.role == 'manager'
+              && target.status == 'active')
+            || (delta == -1
+              && event.action == 'member_removed'
+              && actorRole in ['owner', 'manager']
+              && target.role == 'member'
+              && target.status == 'removed')
+            || (delta == -1
+              && event.action == 'manager_removed'
+              && actorRole == 'owner'
+              && target.role == 'manager'
+              && target.status == 'removed')
+          );
+      }
+
+      function validOrgMemberCountUpdate() {
+        let data = request.resource.data;
+        let changed = data.diff(resource.data).affectedKeys();
+        let auditId = data.memberCountAuditEventId;
+        let actorRole = secureActorRole();
+        let delta = data.memberCount - resource.data.memberCount;
+        return actorRole in ['owner', 'manager']
+          && changed.hasOnly(['memberCount', 'memberCountAuditEventId'])
+          && changed.hasAll(['memberCount', 'memberCountAuditEventId'])
+          && resource.data.memberCount is int
+          && data.memberCount is int
+          && auditId is string
+          && auditId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.memberCount >= 1
+          && data.memberCount <= 25
+          && data.memberCountAuditEventId == auditId
+          && validCountAudit(auditId, delta, actorRole, resource.data.ownerUid);
+      }
+
+      function auditMatches(auditId, targetUid, action, role, status) {
+        let targetPath = memberPath(targetUid);
+        let eventPath = auditPath(auditId);
+        return existsAfter(targetPath)
+          && getAfter(targetPath).data.auditEventId == auditId
+          && getAfter(targetPath).data.actorUid == request.auth.uid
+          && getAfter(targetPath).data.role == role
+          && getAfter(targetPath).data.status == status
+          && existsAfter(eventPath)
+          && getAfter(eventPath).data.actorUid == request.auth.uid
+          && getAfter(eventPath).data.targetUid == targetUid
+          && getAfter(eventPath).data.action == action
+          && getAfter(eventPath).data.createdAt == request.time;
+      }
+
+      function validOrgCreatedAudit(auditId, data) {
+        let targetUid = data.targetUid;
+        let targetPath = memberPath(targetUid);
+        let targetExists = existsAfter(targetPath);
+        let target = targetExists ? getAfter(targetPath).data : null;
+        let organizationExists = existsAfter(orgPath());
+        let organization = organizationExists ? getAfter(orgPath()).data : null;
+        return secureFeatureEnabled()
+          && ageEligible()
+          && organizationExists
+          && organization.ownerUid == request.auth.uid
+          && targetExists
+          && target.uid == targetUid
+          && target.auditEventId == auditId
+          && target.actorUid == request.auth.uid
+          && targetUid == request.auth.uid
+          && target.role == 'owner'
+          && target.status == 'active';
+      }
+
+      function validMemberCountAudit(auditId, data) {
+        let targetPath = memberPath(data.targetUid);
+        let targetExists = existsAfter(targetPath);
+        let target = targetExists ? getAfter(targetPath).data : null;
+        let targetMatches = targetExists
+          && target.uid == data.targetUid
+          && target.auditEventId == auditId
+          && target.actorUid == request.auth.uid;
+        return targetMatches
+          && (
+            (data.action == 'member_added'
+              && target.role == 'member'
+              && target.status == 'active')
+            || (data.action == 'manager_added'
+              && target.role == 'manager'
+              && target.status == 'active')
+            || (data.action == 'member_removed'
+              && target.role == 'member'
+              && target.status == 'removed')
+            || (data.action == 'manager_removed'
+              && target.role == 'manager'
+              && target.status == 'removed')
+          );
+      }
+
+      function validManagerRoleAudit(auditId, data) {
+        let targetPath = memberPath(data.targetUid);
+        let targetExists = existsAfter(targetPath);
+        let target = targetExists ? getAfter(targetPath).data : null;
+        let targetMatches = targetExists
+          && target.uid == data.targetUid
+          && target.auditEventId == auditId
+          && target.actorUid == request.auth.uid;
+        return targetMatches
+          && (
+            (data.action == 'manager_promoted'
+              && target.role == 'manager'
+              && target.status == 'active')
+            || (data.action == 'manager_demoted'
+              && target.role == 'member'
+              && target.status == 'active')
+          );
+      }
+
+      function validSecureOrgAudit(auditId, data) {
+        return (data.action == 'org_created' && validOrgCreatedAudit(auditId, data))
+          || (data.action in ['member_added', 'manager_added', 'member_removed', 'manager_removed']
+            && validMemberCountAudit(auditId, data))
+          || (data.action in ['manager_promoted', 'manager_demoted']
+            && validManagerRoleAudit(auditId, data));
+      }
+
+      function validAuditCreate(auditId) {
+        let data = request.resource.data;
+        return data.keys().hasAll(['actorUid', 'targetUid', 'action', 'createdAt'])
+          && data.keys().hasOnly(['actorUid', 'targetUid', 'action', 'createdAt'])
+          && data.actorUid == request.auth.uid
+          && data.targetUid is string
+          && auditId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.createdAt == request.time
+          && validSecureOrgAudit(auditId, data);
+      }
+
+      function validMemberCreate(memberUid) {
+        let data = request.resource.data;
+        let isOwnerBootstrap = memberUid == request.auth.uid
+          && data.role == 'owner'
+          && existsAfter(orgPath())
+          && getAfter(orgPath()).data.ownerUid == request.auth.uid
+          && auditMatches(data.auditEventId, memberUid, 'org_created', 'owner', 'active');
+        let isMemberAdmission = isManager()
+          && data.role == 'member'
+          && auditMatches(data.auditEventId, memberUid, 'member_added', 'member', 'active')
+          && memberCountTransition(data.auditEventId, memberUid, 'member_added', 1);
+        let isManagerAdmission = isOwner()
+          && data.role == 'manager'
+          && auditMatches(data.auditEventId, memberUid, 'manager_added', 'manager', 'active')
+          && memberCountTransition(data.auditEventId, memberUid, 'manager_added', 1);
+        return secureFeatureEnabled()
+          && ageEligible()
+          && data.keys().hasAll([
+            'uid', 'displayName', 'role', 'status', 'actorUid',
+            'auditEventId', 'organizationName', 'createdAt', 'updatedAt'
+          ])
+          && data.keys().hasOnly([
+            'uid', 'displayName', 'role', 'status', 'actorUid',
+            'auditEventId', 'organizationName', 'createdAt', 'updatedAt'
+          ])
+          && data.uid == memberUid
+          && data.displayName is string
+          && data.displayName.size() > 0
+          && data.displayName.size() <= 60
+          && data.role in ['owner', 'manager', 'member']
+          && data.status == 'active'
+          && data.actorUid == request.auth.uid
+          && data.auditEventId is string
+          && data.auditEventId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.organizationName is string
+          && data.organizationName.size() >= 2
+          && data.organizationName.size() <= 80
+          && data.createdAt == request.time
+          && data.updatedAt == request.time
+          && (isOwnerBootstrap || isMemberAdmission || isManagerAdmission);
+      }
+
+      function validMemberCountMutation(memberUid, auditId, action) {
+        let eventPath = auditPath(auditId);
+        let eventExists = existsAfter(eventPath);
+        let event = eventExists ? getAfter(eventPath).data : null;
+        let organizationAfter = getAfter(orgPath()).data;
+        return eventExists
+          && event is map
+          && event.targetUid == memberUid
+          && event.action == action
+          && event.createdAt == request.time
+          && organizationAfter.memberCountAuditEventId == auditId;
+      }
+
+      function validManagerRoleMutation(memberUid, auditId, action) {
+        let eventPath = auditPath(auditId);
+        let eventExists = existsAfter(eventPath);
+        let event = eventExists ? getAfter(eventPath).data : null;
+        let actorRole = secureActorRole();
+        return eventExists
+          && actorRole == 'owner'
+          && event is map
+          && event.actorUid == request.auth.uid
+          && event.targetUid == memberUid
+          && event.action == action
+          && event.createdAt == request.time;
+      }
+
+      function validMemberUpdate(memberUid) {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let data = request.resource.data;
+        let auditId = data.auditEventId;
+        return resource.data.uid == memberUid
+          && data.uid == resource.data.uid
+          && data.createdAt == resource.data.createdAt
+          && data.actorUid == request.auth.uid
+          && data.updatedAt == request.time
+          && auditId is string
+          && auditId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && changed.hasOnly(['role', 'status', 'actorUid', 'auditEventId', 'updatedAt'])
+          && changed.hasAll(['auditEventId', 'updatedAt'])
+          && (
+            (resource.data.status == 'active'
+              && data.status == 'removed'
+              && resource.data.role == 'member'
+              && data.role == 'member'
+              && validMemberCountMutation(memberUid, auditId, 'member_removed'))
+            || (resource.data.status == 'active'
+              && data.status == 'removed'
+              && resource.data.role == 'manager'
+              && data.role == 'manager'
+              && validMemberCountMutation(memberUid, auditId, 'manager_removed'))
+            || (resource.data.status == 'removed'
+              && data.status == 'active'
+              && data.role == 'member'
+              && validMemberCountMutation(memberUid, auditId, 'member_added'))
+            || (resource.data.status == 'removed'
+              && data.status == 'active'
+              && data.role == 'manager'
+              && validMemberCountMutation(memberUid, auditId, 'manager_added'))
+            || (resource.data.status == 'active'
+              && data.status == 'active'
+              && resource.data.role == 'member'
+              && data.role == 'manager'
+              && validManagerRoleMutation(memberUid, auditId, 'manager_promoted'))
+            || (resource.data.status == 'active'
+              && data.status == 'active'
+              && resource.data.role == 'manager'
+              && data.role == 'member'
+              && validManagerRoleMutation(memberUid, auditId, 'manager_demoted'))
+          );
+      }
+
+      function validOrgCreate() {
+        let data = request.resource.data;
+        let ownerPath = memberPath(request.auth.uid);
+        let groupPath = /databases/$(database)/documents/secureOrgs/$(orgId)/groupChats/main;
+        return secureFeatureEnabled()
+          && ageEligible()
+          && data.keys().hasAll([
+            'name', 'ownerUid', 'memberCount', 'memberCountAuditEventId', 'createdAt'
+          ])
+          && data.keys().hasOnly([
+            'name', 'ownerUid', 'memberCount', 'memberCountAuditEventId', 'createdAt'
+          ])
+          && data.name is string
+          && data.name.size() >= 2
+          && data.name.size() <= 80
+          && data.ownerUid == request.auth.uid
+          && data.memberCount == 1
+          && data.memberCountAuditEventId is string
+          && data.memberCountAuditEventId.matches('^[A-Za-z0-9_-]{1,128}$')
+          && data.createdAt == request.time
+          && existsAfter(ownerPath)
+          && getAfter(ownerPath).data.role == 'owner'
+          && getAfter(ownerPath).data.status == 'active'
+          && getAfter(ownerPath).data.auditEventId == data.memberCountAuditEventId
+          && existsAfter(groupPath)
+          && getAfter(groupPath).data.createdBy == request.auth.uid
+          && getAfter(groupPath).data.createdAt == request.time;
+      }
+
+      allow get: if isMember();
+      allow list: if false;
+      allow create: if signedIn() && validOrgCreate();
+      allow update: if validOrgMemberCountUpdate();
+      allow delete: if false;
+
+      match /members/{memberUid} {
+        allow get: if (isMember() && isManager())
+          || (isMember() && resource.data.status == 'active')
+          || (signedIn() && request.auth.uid == memberUid && secureFeatureEnabled());
+        allow list: if isMember() && resource.data.status == 'active';
+        allow create: if signedIn() && validMemberCreate(memberUid);
+        allow update: if signedIn() && validMemberUpdate(memberUid);
+        allow delete: if false;
+      }
+
+      match /auditLog/{auditId} {
+        allow get, list: if isManager();
+        allow create: if signedIn() && validAuditCreate(auditId);
+        allow update, delete: if false;
+      }
+
+      match /groupChats/{chatId} {
+        function initialOwnerGroup() {
+          let ownerPath = memberPath(request.auth.uid);
+          return signedIn()
+            && secureFeatureEnabled()
+            && existsAfter(orgPath())
+            && getAfter(orgPath()).data.ownerUid == request.auth.uid
+            && existsAfter(ownerPath)
+            && getAfter(ownerPath).data.role == 'owner'
+            && getAfter(ownerPath).data.status == 'active';
+        }
+
+        allow get, list: if chatId == 'main' && isMember();
+        allow create: if chatId == 'main'
+          && request.resource.data.keys().hasAll(['createdBy', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['createdBy', 'createdAt'])
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && (isManager() || initialOwnerGroup());
+        allow update, delete: if false;
+
+        match /messages/{messageId} {
+          function validTextMessage() {
+            let data = request.resource.data;
+            return data.keys().hasAll(['senderUid', 'text', 'createdAt'])
+              && data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+              && data.senderUid == request.auth.uid
+              && data.text is string
+              && data.text.size() > 0
+              && data.text.size() <= 4000
+              && data.createdAt == request.time;
+          }
+
+          allow get, list: if chatId == 'main' && isMember();
+          allow create: if chatId == 'main' && isMember()
+            && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/groupChats/main)
+            && validTextMessage();
+          allow update, delete: if false;
+        }
+      }
+
+      match /directChats/{chatId} {
+        function validDirectMembers(members) {
+          return members is list
+            && members.size() == 2
+            && members[0] is string
+            && members[1] is string
+            && members[0] != members[1]
+            && request.auth.uid in members
+            && activeMember(members[0])
+            && activeMember(members[1]);
+        }
+
+        allow get, list: if isMember()
+          && resource.data.members is list
+          && request.auth.uid in resource.data.members
+          && activeMember(resource.data.members[0])
+          && activeMember(resource.data.members[1]);
+        allow create: if isMember()
+          && request.resource.data.keys().hasAll(['members', 'createdBy', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['members', 'createdBy', 'createdAt'])
+          && validDirectMembers(request.resource.data.members)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+
+        match /messages/{messageId} {
+          function directMembers() {
+            let path = /databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId);
+            return existsAfter(path) ? getAfter(path).data.members : [];
+          }
+
+          function validDirectTextMessage() {
+            let data = request.resource.data;
+            let members = directMembers();
+            return data.keys().hasAll(['senderUid', 'text', 'createdAt'])
+              && data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+              && data.senderUid == request.auth.uid
+              && data.text is string
+              && data.text.size() > 0
+              && data.text.size() <= 4000
+              && data.createdAt == request.time
+              && members is list
+              && request.auth.uid in members
+              && members.size() == 2
+              && activeMember(members[0])
+              && activeMember(members[1]);
+          }
+
+          allow get, list: if isMember()
+            && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId))
+            && request.auth.uid in get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members
+            && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[0])
+            && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[1]);
+          allow create: if isMember() && validDirectTextMessage();
+          allow update, delete: if false;
+        }
+      }
+    }
+  }
+}

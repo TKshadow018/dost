@@ -38,27 +38,59 @@ foreach ($forbidden as $pattern => $reason) {
 }
 
 $required = array(
-    '3,650' => 'states the 3,650-day server retention period',
+    '1,095' => 'states the 1,095-day server retention period',
     'Delete server archive' => 'describes the in-app server archive deletion control',
-    'export or import local data' => 'describes local data export and import',
+    'Settings can export your profile' => 'describes local data export and import',
     'does not include your OpenRouter API key or installation id' => 'states sensitive data is excluded from backup',
     'hashed-installation deletion marker' => 'discloses metadata retained to suppress delayed uploads',
     'chat transcript file' => 'states that friend removal deletes the local transcript',
     'learned memories' => 'states that friend removal deletes local memories',
     'session summaries' => 'states that friend removal deletes local summaries',
-    'whole-number age from 13 through 120' => 'states the registration age requirement',
-    'user or friend is under 18' => 'states the romance age gate',
+    'whole-number age from 18 through 120' => 'states the registration age requirement',
+    'Firebase sign-in token and a Play Integrity token' => 'discloses tokens sent for People eligibility',
+    'up to six hours' => 'states the short eligibility-claim lifetime',
+    'does not independently confirm the source of the age range' => 'does not overstate age verification',
+    'Only Firebase project administrators can review reports' => 'identifies who can review social reports',
+    'within 72 hours' => 'states the report review target',
+    'do not automatically suspend an account or hide a profile' => 'discloses manual report handling',
+    'contact local emergency services if someone is in immediate danger' => 'discloses emergency guidance',
+    'You may appeal an account or profile action by emailing' => 'provides an appeal route',
+    'A minor range' => 'states that the app blocks minor age signals',
     'child-directed service' => 'states that Dost is not a child-directed service',
     'tushartk018@gmail.com' => 'keeps the archive-request contact address',
-    'November 12, 2026' => 'uses the revised effective date',
+    'November 27, 2026' => 'uses the revised effective date',
+    'Google Play Billing' => 'states that Google Play handles Premium payments',
+    'never receives or stores your card number' => 'states that Dost does not receive payment-method details',
+    'Premium entitlement claims' => 'discloses stored Premium entitlement claims',
+    'Payments & subscriptions > Subscriptions' => 'explains how to cancel subscriptions',
+    'Firebase Crashlytics' => 'discloses crash reporting',
+    'retains crash stack traces and associated identifiers for 90 days' => 'states crash-report retention',
     'API keys are not written into conversation logs' => 'still says API keys are not logged',
     'chat_images' => 'mentions chat image files',
     'system-friend-photos' => 'says system-friend photos are excluded from backup',
-    'up to the 200 most recent saved facts' => 'names learned facts sent with each turn',
+    'Up to six core facts from your saved people and preference profile' => 'names learned facts sent with each turn',
     'up to the seven most recent summaries' => 'names session summaries sent with each turn',
     'friendship score and love score' => 'names relationship scores sent with each turn',
     'does not display the installation id' => 'says the app does not display the installation id',
-    'installation id' => 'describes install-id lookup for newer archives'
+    'installation id' => 'describes install-id lookup for newer archives',
+    'Share anonymous event counts' => 'discloses optional event-only analytics',
+    'daily event totals for 90 days' => 'states analytics data retention',
+    'does not receive message content, profile details, account data, or installation ids' => 'states analytics excludes conversation and identity data',
+    'may see your IP address' => 'discloses IP visibility to the API host',
+    'It does not inspect image contents' => 'states the text classifier cannot inspect chat images',
+    'without image-content moderation' => 'discloses adult image moderation is not provided',
+    'Super Secure is an invite-only organization messaging feature' => 'describes the separate closed-group feature',
+    'currently disabled by default' => 'discloses that Super Secure is not enabled by default',
+    'member UIDs, display names, roles and status' => 'describes organization membership data',
+    'Managers admit members by Firebase UID' => 'describes manager-controlled membership',
+    'not end-to-end encrypted' => 'discloses that Super Secure does not provide end-to-end encryption',
+    'not used for model training, product improvement, experiments, or quality testing' => 'prohibits secondary use of organization data',
+    'not sent to Dost\'s AI API, OpenRouter' => 'describes isolation from AI systems',
+    'attach message text, member fields, UIDs, organization IDs, or invite details to Crashlytics custom keys or logs' => 'describes Crashlytics restrictions for organization data',
+    'at most 25 current members' => 'states the MVP organization-size limit',
+    'automated JSON/media export' => 'describes the MVP export limitation',
+    'request deletion by emailing the Contact Us address' => 'states the org deletion request path',
+    'The app\'s private SQLite database files are also excluded' => 'states local cache is excluded from backup'
 );
 foreach ($required as $needle => $reason) {
     if (strpos($text, $needle) === false) {
@@ -74,4 +106,4 @@ if (count($failures) > 0) {
     exit(1);
 }
 
-fwrite(STDOUT, "PASS: privacy policy matches local deletion, 3,650-day retention, and the age gate.\n");
+fwrite(STDOUT, "PASS: privacy policy matches local deletion, report handling, retention, and age controls.\n");

@@ -5,23 +5,172 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.util.AtomicFile
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import java.security.MessageDigest
+import java.time.LocalDate
 import java.time.ZoneId
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class DostStore(context: Context) {
+private const val SYSTEM_FRIEND_PASS_KEY_PREFIX = "system_friend_passed_at_"
+internal const val SYSTEM_FRIEND_PASS_DURATION_MILLIS = 7L * 24L * 60L * 60L * 1000L
+private const val PEOPLE_PROFILE_PASS_KEY_PREFIX = "people_profile_passed_at_"
+internal const val PEOPLE_PROFILE_PASS_DURATION_MILLIS = 90L * 24L * 60L * 60L * 1000L
+internal const val LEGACY_PROFILE_NAMESPACE = "legacy"
+private const val ACCOUNT_REGISTRY_PREFERENCES = "dost_account_registry"
+private const val ACTIVE_PROFILE_NAMESPACE = "active_profile_namespace"
+private val profileRegistryLock = Any()
+private val peopleOutboxLock = Any()
+
+internal fun accountProfileNamespace(accountId: String): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(accountId.toByteArray(StandardCharsets.UTF_8))
+    return "account_" + digest.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+}
+
+internal fun profileNamespaceForAccount(
+    activeNamespace: String,
+    storedAccountIds: List<String>,
+    accountId: String,
+    mappedNamespace: String?
+): String = mappedNamespace ?: if (
+    activeNamespace == LEGACY_PROFILE_NAMESPACE &&
+    (storedAccountIds.isEmpty() || accountId in storedAccountIds)
+) {
+    LEGACY_PROFILE_NAMESPACE
+} else {
+    accountProfileNamespace(accountId)
+}
+
+internal fun activeProfileNamespace(context: Context): String =
+    context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+        .getString(ACTIVE_PROFILE_NAMESPACE, LEGACY_PROFILE_NAMESPACE)
+        ?.takeIf { it == LEGACY_PROFILE_NAMESPACE || it.matches(Regex("account_[0-9a-f]{64}")) }
+        ?: LEGACY_PROFILE_NAMESPACE
+
+internal fun activeProfilePreferences(context: Context): SharedPreferences =
+    profilePreferences(context, activeProfileNamespace(context))
+
+internal fun languageForActiveProfile(context: Context): AppLanguage {
+    val preferences = activeProfilePreferences(context)
+    return when (preferences.getString("language", "bn")) {
+        "en" -> AppLanguage.ENGLISH
+        "hi" -> AppLanguage.HINDI
+        else -> AppLanguage.BANGLA
+    }
+}
+
+private fun profilePreferences(context: Context, namespace: String): SharedPreferences =
+    ScopedSharedPreferences(
+        context.getSharedPreferences("dost_local_data", Context.MODE_PRIVATE),
+        if (namespace == LEGACY_PROFILE_NAMESPACE) "" else "$namespace."
+    )
+
+private class ScopedSharedPreferences(
+    private val delegate: SharedPreferences,
+    private val prefix: String
+) : SharedPreferences {
+    override fun getAll(): Map<String, *> = delegate.all
+        .filterKeys { it.startsWith(prefix) }
+        .mapKeys { it.key.removePrefix(prefix) }
+
+    override fun getString(key: String, defValue: String?): String? =
+        delegate.getString(scopedKey(key), defValue)
+
+    override fun getStringSet(key: String, defValues: Set<String>?): Set<String>? =
+        delegate.getStringSet(scopedKey(key), defValues)
+
+    override fun getInt(key: String, defValue: Int): Int = delegate.getInt(scopedKey(key), defValue)
+
+    override fun getLong(key: String, defValue: Long): Long = delegate.getLong(scopedKey(key), defValue)
+
+    override fun getFloat(key: String, defValue: Float): Float = delegate.getFloat(scopedKey(key), defValue)
+
+    override fun getBoolean(key: String, defValue: Boolean): Boolean = delegate.getBoolean(scopedKey(key), defValue)
+
+    override fun contains(key: String): Boolean = delegate.contains(scopedKey(key))
+
+    override fun edit(): SharedPreferences.Editor = ScopedEditor(delegate.edit(), delegate, prefix)
+
+    override fun registerOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        delegate.registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    override fun unregisterOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        delegate.unregisterOnSharedPreferenceChangeListener(listener)
+    }
+
+    private fun scopedKey(key: String): String = prefix + key
+}
+
+private class ScopedEditor(
+    private val delegate: SharedPreferences.Editor,
+    private val preferences: SharedPreferences,
+    private val prefix: String
+) : SharedPreferences.Editor {
+    override fun putString(key: String, value: String?): SharedPreferences.Editor =
+        this.also { delegate.putString(prefix + key, value) }
+
+    override fun putStringSet(key: String, values: Set<String>?): SharedPreferences.Editor =
+        this.also { delegate.putStringSet(prefix + key, values) }
+
+    override fun putInt(key: String, value: Int): SharedPreferences.Editor =
+        this.also { delegate.putInt(prefix + key, value) }
+
+    override fun putLong(key: String, value: Long): SharedPreferences.Editor =
+        this.also { delegate.putLong(prefix + key, value) }
+
+    override fun putFloat(key: String, value: Float): SharedPreferences.Editor =
+        this.also { delegate.putFloat(prefix + key, value) }
+
+    override fun putBoolean(key: String, value: Boolean): SharedPreferences.Editor =
+        this.also { delegate.putBoolean(prefix + key, value) }
+
+    override fun remove(key: String): SharedPreferences.Editor = this.also { delegate.remove(prefix + key) }
+
+    override fun clear(): SharedPreferences.Editor {
+        if (prefix.isEmpty()) return delegate.clear()
+        preferences.all.keys.filter { it.startsWith(prefix) }.forEach { delegate.remove(it) }
+        return this
+    }
+
+    override fun commit(): Boolean = delegate.commit()
+
+    override fun apply() = delegate.apply()
+}
+
+internal fun isSystemFriendPassActive(passedAtMillis: Long, nowMillis: Long): Boolean =
+    passedAtMillis > 0L
+        && passedAtMillis <= nowMillis
+        && nowMillis - passedAtMillis < SYSTEM_FRIEND_PASS_DURATION_MILLIS
+
+internal fun isPeopleProfilePassActive(passedAtMillis: Long, nowMillis: Long): Boolean =
+    passedAtMillis > 0L
+        && passedAtMillis <= nowMillis
+        && nowMillis - passedAtMillis < PEOPLE_PROFILE_PASS_DURATION_MILLIS
+
+class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     private val context = context
-    private val preferences: SharedPreferences = context.getSharedPreferences("dost_local_data", Context.MODE_PRIVATE)
-    private val messagesDirectory = File(context.filesDir, "messages").apply { mkdirs() }
-    private val chatImagesDirectory = File(context.filesDir, "chat_images").apply { mkdirs() }
+    internal val profileNamespace = requestedProfileNamespace
+        ?: activeProfileNamespace(context)
+    private val preferences = profilePreferences(context, profileNamespace)
+    private val profileFilesDirectory = if (profileNamespace == LEGACY_PROFILE_NAMESPACE) {
+        context.filesDir
+    } else {
+        File(context.filesDir, "profiles/$profileNamespace").apply { mkdirs() }
+    }
+    private val messagesDirectory = File(profileFilesDirectory, "messages").apply { mkdirs() }
+    private val peopleOutboxDirectory = File(messagesDirectory, "people_outbox")
+    internal val chatImagesDirectory = File(profileFilesDirectory, "chat_images").apply { mkdirs() }
+    internal val systemFriendPhotosDirectory = File(profileFilesDirectory, "system-friend-photos")
 
     init {
         preferences.edit().remove("openrouter_key").apply()
@@ -31,6 +180,13 @@ class DostStore(context: Context) {
         JSONArray(preferences.getString("friends", "[]")).length() > 0
     }.getOrDefault(false)
 
+    fun needsLanguageSetup(): Boolean =
+        !preferences.getBoolean("language_setup_complete", hasUserProfile())
+
+    fun completeLanguageSetup() {
+        preferences.edit().putBoolean("language_setup_complete", true).apply()
+    }
+
     /** Saved profile whose age meets [MINIMUM_ACCOUNT_AGE]. Friends alone do not count. */
     fun hasEligibleAccount(): Boolean =
         preferences.getBoolean("user_profile_saved", false) && accountAgeResult(userAge()) == AccountAgeResult.VALID
@@ -39,6 +195,33 @@ class DostStore(context: Context) {
 
     fun authenticationAccountId(): String = preferences.getString("authentication_account_id", "") ?: ""
 
+    fun activateAccount(accountId: String): Boolean {
+        if (accountId.isBlank()) return false
+        val registry = context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+        synchronized(profileRegistryLock) {
+            val activeNamespace = registry.getString(ACTIVE_PROFILE_NAMESPACE, LEGACY_PROFILE_NAMESPACE)
+                ?: LEGACY_PROFILE_NAMESPACE
+            val currentPreferences = profilePreferences(context, activeNamespace)
+            val storedIds = listOf(
+                currentPreferences.getString("authentication_account_id", "").orEmpty(),
+                currentPreferences.getString("firebase_account_id", "").orEmpty()
+            ).filter(String::isNotBlank).distinct()
+            val mappingKey = "profile_for_${accountProfileNamespace(accountId)}"
+            val mappedNamespace = registry.getString(mappingKey, null)
+            val targetNamespace = profileNamespaceForAccount(
+                activeNamespace,
+                storedIds,
+                accountId,
+                mappedNamespace
+            )
+            check(registry.edit()
+                .putString(mappingKey, targetNamespace)
+                .putString(ACTIVE_PROFILE_NAMESPACE, targetNamespace)
+                .commit()) { "Could not switch local profiles." }
+            return targetNamespace != profileNamespace
+        }
+    }
+
     fun markAuthenticationRequired() {
         preferences.edit().putBoolean("authentication_required", true).apply()
     }
@@ -46,6 +229,11 @@ class DostStore(context: Context) {
     fun bindAuthenticationAccount(accountId: String) {
         if (accountId.isBlank()) return
         preferences.edit().putString("authentication_account_id", accountId).apply()
+        val registry = context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+        registry.edit()
+            .putString("profile_for_${accountProfileNamespace(accountId)}", profileNamespace)
+            .putString(ACTIVE_PROFILE_NAMESPACE, profileNamespace)
+            .apply()
     }
 
     /** Writes love scores back as 0 when romance is locked for this user or friend. */
@@ -72,7 +260,14 @@ class DostStore(context: Context) {
     fun userGender(): String = preferences.getString("user_gender", "") ?: ""
     fun firebaseAccountId(): String = preferences.getString("firebase_account_id", "") ?: ""
     fun linkFirebaseAccount(uid: String) {
-        if (uid.isNotBlank()) preferences.edit().putString("firebase_account_id", uid).apply()
+        if (uid.isNotBlank()) {
+            preferences.edit().putString("firebase_account_id", uid).apply()
+            val registry = context.getSharedPreferences(ACCOUNT_REGISTRY_PREFERENCES, Context.MODE_PRIVATE)
+            registry.edit()
+                .putString("profile_for_${accountProfileNamespace(uid)}", profileNamespace)
+                .putString(ACTIVE_PROFILE_NAMESPACE, profileNamespace)
+                .apply()
+        }
     }
     fun userTimeZoneId(): String = validZoneId(preferences.getString("user_time_zone", ZoneId.systemDefault().id) ?: ZoneId.systemDefault().id).id
     fun saveUserTimeZoneId(timeZoneId: String) {
@@ -99,6 +294,11 @@ class DostStore(context: Context) {
         preferences.edit().remove("openrouter_key_encrypted").apply()
         ""
     }
+    fun dismissedChatNoticeId(friendId: String): String =
+        preferences.getString("dismissed_chat_notice_$friendId", "") ?: ""
+    fun markChatNoticeDismissed(friendId: String, messageId: String) {
+        preferences.edit().putString("dismissed_chat_notice_$friendId", messageId).apply()
+    }
     fun saveOpenRouterApiKey(apiKey: String) {
         if (apiKey.isBlank()) {
             preferences.edit().remove("openrouter_key_encrypted").apply()
@@ -112,6 +312,166 @@ class DostStore(context: Context) {
     fun aiModel(): String = preferences.getString("ai_model", DEFAULT_AI_MODEL) ?: DEFAULT_AI_MODEL
     fun saveAiModel(model: String) {
         preferences.edit().putString("ai_model", model.trim()).apply()
+    }
+    fun anonymousTelemetryEnabled(): Boolean = preferences.getBoolean("anonymous_telemetry_enabled", false)
+    fun setAnonymousTelemetryEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("anonymous_telemetry_enabled", enabled).apply()
+    }
+    fun peopleCallAlertsEnabled(defaultEnabled: Boolean): Boolean =
+        preferences.getBoolean("people_call_alerts_enabled", defaultEnabled)
+    fun hasPeopleCallAlertsChoice(): Boolean = preferences.contains("people_call_alerts_enabled")
+    fun setPeopleCallAlertsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("people_call_alerts_enabled", enabled).apply()
+    }
+    fun peopleMessageNotificationsEnabled(): Boolean =
+        preferences.getBoolean("people_message_notifications_enabled", false)
+    fun setPeopleMessageNotificationsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("people_message_notifications_enabled", enabled).apply()
+    }
+    fun aiNotificationPreviewsEnabled(): Boolean =
+        preferences.getBoolean("ai_notification_previews_enabled", false)
+    fun setAiNotificationPreviewsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("ai_notification_previews_enabled", enabled).apply()
+    }
+    fun pinnedConversationIds(): Set<String> = conversationPreferenceIds("pinned_conversation_ids")
+    fun mutedConversationIds(): Set<String> =
+        conversationPreferenceIds("muted_conversation_ids") +
+            preferences.getStringSet("muted_people_chat_ids", emptySet())
+                .orEmpty()
+                .filter { it.matches(Regex("[A-Za-z0-9_-]{1,128}")) }
+                .map { "people:$it" }
+    fun archivedConversationIds(): Set<String> = conversationPreferenceIds("archived_conversation_ids")
+    fun isConversationMuted(conversationKey: String): Boolean {
+        requireValidConversationKey(conversationKey)
+        if (conversationKey in mutedConversationIds()) return true
+        return conversationKey.startsWith("people:")
+            && conversationKey.removePrefix("people:") in
+            preferences.getStringSet("muted_people_chat_ids", emptySet()).orEmpty()
+    }
+    fun isConversationArchived(conversationKey: String): Boolean {
+        requireValidConversationKey(conversationKey)
+        return conversationKey in archivedConversationIds()
+    }
+    fun isConversationPinned(conversationKey: String): Boolean {
+        requireValidConversationKey(conversationKey)
+        return conversationKey in pinnedConversationIds()
+    }
+    fun setConversationPinned(conversationKey: String, pinned: Boolean) {
+        updateConversationPreference("pinned_conversation_ids", conversationKey, pinned)
+    }
+    fun setConversationMuted(conversationKey: String, muted: Boolean) {
+        updateConversationPreference("muted_conversation_ids", conversationKey, muted)
+        if (conversationKey.startsWith("people:")) {
+            updatePeopleChatMuteCompatibility(conversationKey.removePrefix("people:"), muted)
+        }
+    }
+    fun setConversationArchived(conversationKey: String, archived: Boolean) {
+        updateConversationPreference("archived_conversation_ids", conversationKey, archived)
+    }
+    fun removeConversationPreferences(conversationKey: String) {
+        setConversationPinned(conversationKey, false)
+        setConversationMuted(conversationKey, false)
+        setConversationArchived(conversationKey, false)
+    }
+    fun isPeopleChatMuted(conversationId: String): Boolean {
+        require(conversationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        return isConversationMuted("people:$conversationId")
+    }
+    fun setPeopleChatMuted(conversationId: String, muted: Boolean) {
+        require(conversationId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        setConversationMuted("people:$conversationId", muted)
+    }
+    private fun updatePeopleChatMuteCompatibility(conversationId: String, muted: Boolean) {
+        val mutedIds = preferences.getStringSet("muted_people_chat_ids", emptySet())
+            .orEmpty()
+            .toMutableSet()
+        if (muted) mutedIds += conversationId else mutedIds -= conversationId
+        preferences.edit().putStringSet("muted_people_chat_ids", mutedIds).apply()
+    }
+    private fun conversationPreferenceIds(preferenceKey: String): Set<String> =
+        preferences.getStringSet(preferenceKey, emptySet())
+            .orEmpty()
+            .filterTo(mutableSetOf(), ::isValidConversationPreferenceKey)
+    private fun updateConversationPreference(preferenceKey: String, conversationKey: String, enabled: Boolean) {
+        requireValidConversationKey(conversationKey)
+        val ids = conversationPreferenceIds(preferenceKey).toMutableSet()
+        if (enabled) ids += conversationKey else ids -= conversationKey
+        preferences.edit().putStringSet(preferenceKey, ids).apply()
+    }
+    private fun requireValidConversationKey(conversationKey: String) {
+        require(isValidConversationPreferenceKey(conversationKey)) { "Invalid conversation preference key." }
+    }
+    private fun isValidConversationPreferenceKey(conversationKey: String): Boolean =
+        conversationKey.matches(Regex("(ai|people):[A-Za-z0-9_-]{1,128}"))
+    internal fun peopleProfileDraft(): PeopleProfileDraft = PeopleProfileDraft(
+        country = preferences.getString("people_profile_country", "") ?: "",
+        bio = preferences.getString("people_profile_bio", "") ?: "",
+        interests = preferences.getString("people_profile_interests", "") ?: ""
+    )
+    internal fun savePeopleProfileDraft(draft: PeopleProfileDraft) {
+        preferences.edit()
+            .putString("people_profile_country", draft.country)
+            .putString("people_profile_bio", draft.bio)
+            .putString("people_profile_interests", draft.interests)
+            .apply()
+    }
+    fun passedSystemFriendIds(nowMillis: Long = System.currentTimeMillis()): Set<String> {
+        val passedIds = mutableSetOf<String>()
+        val editor = preferences.edit()
+        var removedExpiredPass = false
+        preferences.all.forEach { (key, value) ->
+            if (!key.startsWith(SYSTEM_FRIEND_PASS_KEY_PREFIX)) return@forEach
+            val catalogId = key.removePrefix(SYSTEM_FRIEND_PASS_KEY_PREFIX)
+            val passedAtMillis = value as? Long
+            if (catalogId.isBlank() || passedAtMillis == null || !isSystemFriendPassActive(passedAtMillis, nowMillis)) {
+                editor.remove(key)
+                removedExpiredPass = true
+            } else {
+                passedIds += catalogId
+            }
+        }
+        if (removedExpiredPass) editor.apply()
+        return passedIds
+    }
+    fun markSystemFriendPassed(catalogId: String, nowMillis: Long = System.currentTimeMillis()) {
+        require(catalogId.matches(Regex("[A-Za-z0-9_-]{1,120}"))) { "Invalid system friend catalog ID" }
+        preferences.edit().putLong(SYSTEM_FRIEND_PASS_KEY_PREFIX + catalogId, nowMillis).apply()
+    }
+    fun clearPassedSystemFriends() {
+        val editor = preferences.edit()
+        preferences.all.keys
+            .filter { it.startsWith(SYSTEM_FRIEND_PASS_KEY_PREFIX) }
+            .forEach { editor.remove(it) }
+        editor.apply()
+    }
+    fun passedPeopleProfileIds(nowMillis: Long = System.currentTimeMillis()): Set<String> {
+        val passedIds = mutableSetOf<String>()
+        val editor = preferences.edit()
+        var removedExpiredPass = false
+        preferences.all.forEach { (key, value) ->
+            if (!key.startsWith(PEOPLE_PROFILE_PASS_KEY_PREFIX)) return@forEach
+            val profileUid = key.removePrefix(PEOPLE_PROFILE_PASS_KEY_PREFIX)
+            val passedAtMillis = value as? Long
+            if (profileUid.isBlank() || passedAtMillis == null || !isPeopleProfilePassActive(passedAtMillis, nowMillis)) {
+                editor.remove(key)
+                removedExpiredPass = true
+            } else {
+                passedIds += profileUid
+            }
+        }
+        if (removedExpiredPass) editor.apply()
+        return passedIds
+    }
+    fun markPeopleProfilePassed(profileUid: String, nowMillis: Long = System.currentTimeMillis()) {
+        require(profileUid.isNotBlank() && profileUid.length <= 128) { "Invalid People profile ID" }
+        preferences.edit().putLong(PEOPLE_PROFILE_PASS_KEY_PREFIX + profileUid, nowMillis).apply()
+    }
+    fun clearPassedPeopleProfiles() {
+        val editor = preferences.edit()
+        preferences.all.keys
+            .filter { it.startsWith(PEOPLE_PROFILE_PASS_KEY_PREFIX) }
+            .forEach { editor.remove(it) }
+        editor.apply()
     }
 
     fun exportLocalData(): JSONObject {
@@ -152,10 +512,32 @@ class DostStore(context: Context) {
                     })
                 }
             }
+            val events = JSONArray().apply {
+                loadPlannedEvents(friend.id).forEach { event ->
+                    put(JSONObject().apply {
+                        put("id", event.id)
+                        put("description", event.description)
+                        put("dueAtMillis", event.dueAtMillis)
+                        put("confidence", event.confidence)
+                        put("followUpRequested", event.followUpRequested)
+                        put("state", event.state.name)
+                    })
+                }
+            }
+            val sharedMoments = sharedMomentsToJson(loadSharedMoments(friend.id))
             backupFriends.put(JSONObject().apply {
                 put("profile", friendToJson(friend, userAge()))
                 put("memories", memories)
                 put("summaries", summaries)
+                put("events", events)
+                put("relationshipOutcomes", JSONArray(loadRelationshipOutcomeIds(friend.id)))
+                put("relationshipFingerprints", JSONArray(loadRelationshipOutcomeFingerprints(friend.id)))
+                val dailyGain = loadRelationshipDailyGain(friend.id)
+                put("relationshipDailyGain", JSONObject().apply {
+                    put("dayKey", dailyGain.dayKey)
+                    put("points", dailyGain.points)
+                })
+                put("sharedMoments", sharedMoments)
                 put("messages", backupMessages)
                 put("currentSessionId", currentSessionId(friend.id) ?: "")
             })
@@ -175,8 +557,19 @@ class DostStore(context: Context) {
                     AppLanguage.HINDI -> "hi"
                     AppLanguage.ENGLISH -> "en"
                 })
+                put("chatLanguage", if (!hasCustomChatLanguage()) "" else when (chatLanguage()) {
+                    AppLanguage.BANGLA -> "bn"
+                    AppLanguage.HINDI -> "hi"
+                    AppLanguage.ENGLISH -> "en"
+                })
+                put("showFriendCount", showFriendCount())
                 put("timeZone", userTimeZoneId())
                 put("model", aiModel())
+                put("proactiveEnabled", proactiveEnabled())
+                put("proactiveCadenceMinutes", proactiveCadenceMinutes())
+                put("automaticFollowUpMinutes", automaticFollowUpMinutes())
+                put("quietHoursStartMinute", quietHoursStartMinute())
+                put("quietHoursEndMinute", quietHoursEndMinute())
             })
             put("friends", backupFriends)
         }
@@ -198,6 +591,18 @@ class DostStore(context: Context) {
         val settings = backup.getJSONObject("settings")
         val language = backupString(settings, "language", 2)
         require(language in setOf("bn", "hi", "en")) { "The backup language is invalid." }
+        val chatLanguage = if (settings.has("chatLanguage") && !settings.isNull("chatLanguage")) {
+            backupString(settings, "chatLanguage", 2)
+        } else {
+            ""
+        }
+        require(chatLanguage.isEmpty() || chatLanguage in setOf("bn", "hi", "en")) {
+            "The backup chat language is invalid."
+        }
+        val showFriendCount = settings.optBoolean(
+            "showFriendCount",
+            settings.optBoolean("showFriendSearchAndCount", false)
+        )
         val timeZone = backupString(settings, "timeZone", 100)
         val parsedTimeZone = runCatching { ZoneId.of(timeZone).id }.getOrNull()
         require(parsedTimeZone != null) { "The backup timezone is invalid." }
@@ -205,6 +610,15 @@ class DostStore(context: Context) {
         require(model.matches(Regex("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?"))) {
             "The backup model is invalid."
         }
+        val proactiveEnabled = settings.optBoolean("proactiveEnabled", false)
+        val proactiveCadenceMinutes = settings.optInt("proactiveCadenceMinutes", 180)
+        val automaticFollowUpMinutes = settings.optInt("automaticFollowUpMinutes", 30)
+        val quietHoursStartMinute = settings.optInt("quietHoursStartMinute", 22 * 60)
+        val quietHoursEndMinute = settings.optInt("quietHoursEndMinute", 8 * 60)
+        require(proactiveCadenceMinutes in 30..1440 && automaticFollowUpMinutes in 5..120
+            && quietHoursStartMinute in 0..1439 && quietHoursEndMinute in 0..1439
+            && quietHoursStartMinute != quietHoursEndMinute
+        ) { "The backup proactive-message settings are invalid." }
 
         val friendItems = backup.getJSONArray("friends")
         require(friendItems.length() <= MAX_BACKUP_FRIENDS) { "The backup has too many friends." }
@@ -214,8 +628,9 @@ class DostStore(context: Context) {
             val item = friendItems.getJSONObject(index)
             val friendProfile = item.getJSONObject("profile")
             val friend = friendFromJson(friendProfile)
+            // Retain legacy underage profiles on import; the chat path blocks messaging without discarding history.
             require(isBackupUuid(friend.id) && friendIds.add(friend.id)
-                && friend.name.isNotBlank() && friendAgeResult(friend.age) == AccountAgeResult.VALID
+                && friend.name.isNotBlank() && profileAgeOrNull(friend.age) != null
                 && friend.gender.isNotBlank()
             ) { "The backup contains an invalid friend." }
             require(
@@ -229,6 +644,16 @@ class DostStore(context: Context) {
                     && friend.busyStartHour in 0..23
                     && friend.busyDurationHours in 4..8
                     && runCatching { ZoneId.of(friend.timeZoneId) }.isSuccess
+                    && friend.busyReplyDelayMinutes in 0..120
+                    && friend.routineBlocks.size <= 12
+                    && friend.routineBlocks.all {
+                        it.id.isNotBlank() && it.id.length <= 64
+                            && it.reason.length <= 80
+                            && it.startMinute in 0..1439
+                            && it.durationMinutes in 1..1440
+                            && it.daysOfWeek.isNotEmpty()
+                            && it.daysOfWeek.all { day -> day in 1..7 }
+                    }
             ) { "The backup contains an invalid friend profile." }
             val memoriesJson = item.getJSONArray("memories")
             require(memoriesJson.length() <= MAX_STORED_USER_MEMORIES) { "The backup has too many memories." }
@@ -252,6 +677,91 @@ class DostStore(context: Context) {
                     backupString(summary, "summary", MAX_BACKUP_TEXT_LENGTH)
                 ).also { require(it.startedAtMillis > 0 && it.endedAtMillis >= it.startedAtMillis) { "The backup contains invalid session dates." } }
             }
+            val eventsJson = item.optJSONArray("events") ?: JSONArray()
+            require(eventsJson.length() <= 100) { "The backup has too many planned events." }
+            val events = List(eventsJson.length()) { eventIndex ->
+                val event = eventsJson.getJSONObject(eventIndex)
+                val id = backupString(event, "id", 64)
+                val description = backupString(event, "description", 500).trim()
+                val confidence = backupString(event, "confidence", 20)
+                val state = runCatching { PlannedEventState.valueOf(backupString(event, "state", 20)) }
+                    .getOrElse { throw IllegalArgumentException("The backup contains an invalid planned event.") }
+                require(isBackupUuid(id) && description.isNotBlank()
+                    && confidence in setOf("confirmed", "uncertain")
+                    && event.getLong("dueAtMillis") > 0L
+                ) { "The backup contains an invalid planned event." }
+                PlannedEvent(
+                    id = id,
+                    description = description,
+                    dueAtMillis = event.getLong("dueAtMillis"),
+                    confidence = confidence,
+                    followUpRequested = event.optBoolean("followUpRequested", true),
+                    state = state
+                )
+            }
+            require(events.map { it.id }.distinct().size == events.size) {
+                "The backup contains duplicate planned events."
+            }
+            val outcomesJson = item.optJSONArray("relationshipOutcomes") ?: JSONArray()
+            require(outcomesJson.length() <= MAX_RELATIONSHIP_OUTCOMES) {
+                "The backup has too many relationship outcomes."
+            }
+            val relationshipOutcomes = List(outcomesJson.length()) { outcomeIndex ->
+                outcomesJson.getString(outcomeIndex)
+            }
+            require(relationshipOutcomes.all(::isBackupUuid)
+                && relationshipOutcomes.distinct().size == relationshipOutcomes.size
+            ) { "The backup contains invalid relationship outcomes." }
+            val fingerprintsJson = item.optJSONArray("relationshipFingerprints") ?: JSONArray()
+            require(fingerprintsJson.length() <= MAX_RELATIONSHIP_FINGERPRINTS) {
+                "The backup has too many relationship fingerprints."
+            }
+            val relationshipFingerprints = List(fingerprintsJson.length()) { fingerprintIndex ->
+                fingerprintsJson.getString(fingerprintIndex)
+            }
+            require(relationshipFingerprints.all(::isBackupUuid)
+                && relationshipFingerprints.distinct().size == relationshipFingerprints.size
+            ) { "The backup contains invalid relationship fingerprints." }
+            val dailyGainJson = item.optJSONObject("relationshipDailyGain")
+            require(!item.has("relationshipDailyGain") || dailyGainJson != null) {
+                "The backup contains invalid daily relationship gains."
+            }
+            val dailyGain = dailyGainJson?.let {
+                val dayKey = backupString(it, "dayKey", 10)
+                val points = it.getInt("points")
+                val validDay = dayKey.isEmpty() ||
+                    runCatching { LocalDate.parse(dayKey).toString() == dayKey }.getOrDefault(false)
+                require(validDay && points in 0..DAILY_FRIENDSHIP_GAIN_CAP
+                    && (dayKey.isNotEmpty() || points == 0)
+                ) { "The backup contains invalid daily relationship gains." }
+                RelationshipDailyGain(dayKey, points)
+            } ?: RelationshipDailyGain("", 0)
+            val momentsJson = item.optJSONArray("sharedMoments") ?: JSONArray()
+            require(momentsJson.length() <= MAX_SHARED_MOMENTS) { "The backup has too many shared moments." }
+            val sharedMoments = List(momentsJson.length()) { momentIndex ->
+                val moment = momentsJson.getJSONObject(momentIndex)
+                val id = backupString(moment, "id", 36)
+                val title = backupString(moment, "title", 200)
+                val detail = backupString(moment, "detail", 2_000)
+                val kind = backupString(moment, "kind", 40)
+                val stageIndex = if (moment.has("stageIndex") && !moment.isNull("stageIndex")) moment.getInt("stageIndex") else null
+                require(isBackupUuid(id) && title.isNotBlank() && kind.isNotBlank()
+                    && moment.getLong("createdAtMillis") > 0L
+                    && (stageIndex == null || stageIndex in 0..9)
+                ) { "The backup contains an invalid shared moment." }
+                SharedMoment(
+                    id = id,
+                    title = title,
+                    detail = detail,
+                    createdAtMillis = moment.getLong("createdAtMillis"),
+                    kind = kind,
+                    pinned = moment.optBoolean("pinned", false),
+                    stageIndex = stageIndex
+                )
+            }
+            require(sharedMoments.map { it.id }.distinct().size == sharedMoments.size) {
+                "The backup contains duplicate shared moments."
+            }
             val currentSessionId = backupString(item, "currentSessionId", 36)
             require(currentSessionId.isEmpty() || isBackupUuid(currentSessionId)) {
                 "The backup contains an invalid current session."
@@ -265,7 +775,7 @@ class DostStore(context: Context) {
                 val sessionId = backupString(message, "sessionId", 36)
                 val category = backupString(message, "category", 100)
                 val modelId = backupString(message, "modelId", 160)
-                require(role in setOf("user", "assistant") && content.length <= 25_000
+                require(role in setOf("user", "assistant", "system") && content.length <= 25_000
                     && isBackupUuid(messageId) && (sessionId.isEmpty() || isBackupUuid(sessionId))
                 ) { "The backup contains an invalid message." }
                 val imageBytes = if (message.has("imageData")) {
@@ -291,7 +801,18 @@ class DostStore(context: Context) {
                     imageBytes
                 )
             }
-            importedFriends += ImportedBackupFriend(friend, memories, summaries, messages, currentSessionId)
+            importedFriends += ImportedBackupFriend(
+                friend,
+                memories,
+                summaries,
+                events,
+                relationshipOutcomes,
+                relationshipFingerprints,
+                dailyGain,
+                sharedMoments,
+                messages,
+                currentSessionId
+            )
         }
 
         val stagedImages = File(chatImagesDirectory, ".restore-${java.util.UUID.randomUUID()}").apply {
@@ -332,7 +853,15 @@ class DostStore(context: Context) {
                 .putString("user_gender", gender)
                 .putString("user_time_zone", parsedTimeZone)
                 .putString("language", language)
+                .putString("chat_language", chatLanguage)
+                .putBoolean("show_friend_count", showFriendCount)
+                .remove("show_friend_search_and_count")
                 .putString("ai_model", model)
+                .putBoolean("proactive_enabled", proactiveEnabled)
+                .putInt("proactive_cadence_minutes", proactiveCadenceMinutes)
+                .putInt("automatic_follow_up_minutes", automaticFollowUpMinutes)
+                .putInt("quiet_hours_start_minute", quietHoursStartMinute)
+                .putInt("quiet_hours_end_minute", quietHoursEndMinute)
                 .putString("friends", JSONArray().apply {
                     savedFriends.forEach { put(friendToJson(it, age)) }
                 }.toString())
@@ -351,6 +880,23 @@ class DostStore(context: Context) {
                         })
                     }
                 }.toString())
+                editor.putString("planned_events_$friendId", JSONArray().apply {
+                    imported.events.forEach { event ->
+                        put(JSONObject().apply {
+                            put("id", event.id)
+                            put("description", event.description)
+                            put("dueAtMillis", event.dueAtMillis)
+                            put("confidence", event.confidence)
+                            put("followUpRequested", event.followUpRequested)
+                            put("state", event.state.name)
+                        })
+                    }
+                }.toString())
+                editor.putString("relationship_outcomes_$friendId", JSONArray(imported.relationshipOutcomes).toString())
+                editor.putString("relationship_fingerprints_$friendId", JSONArray(imported.relationshipFingerprints).toString())
+                editor.putString("relationship_daily_gain_day_$friendId", imported.dailyGain.dayKey)
+                    .putInt("relationship_daily_gain_points_$friendId", imported.dailyGain.points)
+                editor.putString("shared_moments_$friendId", sharedMomentsToJson(imported.sharedMoments).toString())
                 imported.currentSessionId.takeIf(String::isNotEmpty)?.let {
                     editor.putString("current_session_$friendId", it)
                 }
@@ -393,18 +939,198 @@ class DostStore(context: Context) {
         updated
     }
 
-    fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
-        val userAge = userAge()
-        val json = JSONArray()
-        friends.forEach { friend ->
-            json.put(friendToJson(friend, userAge))
+    internal fun applyRelationshipOutcome(
+        friendId: String,
+        outcomeId: String,
+        fingerprint: String?,
+        friendshipImpact: Int,
+        transform: (Friend, Int) -> Friend
+    ): RelationshipApplication? = synchronized(preferences) {
+        require(isBackupUuid(outcomeId)) { "The relationship outcome message is invalid." }
+        val outcomes = loadRelationshipOutcomeIds(friendId)
+        val fingerprints = loadRelationshipOutcomeFingerprints(friendId)
+        val friends = loadFriends()
+        val index = friends.indexOfFirst { it.id == friendId }
+        if (index < 0) return null
+        if (!shouldApplyRelationshipOutcome(outcomes, outcomeId)) return RelationshipApplication(friends[index], false)
+
+        val previous = friends[index]
+        val nextOutcomes = (outcomes + outcomeId).takeLast(MAX_RELATIONSHIP_OUTCOMES)
+        if (!shouldApplyRelationshipOutcome(outcomes, fingerprints, outcomeId, fingerprint)) {
+            check(
+                preferences.edit()
+                    .putString("relationship_outcomes_$friendId", JSONArray(nextOutcomes).toString())
+                    .commit()
+            ) { "Could not save the relationship outcome." }
+            return RelationshipApplication(previous, false)
         }
-        preferences.edit().putString("friends", json.toString()).apply()
+        val today = LocalDate.now(ZoneId.of(userTimeZoneId())).toString()
+        val storedDailyGain = loadRelationshipDailyGain(friendId)
+        val pointsGainedToday = if (storedDailyGain.dayKey == today) storedDailyGain.points else 0
+        val cappedImpact = cappedDailyFriendshipImpact(friendshipImpact, pointsGainedToday)
+        val updated = transform(previous, cappedImpact)
+        val actualGain = (updated.friendshipScore - previous.friendshipScore).coerceAtLeast(0)
+        val newDailyGain = (pointsGainedToday + actualGain).coerceAtMost(DAILY_FRIENDSHIP_GAIN_CAP)
+        friends[index] = updated
+        val editor = preferences.edit()
+            .putString("friends", friendsToJson(friends).toString())
+            .putString("relationship_outcomes_$friendId", JSONArray(nextOutcomes).toString())
+            .putString("relationship_daily_gain_day_$friendId", today)
+            .putInt("relationship_daily_gain_points_$friendId", newDailyGain)
+        if (fingerprint != null) {
+            val nextFingerprints = (fingerprints + fingerprint).takeLast(MAX_RELATIONSHIP_FINGERPRINTS)
+            editor.putString("relationship_fingerprints_$friendId", JSONArray(nextFingerprints).toString())
+        }
+        val previousStage = friendshipStageIndex(previous.friendshipScore)
+        val nextStage = friendshipStageIndex(updated.friendshipScore)
+        if (nextStage > previousStage) {
+            val moment = SharedMoment(
+                id = stableIdempotencyKey("relationship-stage:$friendId:$outcomeId:$nextStage"),
+                title = "Relationship stage",
+                detail = "A conversation helped your friendship reach a new stage.",
+                createdAtMillis = System.currentTimeMillis(),
+                kind = "relationship_stage",
+                stageIndex = nextStage
+            )
+            val moments = boundedSharedMoments(loadSharedMoments(friendId).filterNot { it.id == moment.id } + moment)
+            editor.putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString())
+        }
+        check(editor.commit()) { "Could not save the relationship update." }
+        RelationshipApplication(updated, true)
+    }
+
+    fun loadRelationshipOutcomeIds(friendId: String): List<String> = runCatching {
+        val json = JSONArray(preferences.getString("relationship_outcomes_$friendId", "[]"))
+        List(json.length()) { index -> json.getString(index) }
+    }.getOrDefault(emptyList())
+
+    fun loadRelationshipOutcomeFingerprints(friendId: String): List<String> = runCatching {
+        val json = JSONArray(preferences.getString("relationship_fingerprints_$friendId", "[]"))
+        List(json.length()) { index -> json.getString(index) }
+    }.getOrDefault(emptyList())
+
+    private fun loadRelationshipDailyGain(friendId: String): RelationshipDailyGain = RelationshipDailyGain(
+        dayKey = preferences.getString("relationship_daily_gain_day_$friendId", "").orEmpty(),
+        points = preferences.getInt("relationship_daily_gain_points_$friendId", 0)
+            .coerceIn(0, DAILY_FRIENDSHIP_GAIN_CAP)
+    )
+
+    fun saveFriends(friends: List<Friend>) = synchronized(preferences) {
+        preferences.edit().putString("friends", friendsToJson(friends).toString()).apply()
+    }
+
+    private fun friendsToJson(friends: List<Friend>): JSONArray = JSONArray().apply {
+        friends.forEach { friend -> put(friendToJson(friend, userAge())) }
     }
 
     private fun messageFile(friendId: String): File {
         val safeId = friendId.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "unknown" }
         return File(messagesDirectory, "$safeId.json")
+    }
+
+    private fun peopleOutboxConversationDirectory(conversationId: String, create: Boolean): File? {
+        require(conversationId.isNotBlank()) { "A conversation ID is required for the message outbox." }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(conversationId.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val directory = File(peopleOutboxDirectory, digest)
+        if (!directory.exists() && !create) return null
+        if (create) check(directory.mkdirs() || directory.isDirectory) {
+            "Could not create the People message outbox."
+        }
+        check(directory.isDirectory) { "The People message outbox is unavailable." }
+        return directory
+    }
+
+    private fun peopleOutboxFile(conversationId: String, messageId: String, create: Boolean): File? {
+        require(isValidSocialMessageId(messageId)) { "The message ID is invalid." }
+        val directory = peopleOutboxConversationDirectory(conversationId, create) ?: return null
+        return File(directory, "$messageId.json")
+    }
+
+    internal fun loadPendingPeopleMessages(conversationId: String): List<PendingPeopleMessage> =
+        synchronized(peopleOutboxLock) {
+            val directory = peopleOutboxConversationDirectory(conversationId, create = false)
+                ?: return@synchronized emptyList()
+            val files = directory.listFiles()
+                ?: error("Could not read the People message outbox.")
+            val messageIds = files.mapNotNull { file ->
+                when {
+                    file.name.endsWith(".json.bak") -> file.name.removeSuffix(".json.bak")
+                    file.name.endsWith(".json") -> file.name.removeSuffix(".json")
+                    else -> null
+                }
+            }.distinct()
+            messageIds.mapNotNull { messageId ->
+                peopleOutboxFile(conversationId, messageId, create = false)
+                    ?.let(::readPendingPeopleMessage)
+            }.filter { it.conversationId == conversationId }
+                .sortedBy { it.createdAtMillis }
+        }
+
+    internal fun loadPendingPeopleMessage(conversationId: String, messageId: String): PendingPeopleMessage? =
+        synchronized(peopleOutboxLock) {
+            peopleOutboxFile(conversationId, messageId, create = false)
+                ?.takeIf { it.exists() || File(it.path + ".bak").exists() }
+                ?.let(::readPendingPeopleMessage)
+        }
+
+    internal fun savePendingPeopleMessage(message: PendingPeopleMessage) = synchronized(peopleOutboxLock) {
+        require(message.uid.isNotBlank() && message.conversationId.isNotBlank())
+        require(isValidSocialMessageId(message.messageId))
+        require(message.text.isNotBlank() && message.text.length <= 2_000)
+        val file = checkNotNull(peopleOutboxFile(message.conversationId, message.messageId, create = true))
+        val atomicFile = AtomicFile(file)
+        var output: FileOutputStream? = null
+        try {
+            output = atomicFile.startWrite()
+            output.write(pendingPeopleMessageToJson(message).toString().toByteArray(StandardCharsets.UTF_8))
+            atomicFile.finishWrite(output)
+        } catch (exception: Exception) {
+            output?.let(atomicFile::failWrite)
+            throw IllegalStateException("Could not save an outgoing People message.", exception)
+        }
+    }
+
+    internal fun removePendingPeopleMessage(conversationId: String, messageId: String) =
+        synchronized(peopleOutboxLock) {
+            val file = peopleOutboxFile(conversationId, messageId, create = false) ?: return@synchronized
+            if (!file.exists() && !File(file.path + ".bak").exists()) return@synchronized
+            AtomicFile(file).delete()
+            check(!file.exists() && !File(file.path + ".bak").exists()) {
+                "Could not remove a sent People message from the outbox."
+            }
+            file.parentFile?.takeIf { it.list()?.isEmpty() == true }?.delete()
+        }
+
+    private fun pendingPeopleMessageToJson(message: PendingPeopleMessage): JSONObject = JSONObject().apply {
+        put("uid", message.uid)
+        put("conversationId", message.conversationId)
+        put("messageId", message.messageId)
+        put("text", message.text)
+        put("createdAtMillis", message.createdAtMillis)
+        put("status", message.status.name)
+    }
+
+    private fun readPendingPeopleMessage(file: File): PendingPeopleMessage {
+        try {
+            val atomicFile = AtomicFile(file)
+            val json = JSONObject(atomicFile.openRead().bufferedReader(StandardCharsets.UTF_8).use { it.readText() })
+            val message = PendingPeopleMessage(
+                uid = json.getString("uid"),
+                conversationId = json.getString("conversationId"),
+                messageId = json.getString("messageId"),
+                text = json.getString("text"),
+                createdAtMillis = json.getLong("createdAtMillis"),
+                status = PendingPeopleMessageStatus.valueOf(json.getString("status"))
+            )
+            check(isValidSocialMessageId(message.messageId) && message.uid.isNotBlank()
+                && message.conversationId.isNotBlank() && message.text.isNotBlank()
+            ) { "A saved People message is invalid." }
+            return message
+        } catch (exception: Exception) {
+            throw IllegalStateException("Could not read a saved outgoing People message.", exception)
+        }
     }
 
     fun loadMessages(friendId: String): MutableList<ChatMessage> = runCatching {
@@ -473,6 +1199,16 @@ class DostStore(context: Context) {
         item.optBoolean("profilePending", false),
         item.optString("greeting"),
         item.optString("relationship")
+    ).copy(
+        routineBlocks = item.optJSONArray("routineBlocks")?.let { blocks ->
+            List(blocks.length().coerceAtMost(12)) { index ->
+                routineBlockFromJson(blocks.getJSONObject(index))
+            }
+        }.orEmpty(),
+        busyReplyBehavior = runCatching { BusyReplyBehavior.valueOf(item.optString("busyReplyBehavior", "WAIT")) }
+            .getOrDefault(BusyReplyBehavior.WAIT),
+        busyReplyDelayMinutes = item.optInt("busyReplyDelayMinutes", 30).coerceIn(0, 120),
+        favorite = item.optBoolean("favorite", false)
     )
 
     private fun friendToJson(friend: Friend, userAge: String): JSONObject = JSONObject().apply {
@@ -491,6 +1227,37 @@ class DostStore(context: Context) {
         put("profilePending", friend.profilePending)
         put("greeting", friend.greeting)
         put("relationship", friend.relationship)
+        put("favorite", friend.favorite)
+        put("routineBlocks", JSONArray().apply {
+            friend.routineBlocks.forEach { block ->
+                put(JSONObject().apply {
+                    put("id", block.id)
+                    put("reason", block.reason)
+                    put("startMinute", block.startMinute)
+                    put("durationMinutes", block.durationMinutes)
+                    put("daysOfWeek", JSONArray().apply { block.daysOfWeek.sorted().forEach(::put) })
+                })
+            }
+        })
+        put("busyReplyBehavior", friend.busyReplyBehavior.name)
+        put("busyReplyDelayMinutes", friend.busyReplyDelayMinutes.coerceIn(0, 120))
+    }
+
+    private fun routineBlockFromJson(item: JSONObject): RoutineBlock {
+        val days = item.optJSONArray("daysOfWeek")?.let { values ->
+            buildSet {
+                for (index in 0 until values.length()) {
+                    values.optInt(index).takeIf { it in 1..7 }?.let(::add)
+                }
+            }
+        }.orEmpty()
+        return RoutineBlock(
+            id = item.optString("id").takeIf(String::isNotBlank) ?: java.util.UUID.randomUUID().toString(),
+            reason = item.optString("reason"),
+            startMinute = item.optInt("startMinute", 9 * 60).coerceIn(0, 1439),
+            durationMinutes = item.optInt("durationMinutes", 8 * 60).coerceIn(1, 24 * 60),
+            daysOfWeek = days.ifEmpty { (1..7).toSet() }
+        )
     }
 
     private fun backupString(json: JSONObject, key: String, maximumLength: Int): String {
@@ -542,6 +1309,7 @@ class DostStore(context: Context) {
     }
 
     fun deleteFriendData(friend: Friend) {
+        removeConversationPreferences("ai:${friend.id}")
         loadMessages(friend.id).forEach { message ->
             message.imagePath.takeIf { it.isNotBlank() }?.let(::deleteChatImage)
         }
@@ -552,22 +1320,30 @@ class DostStore(context: Context) {
             .remove("user_memories_${friend.id}")
             .remove("structured_user_profile_${friend.id}")
             .remove("session_summaries_${friend.id}")
+            .remove("relationship_outcomes_${friend.id}")
+            .remove("relationship_fingerprints_${friend.id}")
+            .remove("relationship_daily_gain_day_${friend.id}")
+            .remove("relationship_daily_gain_points_${friend.id}")
+            .remove("shared_moments_${friend.id}")
             .remove("unread_${friend.id}")
             .remove("current_session_${friend.id}")
             .remove("scheduled_reply_${friend.id}")
+            .remove("planned_events_${friend.id}")
+            .remove("proactive_paused_until_${friend.id}")
+            .remove("last_proactive_sent_${friend.id}")
             .apply()
+        removeProactiveMessages(friend.id)
     }
 
     private fun deleteChatImage(path: String) {
         runCatching {
-            val directory = File(context.filesDir, "chat_images").canonicalFile
             val image = File(path).canonicalFile
-            if (image.parentFile == directory && image.isFile) image.delete()
+            if (image.parentFile == chatImagesDirectory.canonicalFile && image.isFile) image.delete()
         }
     }
 
     private fun deleteFriendPhotos(friend: Friend) {
-        val directory = File(context.filesDir, "system-friend-photos")
+        val directory = systemFriendPhotosDirectory
         val canonicalDirectory = runCatching { directory.canonicalFile }.getOrNull() ?: return
         val photoUri = Uri.parse(friend.photoUri)
         if (photoUri.scheme == "file") {
@@ -596,6 +1372,274 @@ class DostStore(context: Context) {
 
     fun setScheduledReply(friendId: String, pending: Boolean) {
         preferences.edit().putBoolean("scheduled_reply_$friendId", pending).apply()
+    }
+
+    fun proactiveEnabled(): Boolean = preferences.getBoolean("proactive_enabled", false)
+    fun setProactiveEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("proactive_enabled", enabled).apply()
+    }
+
+    fun automaticFollowUpMinutes(): Int = preferences.getInt("automatic_follow_up_minutes", 30).coerceIn(5, 120)
+    fun setAutomaticFollowUpMinutes(minutes: Int) {
+        require(minutes in 5..120)
+        preferences.edit().putInt("automatic_follow_up_minutes", minutes).apply()
+    }
+
+    fun quietHoursStartMinute(): Int = preferences.getInt("quiet_hours_start_minute", 22 * 60).coerceIn(0, 1439)
+    fun quietHoursEndMinute(): Int = preferences.getInt("quiet_hours_end_minute", 8 * 60).coerceIn(0, 1439)
+    fun setQuietHours(startMinute: Int, endMinute: Int) {
+        require(startMinute in 0..1439 && endMinute in 0..1439 && startMinute != endMinute)
+        preferences.edit()
+            .putInt("quiet_hours_start_minute", startMinute)
+            .putInt("quiet_hours_end_minute", endMinute)
+            .apply()
+    }
+
+    fun proactivePausedUntil(friendId: String): Long = preferences.getLong("proactive_paused_until_$friendId", 0L)
+    fun isProactivePaused(friendId: String, nowMillis: Long = System.currentTimeMillis()): Boolean =
+        proactivePausedUntil(friendId) > nowMillis
+
+    fun pauseProactive(friendId: String, untilMillis: Long) {
+        require(untilMillis > System.currentTimeMillis())
+        preferences.edit().putLong("proactive_paused_until_$friendId", untilMillis).apply()
+    }
+
+    fun resumeProactive(friendId: String) {
+        preferences.edit().remove("proactive_paused_until_$friendId").apply()
+    }
+
+    fun canSendProactive(friendId: String, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        return nextProactiveEligibleAt(friendId, nowMillis)?.let { it <= nowMillis } ?: false
+    }
+
+    fun recordProactiveSent(friendId: String, nowMillis: Long = System.currentTimeMillis()) {
+        preferences.edit()
+            .putLong("last_proactive_sent_$friendId", nowMillis)
+            .putLong("last_proactive_global_sent", nowMillis)
+            .apply()
+    }
+
+    fun nextProactiveEligibleAt(friendId: String, nowMillis: Long = System.currentTimeMillis()): Long? {
+        if (!proactiveEnabled()) return null
+        val pausedUntil = proactivePausedUntil(friendId)
+        if (pausedUntil == Long.MAX_VALUE) return null
+        val lastSent = preferences.getLong("last_proactive_sent_$friendId", 0L)
+        val cadenceMillis = preferences.getInt("proactive_cadence_minutes", 180).coerceIn(30, 1440) * 60_000L
+        val globalEligible = preferences.getLong("last_proactive_global_sent", 0L) + GLOBAL_PROACTIVE_SPACING_MILLIS
+        val timeZone = validZoneId(userTimeZoneId())
+        var eligible = nextTimeAfterQuietHours(
+            java.time.Instant.ofEpochMilli(maxOf(nowMillis, pausedUntil, lastSent + cadenceMillis, globalEligible)).atZone(timeZone),
+            quietHoursStartMinute(),
+            quietHoursEndMinute()
+        ).toInstant().toEpochMilli()
+        val reservedDueTimes = loadProactiveMessages()
+            .filter { it.trigger != ProactiveTrigger.USER_REMINDER && it.state == ProactiveDeliveryState.SCHEDULED }
+            .map { it.dueAtMillis }
+        while (true) {
+            val staggered = staggerProactiveTime(eligible, reservedDueTimes)
+            if (staggered == eligible) break
+            eligible = nextTimeAfterQuietHours(
+                java.time.Instant.ofEpochMilli(staggered).atZone(timeZone),
+                quietHoursStartMinute(),
+                quietHoursEndMinute()
+            ).toInstant().toEpochMilli()
+        }
+        return eligible
+    }
+
+    fun setProactiveCadenceMinutes(minutes: Int) {
+        require(minutes in 30..1440)
+        preferences.edit().putInt("proactive_cadence_minutes", minutes).apply()
+    }
+
+    fun proactiveCadenceMinutes(): Int = preferences.getInt("proactive_cadence_minutes", 180).coerceIn(30, 1440)
+
+    fun loadProactiveMessages(friendId: String? = null): List<ProactiveMessage> = runCatching {
+        val json = JSONArray(preferences.getString("proactive_messages", "[]"))
+        List(json.length()) { index ->
+            val item = json.getJSONObject(index)
+            ProactiveMessage(
+                id = item.getString("id"),
+                friendId = item.getString("friendId"),
+                trigger = ProactiveTrigger.valueOf(item.getString("trigger")),
+                sessionId = item.optString("sessionId"),
+                dueAtMillis = item.getLong("dueAtMillis"),
+                reason = item.optString("reason"),
+                idempotencyKey = item.getString("idempotencyKey"),
+                expectedUserMessageTimestamp = item.optLong("expectedUserMessageTimestamp", 0L),
+                eventId = item.optString("eventId"),
+                state = ProactiveDeliveryState.valueOf(item.optString("state", "SCHEDULED")),
+                updatedAtMillis = item.optLong("updatedAtMillis", 0L)
+            )
+        }.filter { friendId == null || it.friendId == friendId }
+    }.getOrDefault(emptyList())
+
+    fun saveProactiveMessage(message: ProactiveMessage) = synchronized(preferences) {
+        val all = loadProactiveMessages().filterNot { it.id == message.id } + message
+        persistProactiveMessages(all)
+    }
+
+    private fun persistProactiveMessages(messages: List<ProactiveMessage>) {
+        val json = JSONArray()
+        messages.takeLast(200).forEach { item ->
+            json.put(JSONObject().apply {
+                put("id", item.id)
+                put("friendId", item.friendId)
+                put("trigger", item.trigger.name)
+                put("sessionId", item.sessionId)
+                put("dueAtMillis", item.dueAtMillis)
+                put("reason", item.reason)
+                put("idempotencyKey", item.idempotencyKey)
+                put("expectedUserMessageTimestamp", item.expectedUserMessageTimestamp)
+                put("eventId", item.eventId)
+                put("state", item.state.name)
+                put("updatedAtMillis", item.updatedAtMillis)
+            })
+        }
+        preferences.edit().putString("proactive_messages", json.toString()).apply()
+    }
+
+    private fun removeProactiveMessages(friendId: String) = synchronized(preferences) {
+        persistProactiveMessages(loadProactiveMessages().filterNot { it.friendId == friendId })
+    }
+
+    fun proactiveMessage(id: String): ProactiveMessage? = loadProactiveMessages().firstOrNull { it.id == id }
+
+    fun claimProactiveMessage(id: String, nowMillis: Long = System.currentTimeMillis()): ProactiveMessage? = synchronized(preferences) {
+        val existing = proactiveMessage(id) ?: return null
+        val staleClaim = existing.state == ProactiveDeliveryState.SENDING && nowMillis - existing.updatedAtMillis >= 15 * 60_000L
+        if (existing.state != ProactiveDeliveryState.SCHEDULED && !staleClaim) return null
+        existing.copy(state = ProactiveDeliveryState.SENDING, updatedAtMillis = nowMillis).also(::saveProactiveMessage)
+    }
+
+    fun finishProactiveMessage(id: String, state: ProactiveDeliveryState, nowMillis: Long = System.currentTimeMillis()) {
+        require(state == ProactiveDeliveryState.COMPLETED || state == ProactiveDeliveryState.CANCELLED || state == ProactiveDeliveryState.SCHEDULED)
+        val existing = proactiveMessage(id) ?: return
+        val nextState = proactiveStateAfterFinish(existing.state, state)
+        if (nextState == existing.state) return
+        saveProactiveMessage(existing.copy(state = nextState, updatedAtMillis = nowMillis))
+        if (nextState == ProactiveDeliveryState.COMPLETED && existing.trigger != ProactiveTrigger.USER_REMINDER) {
+            preferences.edit()
+                .putLong("last_proactive_sent_${existing.friendId}", nowMillis)
+                .putLong("last_proactive_global_sent", nowMillis)
+                .apply()
+        }
+
+    }
+
+    fun loadPlannedEvents(friendId: String): List<PlannedEvent> = runCatching {
+        val json = JSONArray(preferences.getString("planned_events_$friendId", "[]"))
+        List(json.length()) { index ->
+            val item = json.getJSONObject(index)
+            PlannedEvent(
+                id = item.getString("id"),
+                description = item.getString("description"),
+                dueAtMillis = item.getLong("dueAtMillis"),
+                confidence = item.optString("confidence", "confirmed"),
+                followUpRequested = item.optBoolean("followUpRequested", true),
+                state = PlannedEventState.valueOf(item.optString("state", "UPCOMING"))
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    fun savePlannedEvent(friendId: String, event: PlannedEvent) {
+        require(isBackupUuid(event.id) && event.description.isNotBlank()
+            && event.description.length <= 500 && event.dueAtMillis > 0L
+            && event.confidence in setOf("confirmed", "uncertain")
+        ) { "The planned event is invalid." }
+        val events = loadPlannedEvents(friendId).filterNot { it.id == event.id } + event
+        require(events.size <= 100) { "A friend can have up to 100 planned events." }
+        preferences.edit().putString("planned_events_$friendId", plannedEventsToJson(events).toString()).apply()
+    }
+
+    fun completePlannedEvent(friendId: String, eventId: String, completedAtMillis: Long = System.currentTimeMillis()): PlannedEvent? =
+        synchronized(preferences) {
+            val event = loadPlannedEvents(friendId).firstOrNull { it.id == eventId } ?: return null
+            if (event.state != PlannedEventState.UPCOMING) return event
+            val completed = event.copy(state = PlannedEventState.COMPLETED)
+            val events = loadPlannedEvents(friendId).map { if (it.id == eventId) completed else it }
+            val moment = completedEventMoment(completed, completedAtMillis)
+            val moments = boundedSharedMoments(loadSharedMoments(friendId).filterNot { it.id == moment.id } + moment)
+            check(
+                preferences.edit()
+                    .putString("planned_events_$friendId", plannedEventsToJson(events).toString())
+                    .putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString())
+                    .commit()
+            ) { "Could not complete the planned event." }
+            completed
+        }
+
+    private fun plannedEventsToJson(events: List<PlannedEvent>): JSONArray = JSONArray().apply {
+        events.forEach { item ->
+            put(JSONObject().apply {
+                put("id", item.id)
+                put("description", item.description)
+                put("dueAtMillis", item.dueAtMillis)
+                put("confidence", item.confidence)
+                put("followUpRequested", item.followUpRequested)
+                put("state", item.state.name)
+            })
+        }
+    }
+
+    fun updatePlannedEvent(friendId: String, eventId: String, transform: (PlannedEvent) -> PlannedEvent): PlannedEvent? {
+        val event = loadPlannedEvents(friendId).firstOrNull { it.id == eventId } ?: return null
+        return transform(event).also { savePlannedEvent(friendId, it) }
+    }
+
+    fun loadSharedMoments(friendId: String): List<SharedMoment> = runCatching {
+        val json = JSONArray(preferences.getString("shared_moments_$friendId", "[]"))
+        List(json.length()) { index ->
+            val item = json.getJSONObject(index)
+            SharedMoment(
+                id = item.getString("id"),
+                title = item.optString("title"),
+                detail = item.optString("detail"),
+                createdAtMillis = item.getLong("createdAtMillis"),
+                kind = item.getString("kind"),
+                pinned = item.optBoolean("pinned", false),
+                stageIndex = if (item.has("stageIndex") && !item.isNull("stageIndex")) item.getInt("stageIndex") else null
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    fun saveSharedMoment(friendId: String, moment: SharedMoment) {
+        require(isBackupUuid(moment.id) && moment.title.length <= 200 && moment.detail.length <= 2_000
+            && moment.createdAtMillis > 0L && moment.kind.length in 1..40
+            && (moment.stageIndex == null || moment.stageIndex in 0..9)
+        ) { "The shared moment is invalid." }
+        val moments = boundedSharedMoments(loadSharedMoments(friendId).filterNot { it.id == moment.id } + moment)
+        preferences.edit().putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString()).apply()
+    }
+
+    fun updateSharedMoment(friendId: String, momentId: String, transform: (SharedMoment) -> SharedMoment): SharedMoment? {
+        val moment = loadSharedMoments(friendId).firstOrNull { it.id == momentId } ?: return null
+        return transform(moment).also { saveSharedMoment(friendId, it) }
+    }
+
+    fun deleteSharedMoment(friendId: String, momentId: String) {
+        val moments = loadSharedMoments(friendId).filterNot { it.id == momentId }
+        preferences.edit().putString("shared_moments_$friendId", sharedMomentsToJson(moments).toString()).apply()
+    }
+
+    private fun sharedMomentsToJson(moments: List<SharedMoment>): JSONArray = JSONArray().apply {
+        moments.forEach { moment ->
+            put(JSONObject().apply {
+                put("id", moment.id)
+                put("title", moment.title)
+                put("detail", moment.detail)
+                put("createdAtMillis", moment.createdAtMillis)
+                put("kind", moment.kind)
+                put("pinned", moment.pinned)
+                moment.stageIndex?.let { put("stageIndex", it) }
+            })
+        }
+    }
+
+    private fun boundedSharedMoments(moments: List<SharedMoment>): List<SharedMoment> {
+        val pinned = moments.filter { it.pinned }.takeLast(MAX_SHARED_MOMENTS)
+        val unpinned = moments.filterNot { it.pinned }.takeLast((MAX_SHARED_MOMENTS - pinned.size).coerceAtLeast(0))
+        return (pinned + unpinned).sortedBy { it.createdAtMillis }
     }
 
     fun loadSessionSummaries(friendId: String): List<SessionSummary> = runCatching {
@@ -700,25 +1744,61 @@ class DostStore(context: Context) {
             AppLanguage.ENGLISH -> "en"
         }).apply()
     }
+    fun chatLanguage(): AppLanguage = when (preferences.getString("chat_language", null)) {
+        "bn" -> AppLanguage.BANGLA
+        "hi" -> AppLanguage.HINDI
+        "en" -> AppLanguage.ENGLISH
+        else -> language()
+    }
+    fun hasCustomChatLanguage(): Boolean = preferences.getString("chat_language", null) in setOf("bn", "hi", "en")
+    fun saveChatLanguage(language: AppLanguage) {
+        preferences.edit().putString("chat_language", when (language) {
+            AppLanguage.BANGLA -> "bn"
+            AppLanguage.HINDI -> "hi"
+            AppLanguage.ENGLISH -> "en"
+        }).apply()
+    }
+    fun showFriendCount(): Boolean =
+        preferences.getBoolean(
+            "show_friend_count",
+            preferences.getBoolean("show_friend_search_and_count", false)
+        )
+    fun setShowFriendCount(show: Boolean) {
+        preferences.edit()
+            .putBoolean("show_friend_count", show)
+            .remove("show_friend_search_and_count")
+            .apply()
+    }
 
     private data class ImportedBackupFriend(
         val friend: Friend,
         val memories: List<UserMemory>,
         val summaries: List<SessionSummary>,
+        val events: List<PlannedEvent>,
+        val relationshipOutcomes: List<String>,
+        val relationshipFingerprints: List<String>,
+        val dailyGain: RelationshipDailyGain,
+        val sharedMoments: List<SharedMoment>,
         val messages: List<ImportedBackupMessage>,
         val currentSessionId: String
     )
 
+    private data class RelationshipDailyGain(val dayKey: String, val points: Int)
+
     private data class ImportedBackupMessage(var message: ChatMessage, val imageBytes: ByteArray?)
 
     private companion object {
+        const val MAX_RELATIONSHIP_OUTCOMES = 1_000
+        const val MAX_RELATIONSHIP_FINGERPRINTS = 100
+        const val MAX_SHARED_MOMENTS = 100
         const val API_KEY_ALIAS = "dost_openrouter_api_key"
         const val DEFAULT_AI_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
         const val GCM_IV_LENGTH = 12
         const val GCM_TAG_LENGTH = 128
         const val BACKUP_FORMAT = "dost-local-backup"
         const val BACKUP_VERSION = 1
-        const val MAX_BACKUP_FRIENDS = 10
+
+        const val MAX_BACKUP_FRIENDS = 1_000
         const val MAX_BACKUP_TEXT_LENGTH = 250_000
         const val MAX_BACKUP_IMAGE_BYTES = 375_000
         const val MAX_BACKUP_IMAGE_BASE64_LENGTH = 500_000

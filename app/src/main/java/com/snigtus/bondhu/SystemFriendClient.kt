@@ -12,33 +12,40 @@ import java.net.URLEncoder
 import java.util.UUID
 
 internal class SystemFriendClient {
-    suspend fun getCatalog(): List<SystemFriendListing> = withContext(Dispatchers.IO) {
-        val profiles = getJson("").getJSONArray("profiles")
+    suspend fun getCatalog(chatLanguage: AppLanguage): List<SystemFriendListing> = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Super Secure mode." }
+        val languageCode = chatLanguageCode(chatLanguage)
+        val profiles = getJson("chat_language=$languageCode").getJSONArray("profiles")
         List(profiles.length()) { index ->
             val profile = profiles.getJSONObject(index)
             val id = profile.getString("id").takeIf(String::isNotBlank)
                 ?: throw IOException("A system friend profile has no ID")
+            val age = adultAge(profile)
             SystemFriendListing(
                 id = id,
                 name = requiredText(profile, "name"),
-                age = requiredText(profile, "age"),
+                age = age,
                 gender = requiredText(profile, "gender"),
                 category = requiredText(profile, "category"),
                 description = requiredText(profile, "description"),
                 tags = profile.optString("tags"),
                 relationship = requiredText(profile, "relationship"),
                 greeting = requiredText(profile, "greeting"),
-                photoUrl = photoUrl(profile.optString("photo_url"))
+                photoUrl = photoUrl(profile.optString("photo_url")),
+                personality = profile.optString("personality"),
+                conversationStyle = profile.optString("conversationStyle"),
+                conversationLanguage = chatLanguage
             )
         }.sortedBy { it.name.lowercase() }
     }
 
-    suspend fun getProfile(catalogId: String): Friend = withContext(Dispatchers.IO) {
-        val query = "id=${URLEncoder.encode(catalogId, "UTF-8")}"
+    suspend fun getProfile(catalogId: String, chatLanguage: AppLanguage): Friend = withContext(Dispatchers.IO) {
+        check(superSecureSessionAllowsAi()) { "AI friends are unavailable in Super Secure mode." }
+        val query = "id=${URLEncoder.encode(catalogId, "UTF-8")}&chat_language=${chatLanguageCode(chatLanguage)}"
         val profile = getJson(query).getJSONObject("profile")
         val id = profile.getString("id").takeIf(String::isNotBlank)
             ?: throw IOException("A system friend profile has no ID")
-        val age = requiredText(profile, "age")
+        val age = adultAge(profile)
         Friend(
             id = UUID.randomUUID().toString(),
             name = requiredText(profile, "name"),
@@ -98,8 +105,18 @@ internal class SystemFriendClient {
         profile.optString(key).trim().takeIf(String::isNotBlank)
             ?: throw IOException("A system friend profile is missing $key")
 
+    private fun adultAge(profile: JSONObject): String =
+        requiredText(profile, "age").takeIf { friendAgeResult(it) == AccountAgeResult.VALID }
+            ?: throw IOException("A system friend profile must be for an adult.")
+
     private fun photoUrl(path: String): String =
         path.takeIf(String::isNotBlank)?.let { URL(URL(API_URL), it).toExternalForm() }.orEmpty()
+
+    private fun chatLanguageCode(language: AppLanguage): String = when (language) {
+        AppLanguage.ENGLISH -> "en"
+        AppLanguage.BANGLA -> "bn"
+        AppLanguage.HINDI -> "hi"
+    }
 
     private companion object {
         const val API_URL = "https://bisque-bear-900175.hostingersite.com/api/friends.php"

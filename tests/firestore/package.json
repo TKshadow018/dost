@@ -1,0 +1,12 @@
+{
+  "name": "dost-firestore-rules-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:rules": "firebase emulators:exec --config ../../firebase.json --project demo-dost --only firestore \"node --test firestore.rules.test.js\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.19.0"
+  }
+}

@@ -32,6 +32,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
+import java.text.NumberFormat
+import java.util.Locale
 
 class FloatingChatService : Service() {
     private lateinit var windowManager: WindowManager
@@ -61,6 +63,10 @@ class FloatingChatService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!superSecureSessionAllowsAi()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!::friend.isInitialized) {
             val friendId = intent?.getStringExtra(EXTRA_FRIEND_ID)
             friend = store.loadFriends().firstOrNull { it.id == friendId }
@@ -124,6 +130,8 @@ class FloatingChatService : Service() {
                 visibility = View.GONE
             }
             addView(unreadBadge, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP or Gravity.END))
+            isClickable = true
+            setOnClickListener { togglePanel() }
             setOnTouchListener(DragListener())
         }
         bubbleView = container
@@ -142,7 +150,11 @@ class FloatingChatService : Service() {
 
     private fun updateUnreadBadge(count: Int) {
         unreadBadge?.apply {
-            text = count.coerceAtMost(99).toString()
+            text = if (count > 99) {
+                "${formatFloatingChatNumber(99, store.language())}+"
+            } else {
+                formatFloatingChatNumber(count, store.language())
+            }
             visibility = if (count > 0 && !expanded) View.VISIBLE else View.GONE
         }
     }
@@ -209,12 +221,13 @@ class FloatingChatService : Service() {
             gravity = Gravity.CENTER_VERTICAL
         }
         val title = TextView(this).apply {
-            text = "Dost · ${friend.name}"
+            text = LocalizedText.CHAT_WITH_FRIEND.resolve(store.language(), friend.name)
             textSize = 18f
             setTextColor(Color.rgb(17, 24, 39))
         }
         val close = Button(this).apply {
             text = "×"
+            contentDescription = LocalizedText.CLOSE.resolve(store.language())
             setOnClickListener { collapsePanel() }
         }
         header.addView(title, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -222,7 +235,11 @@ class FloatingChatService : Service() {
         root.addView(header)
 
         val status = TextView(this).apply {
-            text = "${friendshipLevel(friend.friendshipScore, store.language())} · ${friend.friendshipScore}/100"
+            text = LocalizedText.FRIENDSHIP_SCORE.resolve(
+                store.language(),
+                friendshipLevel(friend.friendshipScore, store.language()),
+                formatFloatingChatNumber(friend.friendshipScore, store.language())
+            )
             textSize = 12f
             setTextColor(Color.DKGRAY)
         }
@@ -364,7 +381,7 @@ class FloatingChatService : Service() {
                         event.rawY >= targetLocation[1] - dp(24) && event.rawY <= targetLocation[1] + targetHeight + dp(24)
                     hideCloseTarget()
                     if (droppedOnClose) closeFromDrop()
-                    else if (!moved) togglePanel()
+                    else if (!moved) view.performClick()
                     return true
                 }
             }
@@ -374,7 +391,15 @@ class FloatingChatService : Service() {
 
     private fun buildNotification(): Notification {
         val intent = Intent(this, MainActivity::class.java)
-        val pending = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            .putExtra(ChatLaunch.EXTRA_FRIEND_ID, friend.id)
+            .putExtra(ChatLaunch.EXTRA_PROFILE_NAMESPACE, store.profileNamespace)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val pending = PendingIntent.getActivity(
+            this,
+            "${store.profileNamespace}:${friend.id}".hashCode(),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID).setContentTitle(LocalizedText.FLOATING_CHAT_TITLE.resolve(store.language())).setContentText(LocalizedText.CHAT_WITH_FRIEND.resolve(store.language(), friend.name)).setSmallIcon(R.mipmap.ic_launcher).setContentIntent(pending).setOngoing(true).build()
         } else {
@@ -390,6 +415,14 @@ class FloatingChatService : Service() {
 
     private fun overlayType() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    private fun formatFloatingChatNumber(value: Int, language: AppLanguage): String {
+        val locale = when (language) {
+            AppLanguage.ENGLISH -> Locale.ENGLISH
+            AppLanguage.BANGLA -> Locale.forLanguageTag("bn")
+            AppLanguage.HINDI -> Locale.forLanguageTag("hi")
+        }
+        return NumberFormat.getIntegerInstance(locale).format(value)
+    }
     private fun rounded(color: Int, radius: Int) = GradientDrawable().apply { setColor(color); cornerRadius = radius.toFloat() }
 
     override fun onDestroy() {
