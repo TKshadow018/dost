@@ -2,7 +2,7 @@ DOST PRIVACY POLICY
 Effective date: November 28, 2026
 
 ABOUT THIS POLICY
-Dost is an Android app for people aged 13 and older, with AI chats and optional real-person messaging. This policy describes information stored on your device, information sent to Dost's API and service providers, Firebase data, crash reports, and Google Play purchases. Circle remains planned. Cipher and Shield are disabled by default; paid modes remain unavailable unless explicitly enabled.
+Dost is an Android app for people aged 13 and older, with AI chats and optional real-person messaging. This policy describes information stored on your device, information sent to Dost's API and service providers, Firebase data, crash reports, and Google Play purchases. Circle is the default free messenger. Cipher and Shield are disabled by default; paid modes remain unavailable unless explicitly enabled.
 
 1. INFORMATION STORED ON YOUR DEVICE
 Dost stores the following information in the app's private storage on your Android device:
@@ -59,7 +59,7 @@ Shield group text is visible to current members of that organization; direct tex
 
 Shield data is not sent to Dost's AI API, OpenRouter, model providers, the AI conversation archive, People collections, anonymous analytics, or advertising systems. It is not used for AI, analytics, product improvement, experiments, or testing. The Shield screen does not emit analytics events or attach message text, member fields, UIDs, organization IDs, or invite details to Crashlytics custom keys or logs. Standard Crashlytics process-crash reports remain enabled as described in section 6; Shield adds no message or organization fields to those reports. It uses Dost's existing Firebase/Firestore project and region; customer-managed hosting and region selection are not available.
 
-CIRCLE (PLANNED; NOT AVAILABLE IN THIS BUILD)
+CIRCLE
 Circle is the default free messenger for people you already know. You add contacts by QR code, invite, or handle; there is no address-book sync in this version. Handle lookup is exact-match only, rate-limited on the Dost API, off by default for teens, and can be turned off by any user. Firestore processes contact and profile identifiers, conversation and group membership, message content, timestamps, read receipts, and typing indicators, plus invite-link tokens to deliver messages and display their status. Conversation participants and Firebase administrators/provider personnel may access data as described in these controls. You can delete a conversation, contact, or your account; provider-managed backups may persist under their own schedule. Circle notifications use generic lock-screen text and do not include message content. QR codes and invite links expire and can be replaced; anyone who has a valid link can add you as a contact when they accept it in the app.
 
 EXPLORE
