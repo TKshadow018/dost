@@ -68,6 +68,15 @@ internal data class SocialConversation(
     val unreadCount: Int = 0
 )
 
+internal data class CircleGroup(
+    val id: String,
+    val name: String,
+    val members: List<String>,
+    val admins: List<String>,
+    val lastMessage: String,
+    val lastMessageAtMillis: Long
+)
+
 internal data class SocialContactRequest(
     val id: String,
     val sender: PublicPersonProfile
@@ -264,7 +273,7 @@ internal data class PeopleCallCandidate(
 
 internal fun socialAgeCohort(age: String): String? {
     val years = age.toIntOrNull() ?: return null
-    if (years !in MINIMUM_ACCOUNT_AGE..MAX_PROFILE_AGE) return null
+    if (years !in ROMANCE_MINIMUM_AGE..MAX_PROFILE_AGE) return null
     return "adult"
 }
 
@@ -272,8 +281,6 @@ internal fun socialAgeBand(age: String): String? {
     val years = age.toIntOrNull() ?: return null
     if (years !in ROMANCE_MINIMUM_AGE..MAX_PROFILE_AGE) return null
     return when {
-        years <= 15 -> "13–15"
-        years <= 17 -> "16–17"
         years <= 24 -> "18–24"
         years <= 34 -> "25–34"
         else -> "35+"
@@ -682,6 +689,254 @@ internal class PeopleRepository(context: Context) {
         requireSignedIn(uid)
         val snapshot = database().collection(CHATS).document(conversationId).get().await()
         return if (snapshot.exists()) snapshot.toSocialConversation(uid) else null
+    }
+
+    fun listenCircleGroups(
+        uid: String,
+        onChange: (List<CircleGroup>) -> Unit,
+        onError: (Exception) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_GROUPS)
+            .whereArrayContains("members", uid)
+            .limit(MAX_CONVERSATIONS.toLong())
+            .addSnapshotListener { snapshot, listenerError ->
+                if (listenerError != null) {
+                    onError(listenerError)
+                } else if (snapshot == null) {
+                    onError(IllegalStateException("Could not load Circle groups."))
+                } else {
+                    try {
+                        onChange(snapshot.documents.map { it.toCircleGroup() }
+                            .sortedByDescending { it.lastMessageAtMillis })
+                    } catch (exception: Exception) {
+                        onError(exception)
+                    }
+                }
+            }
+    }
+
+    suspend fun createCircleGroup(uid: String, name: String): CircleGroup {
+        requireSignedIn(uid)
+        val trimmed = name.trim()
+        require(trimmed.length in 1..80) { "Group names must contain 1–80 characters." }
+        val group = database().collection(CIRCLE_GROUPS).document()
+        group.set(mapOf(
+            "members" to listOf(uid),
+            "admins" to listOf(uid),
+            "createdBy" to uid,
+            "name" to trimmed,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+            "lastMessage" to "",
+            "lastMessageSenderUid" to "",
+            "lastMessageAt" to FieldValue.serverTimestamp(),
+            "lastMessageId" to ""
+        )).await()
+        return CircleGroup(group.id, trimmed, listOf(uid), listOf(uid), "", System.currentTimeMillis())
+    }
+
+    suspend fun inviteCircleGroupMember(uid: String, groupId: String, inviteeUid: String) {
+        requireSignedIn(uid)
+        require(groupId.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        require(inviteeUid.matches(Regex("[A-Za-z0-9:_-]{1,128}")) && inviteeUid != uid)
+        val group = database().collection(CIRCLE_GROUPS).document(groupId)
+        val groupSnapshot = group.get().await()
+        check(groupSnapshot.exists()) { "This group is no longer available." }
+        group.collection(CIRCLE_GROUP_INVITES).document(inviteeUid)
+            .set(mapOf(
+                "groupId" to groupId,
+                "groupName" to (groupSnapshot.getString("name") ?: "Circle group"),
+                "inviteeUid" to inviteeUid,
+                "invitedBy" to uid,
+                "status" to "pending",
+                "createdAt" to FieldValue.serverTimestamp()
+            )).await()
+    }
+
+    fun listenCircleGroupInvites(
+        uid: String,
+        onChange: (List<Pair<String, String>>) -> Unit,
+        onError: (Exception) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collectionGroup(CIRCLE_GROUP_INVITES)
+            .whereEqualTo("inviteeUid", uid)
+            .whereEqualTo("status", "pending")
+            .limit(MAX_CONTACT_REQUESTS.toLong())
+            .addSnapshotListener { snapshot, listenerError ->
+                if (listenerError != null) {
+                    onError(listenerError)
+                } else if (snapshot == null) {
+                    onError(IllegalStateException("Could not load group invitations."))
+                } else {
+                    onChange(snapshot.documents.mapNotNull { invite ->
+                        val groupId = invite.getString("groupId") ?: return@mapNotNull null
+                        groupId to (invite.getString("groupName") ?: "Circle group")
+                    })
+                }
+            }
+    }
+
+    suspend fun acceptCircleGroupInvite(uid: String, groupId: String) {
+        requireSignedIn(uid)
+        val database = database()
+        val group = database.collection(CIRCLE_GROUPS).document(groupId)
+        val invite = group.collection(CIRCLE_GROUP_INVITES).document(uid)
+        database.runTransaction { transaction ->
+            val groupSnapshot = transaction.get(group)
+            val inviteSnapshot = transaction.get(invite)
+            check(groupSnapshot.exists() && inviteSnapshot.getString("status") == "pending") {
+                "This group invitation is no longer available."
+            }
+            val members = (groupSnapshot.get("members") as? List<*>)
+                ?.filterIsInstance<String>() ?: error("The group membership is invalid.")
+            check(uid !in members && members.size < MAX_CIRCLE_GROUP_MEMBERS) {
+                "This group is full or you are already a member."
+            }
+            transaction.update(group, mapOf(
+                "members" to (members + uid),
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+            transaction.update(invite, mapOf(
+                "status" to "accepted",
+                "acceptedAt" to FieldValue.serverTimestamp()
+            ))
+        }.await()
+    }
+
+    suspend fun renameCircleGroup(uid: String, groupId: String, name: String) {
+        requireSignedIn(uid)
+        val trimmed = name.trim()
+        require(trimmed.length in 1..80) { "Group names must contain 1–80 characters." }
+        database().collection(CIRCLE_GROUPS).document(groupId).update(mapOf(
+            "name" to trimmed,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )).await()
+    }
+
+    suspend fun leaveCircleGroup(uid: String, groupId: String) {
+        requireSignedIn(uid)
+        val database = database()
+        val group = database.collection(CIRCLE_GROUPS).document(groupId)
+        database.runTransaction { transaction ->
+            val snapshot = transaction.get(group)
+            check(snapshot.exists()) { "This group is no longer available." }
+            val members = (snapshot.get("members") as? List<*>)
+                ?.filterIsInstance<String>() ?: error("The group membership is invalid.")
+            check(uid in members) { "You are not a member of this group." }
+            transaction.update(group, mapOf(
+                "members" to members.filterNot { it == uid },
+                "admins" to ((snapshot.get("admins") as? List<*>)
+                    ?.filterIsInstance<String>() ?: emptyList()).filterNot { it == uid },
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+        }.await()
+    }
+
+    suspend fun removeCircleGroupMember(uid: String, groupId: String, memberUid: String) {
+        requireSignedIn(uid)
+        require(memberUid != uid)
+        val database = database()
+        val group = database.collection(CIRCLE_GROUPS).document(groupId)
+        database.runTransaction { transaction ->
+            val snapshot = transaction.get(group)
+            check(snapshot.exists()) { "This group is no longer available." }
+            val members = (snapshot.get("members") as? List<*>)
+                ?.filterIsInstance<String>() ?: error("The group membership is invalid.")
+            check(memberUid in members) { "This person is not a member of the group." }
+            transaction.update(group, mapOf(
+                "members" to members.filterNot { it == memberUid },
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+        }.await()
+    }
+
+    suspend fun promoteCircleGroupAdmin(uid: String, groupId: String, memberUid: String) {
+        requireSignedIn(uid)
+        val group = database().collection(CIRCLE_GROUPS).document(groupId)
+        database().runTransaction { transaction ->
+            val snapshot = transaction.get(group)
+            check(snapshot.exists()) { "This group is no longer available." }
+            val members = (snapshot.get("members") as? List<*>)
+                ?.filterIsInstance<String>() ?: error("The group membership is invalid.")
+            val admins = (snapshot.get("admins") as? List<*>)
+                ?.filterIsInstance<String>() ?: error("The group admins are invalid.")
+            check(memberUid in members && memberUid !in admins) {
+                "This person cannot be made a group admin."
+            }
+            transaction.update(group, mapOf(
+                "admins" to (admins + memberUid),
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+        }.await()
+    }
+
+    fun listenCircleGroupMessages(
+        uid: String,
+        groupId: String,
+        onChange: (List<SocialChatMessage>) -> Unit,
+        onError: (Exception) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_GROUPS).document(groupId)
+            .collection(MESSAGES)
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(MAX_SOCIAL_CHAT_MESSAGES.toLong())
+            .addSnapshotListener { snapshot, listenerError ->
+                if (listenerError != null) {
+                    onError(listenerError)
+                } else if (snapshot == null) {
+                    onError(IllegalStateException("Could not load group messages."))
+                } else {
+                    try {
+                        onChange(snapshot.documents.map { it.toSocialChatMessage() }
+                            .sortedBy { it.createdAtMillis })
+                    } catch (exception: Exception) {
+                        onError(exception)
+                    }
+                }
+            }
+    }
+
+    suspend fun sendCircleGroupMessage(
+        uid: String,
+        groupId: String,
+        text: String,
+        clientMessageId: String
+    ) {
+        requireSignedIn(uid)
+        val trimmed = text.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= MAX_SOCIAL_MESSAGE_LENGTH)
+        require(isValidSocialMessageId(clientMessageId))
+        val database = database()
+        val group = database.collection(CIRCLE_GROUPS).document(groupId)
+        val message = group.collection(MESSAGES).document(clientMessageId)
+        database.runTransaction { transaction ->
+            val groupSnapshot = transaction.get(group)
+            val existing = transaction.get(message)
+            check(groupSnapshot.exists() && uid in (groupSnapshot.get("members") as? List<*>).orEmpty()) {
+                "This group is not available."
+            }
+            if (existing.exists()) {
+                check(existing.getString("senderUid") == uid && existing.getString("text") == trimmed) {
+                    "A different message already uses this ID."
+                }
+                return@runTransaction false
+            }
+            transaction.update(group, mapOf(
+                "lastMessage" to trimmed,
+                "lastMessageSenderUid" to uid,
+                "lastMessageAt" to FieldValue.serverTimestamp(),
+                "lastMessageId" to clientMessageId
+            ))
+            transaction.set(message, mapOf(
+                "senderUid" to uid,
+                "text" to trimmed,
+                "createdAt" to FieldValue.serverTimestamp()
+            ))
+            true
+        }.await()
     }
 
     suspend fun registerCallToken(uid: String, token: String) {
@@ -1151,6 +1406,21 @@ internal class PeopleRepository(context: Context) {
         )
     }
 
+    private fun DocumentSnapshot.toCircleGroup(): CircleGroup {
+        val members = (get("members") as? List<*>)?.filterIsInstance<String>()
+            ?: error("A Circle group is missing its members.")
+        val admins = (get("admins") as? List<*>)?.filterIsInstance<String>()
+            ?: error("A Circle group is missing its admins.")
+        return CircleGroup(
+            id = id,
+            name = getString("name") ?: error("A Circle group is missing its name."),
+            members = members,
+            admins = admins,
+            lastMessage = getString("lastMessage").orEmpty(),
+            lastMessageAtMillis = getTimestamp("lastMessageAt")?.toDate()?.time ?: 0L
+        )
+    }
+
     private companion object {
         const val TAG = "PeopleRepository"
         const val PROFILES = "publicProfiles"
@@ -1162,6 +1432,8 @@ internal class PeopleRepository(context: Context) {
         const val CONTACT_REQUESTS = "peopleContactRequests"
         const val INCOMING_REQUESTS = "incoming"
         const val CONTACT_APPROVALS = "peopleContactApprovals"
+        const val CIRCLE_GROUPS = "circleGroups"
+        const val CIRCLE_GROUP_INVITES = "invites"
         const val CALLS = "calls"
         const val CALLER_CANDIDATES = "callerCandidates"
         const val CALLEE_CANDIDATES = "calleeCandidates"
@@ -1172,6 +1444,7 @@ internal class PeopleRepository(context: Context) {
         const val MAX_CONVERSATIONS = 100
         const val MAX_CONTACT_REQUESTS = 100
         const val MAX_SOCIAL_MESSAGE_LENGTH = 2_000
+        const val MAX_CIRCLE_GROUP_MEMBERS = 32
         const val MAX_CALL_SDP_LENGTH = 65_536
         const val MAX_CALL_CANDIDATE_LENGTH = 4_096
 

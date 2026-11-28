@@ -225,6 +225,7 @@ fun DostApp(
     var knowledgeFriendFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var chatReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     var peopleChatReturnScreen by rememberSaveable { mutableStateOf(AppScreen.PEOPLE) }
+    var circleGroupReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     var gameReturnScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     val homeListState = rememberLazyListState()
     val knowledgeListState = rememberLazyListState()
@@ -235,6 +236,8 @@ fun DostApp(
     var addingSystemFriendId by remember { mutableStateOf<String?>(null) }
     var recentlyAddedSystemFriend by remember { mutableStateOf<Friend?>(null) }
     var selectedPeopleConversation by remember { mutableStateOf<SocialConversation?>(null) }
+    var selectedCircleGroup by remember { mutableStateOf<CircleGroup?>(null) }
+    var peopleInboxGroups by remember { mutableStateOf(emptyList<CircleGroup>()) }
     var peopleInboxConversations by remember { mutableStateOf(emptyList<SocialConversation>()) }
     var peopleInboxLoading by remember { mutableStateOf(false) }
     var peopleInboxError by remember { mutableStateOf<String?>(null) }
@@ -398,6 +401,8 @@ fun DostApp(
         mutedConversationIds = store.mutedConversationIds()
         archivedConversationIds = store.archivedConversationIds()
         peopleInboxConversations = emptyList()
+        peopleInboxGroups = emptyList()
+        selectedCircleGroup = null
         peopleInboxEligibleUid = ""
         peopleInboxTeen = false
         peopleInboxError = null
@@ -483,6 +488,30 @@ fun DostApp(
         }
     }
 
+    DisposableEffect(screen, selectedMainTab, activeFirebaseUid, peopleInboxEligibleUid, peopleInboxRefreshKey) {
+        if (screen != AppScreen.HOME || selectedMainTab != MainTab.CHATS
+            || !BuildConfig.DOST_PEOPLE_ENABLED
+            || activeFirebaseUid.isBlank()
+            || peopleInboxEligibleUid != activeFirebaseUid
+        ) {
+            onDispose { }
+        } else {
+            val registration = try {
+                PeopleRepository(context).listenCircleGroups(
+                    activeFirebaseUid,
+                    onChange = { peopleInboxGroups = it },
+                    onError = {
+                        peopleInboxError = it.message ?: "Could not load Circle groups."
+                    }
+                )
+            } catch (error: Exception) {
+                peopleInboxError = error.message ?: "Could not load Circle groups."
+                null
+            }
+            onDispose { registration?.remove() }
+        }
+    }
+
     suspend fun importBackupText(backupText: String) {
         withContext(Dispatchers.IO) {
             ConversationManager.importLocalData(JSONObject(backupText))
@@ -511,6 +540,7 @@ fun DostApp(
             AppScreen.CHAT,
             AppScreen.PEOPLE,
             AppScreen.PEOPLE_CHAT,
+            AppScreen.CIRCLE_GROUP_CHAT,
             AppScreen.CIPHER,
             AppScreen.SUPER_SECURE,
             AppScreen.FRIEND_PROFILE,
@@ -526,6 +556,7 @@ fun DostApp(
         when (screen) {
             AppScreen.CHAT -> screen = chatReturnScreen
             AppScreen.PEOPLE_CHAT -> screen = peopleChatReturnScreen
+            AppScreen.CIRCLE_GROUP_CHAT -> screen = circleGroupReturnScreen
             AppScreen.CIPHER -> screen = AppScreen.PEOPLE_CHAT
             AppScreen.SUPER_SECURE -> {
                 closeSuperSecure()
@@ -807,7 +838,7 @@ fun DostApp(
             }
             return@LaunchedEffect
         }
-        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
+        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.CIRCLE_GROUP_CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
         if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
             if (store.activateAccount(currentAccountId)) {
@@ -1266,12 +1297,13 @@ fun DostApp(
                     userName = name.ifBlank { store.userName().ifBlank { "Friend" } },
                     friends = if (exploreEnabled) friends else emptyList(),
                     peopleConversations = peopleInboxConversations,
+                    circleGroups = peopleInboxGroups,
                     pinnedConversationIds = pinnedConversationIds,
                     mutedConversationIds = mutedConversationIds,
                     archivedConversationIds = archivedConversationIds,
                     peopleInboxLoading = peopleInboxLoading,
                     peopleInboxError = peopleInboxError,
-                    circleContactsComingSoon = peopleInboxTeen,
+                    circleContactsComingSoon = false,
                     searchQuery = homeInboxSearchQuery,
                     onSearchQueryChange = { homeInboxSearchQuery = it },
                     selectedFilter = homeInboxFilter,
@@ -1284,10 +1316,25 @@ fun DostApp(
                         if (exploreEnabled) selectedMainTab = MainTab.DISCOVER
                     },
                     onOpenPeople = {
-                        if (canUsePeopleDiscovery) {
+                        if (BuildConfig.DOST_PEOPLE_ENABLED && currentAccountAge >= MINIMUM_ACCOUNT_AGE) {
                             peopleReturnMainTab = MainTab.CHATS
                             peopleCircleMode = true
-                            withAdultEligibility { screen = AppScreen.PEOPLE }
+                            scope.launch {
+                                checkingPeopleEligibility = true
+                                try {
+                                    authRepository.ensureAgeCohort(store.birthMonth(), store.birthYear())
+                                    if (currentAccountAge >= ROMANCE_MINIMUM_AGE) {
+                                        authRepository.ensureAdultEligibility()
+                                    }
+                                    screen = AppScreen.PEOPLE
+                                } catch (error: Exception) {
+                                    if (error is CancellationException) throw error
+                                    settingsNotice = error.message?.take(160)
+                                        ?: "Circle eligibility could not be checked."
+                                } finally {
+                                    checkingPeopleEligibility = false
+                                }
+                            }
                         }
                     },
                     onRetryPeopleInbox = { peopleInboxRefreshKey++ },
@@ -1297,6 +1344,12 @@ fun DostApp(
                             peopleChatReturnScreen = AppScreen.HOME
                             screen = AppScreen.PEOPLE_CHAT
                         }
+                    },
+                    onOpenCircleGroup = { group ->
+                        selectedCircleGroup = group
+                        circleGroupReturnScreen = AppScreen.HOME
+                        peopleCircleMode = true
+                        screen = AppScreen.CIRCLE_GROUP_CHAT
                     },
                     onOpenGames = {
                         gameReturnScreen = AppScreen.HOME
@@ -1324,7 +1377,7 @@ fun DostApp(
                     },
                     generatingProfileIds = generatingProfileIds,
                     profileFailedIds = profileErrors.keys,
-                    peopleEnabled = canUsePeopleDiscovery,
+                    peopleEnabled = BuildConfig.DOST_PEOPLE_ENABLED && currentAccountAge >= MINIMUM_ACCOUNT_AGE,
                     showExplorePlus = canUseExplorePlus,
                     onOpenPremium = ::openExplorePlus,
                     circleOnly = true
@@ -1393,9 +1446,10 @@ fun DostApp(
                     if (!it) {
                         selectedMainTab = MainTab.CHATS
                         if (screen in setOf(
-                                AppScreen.CHAT, AppScreen.SYSTEM_FRIEND_PICKER,
-                                AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.FRIEND_PROFILE
-                            )
+                                AppScreen.CHAT, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.FRIEND_PROFILE
+                            ) || (screen in setOf(
+                                AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.CIRCLE_GROUP_CHAT
+                            ) && !peopleCircleMode)
                         ) screen = AppScreen.HOME
                         friends.forEach { friend ->
                             ConversationWorkScheduler.cancelAllForFriend(context, friend.id)
@@ -1583,8 +1637,8 @@ fun DostApp(
             },
             onBack = { screen = AppScreen.HOME }
         )
-        AppScreen.PEOPLE -> if (exploreEnabled && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
-            && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
+        AppScreen.PEOPLE -> if ((peopleCircleMode || exploreEnabled) && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= MINIMUM_ACCOUNT_AGE
         ) PeopleScreen(
             language = language,
             uid = authRepository.currentAccount?.uid.orEmpty(),
@@ -1606,12 +1660,17 @@ fun DostApp(
                         screen = AppScreen.PEOPLE_CHAT
                     }
                 }
+            },
+            onOpenGroup = { group ->
+                selectedCircleGroup = group
+                circleGroupReturnScreen = AppScreen.PEOPLE
+                screen = AppScreen.CIRCLE_GROUP_CHAT
             }
         ) else {
             selectedPeopleConversation = null
             screen = AppScreen.HOME
         }
-        AppScreen.PEOPLE_CHAT -> if (exploreEnabled && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
+        AppScreen.PEOPLE_CHAT -> if ((peopleCircleMode || exploreEnabled) && BuildConfig.DOST_PEOPLE_ENABLED && hasLocalAccountAccess()
             && (store.userAge().toIntOrNull() ?: 0) >= ROMANCE_MINIMUM_AGE
         ) selectedPeopleConversation?.let { conversation ->
             PeopleChatScreen(
@@ -1625,6 +1684,21 @@ fun DostApp(
             )
         } ?: run { screen = AppScreen.PEOPLE } else {
             selectedPeopleConversation = null
+            screen = AppScreen.HOME
+        }
+        AppScreen.CIRCLE_GROUP_CHAT -> if (peopleCircleMode && BuildConfig.DOST_PEOPLE_ENABLED
+            && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= MINIMUM_ACCOUNT_AGE
+        ) selectedCircleGroup?.let { group ->
+            CircleGroupChatScreen(
+                language = language,
+                uid = activeFirebaseUid,
+                group = group,
+                store = store,
+                onBack = { screen = circleGroupReturnScreen }
+            )
+        } ?: run { screen = AppScreen.PEOPLE } else {
+            selectedCircleGroup = null
             screen = AppScreen.HOME
         }
         AppScreen.CIPHER -> if (BuildConfig.DOST_CIPHER_ENABLED && BuildConfig.DOST_PEOPLE_ENABLED

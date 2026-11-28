@@ -360,6 +360,175 @@ service cloud.firestore {
         && request.resource.data.unreadCounts[peerUid] == unreadCount(resource.data, peerUid);
     }
 
+    function circleEligible() {
+      return signedIn()
+        && request.auth.token.get('dostAgeCohort', '') in ['teen', 'adult'];
+    }
+
+    function circleGroupMember(groupData) {
+      return circleEligible()
+        && groupData.members is list
+        && request.auth.uid in groupData.members;
+    }
+
+    function validCircleGroupCreate() {
+      let data = request.resource.data;
+      return circleEligible()
+        && data.keys().hasAll([
+          'members', 'admins', 'createdBy', 'name', 'createdAt', 'updatedAt',
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
+        ])
+        && data.keys().hasOnly([
+          'members', 'admins', 'createdBy', 'name', 'createdAt', 'updatedAt',
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
+        ])
+        && data.members == [request.auth.uid]
+        && data.admins == [request.auth.uid]
+        && data.createdBy == request.auth.uid
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 80
+        && data.createdAt == request.time
+        && data.updatedAt == request.time
+        && data.lastMessage == ''
+        && data.lastMessageSenderUid == ''
+        && data.lastMessageAt == request.time
+        && data.lastMessageId == '';
+    }
+
+    function validCircleGroupInviteCreate(groupId, inviteeUid) {
+      let group = get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
+      let data = request.resource.data;
+      return circleEligible()
+        && circleGroupMember(group)
+        && request.auth.uid in group.admins
+        && inviteeUid is string
+        && inviteeUid != request.auth.uid
+        && inviteeUid.size() > 0
+        && inviteeUid.size() <= 128
+        && !(inviteeUid in group.members)
+        && neitherBlocked(request.auth.uid, inviteeUid)
+        && data.keys().hasAll(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.keys().hasOnly(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.groupId == groupId
+        && data.groupName == group.name
+        && data.inviteeUid == inviteeUid
+        && data.invitedBy == request.auth.uid
+        && data.status == 'pending'
+        && data.createdAt == request.time;
+    }
+
+    function validCircleGroupInviteAccept(groupId, inviteeUid) {
+      let data = request.resource.data;
+      return circleEligible()
+        && request.auth.uid == inviteeUid
+        && resource.data.groupId == groupId
+        && resource.data.inviteeUid == inviteeUid
+        && resource.data.status == 'pending'
+        && data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt'])
+        && data.status == 'accepted'
+        && data.acceptedAt == request.time;
+    }
+
+    function validCircleGroupInviteReissue(groupId, inviteeUid) {
+      let group = get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
+      let oldInvite = resource.data;
+      let data = request.resource.data;
+      return circleGroupMember(group)
+        && request.auth.uid in group.admins
+        && inviteeUid is string
+        && !(inviteeUid in group.members)
+        && oldInvite.groupId == groupId
+        && oldInvite.inviteeUid == inviteeUid
+        && oldInvite.status == 'accepted'
+        && neitherBlocked(request.auth.uid, inviteeUid)
+        && data.keys().hasAll(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.keys().hasOnly(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.groupId == groupId
+        && data.groupName == group.name
+        && data.inviteeUid == inviteeUid
+        && data.invitedBy == request.auth.uid
+        && data.status == 'pending'
+        && data.createdAt == request.time;
+    }
+
+    function validCircleGroupUpdate(groupId) {
+      let oldData = resource.data;
+      let newData = request.resource.data;
+      let changed = newData.diff(oldData).affectedKeys();
+      let admin = circleGroupMember(oldData) && request.auth.uid in oldData.admins;
+      let leaving = circleGroupMember(oldData)
+        && oldData.members.toSet().difference([request.auth.uid].toSet()) == newData.members.toSet()
+        && oldData.admins.toSet().difference([request.auth.uid].toSet()) == newData.admins.toSet()
+        && (newData.members.size() == 0 || newData.admins.size() > 0)
+        && changed.hasOnly(['members', 'admins', 'updatedAt'])
+        && newData.updatedAt == request.time;
+      let removingMember = admin
+        && oldData.members.size() > 1
+        && newData.members.size() == oldData.members.size() - 1
+        && oldData.members.hasAll(newData.members)
+        && newData.members.hasAll(oldData.admins)
+        && request.auth.uid in newData.members
+        && newData.admins == oldData.admins
+        && changed.hasOnly(['members', 'updatedAt'])
+        && newData.updatedAt == request.time;
+      let acceptingInvite = newData.members.size() == oldData.members.size() + 1
+        && request.auth.uid in newData.members
+        && !(request.auth.uid in oldData.members)
+        && newData.members.hasAll(oldData.members)
+        && newData.admins == oldData.admins
+        && changed.hasOnly(['members', 'updatedAt'])
+        && newData.updatedAt == request.time
+        && exists(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid))
+        && get(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid)).data.status == 'pending'
+        && existsAfter(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid)).data.status == 'accepted';
+      let renamed = changed.hasOnly(['name', 'updatedAt'])
+        && newData.name is string
+        && newData.name.size() >= 1
+        && newData.name.size() <= 80
+        && newData.updatedAt == request.time;
+      let promotingAdmin = admin
+        && newData.members == oldData.members
+        && newData.admins.size() == oldData.admins.size() + 1
+        && newData.admins.hasAll(oldData.admins)
+        && newData.members.hasAll(newData.admins)
+        && changed.hasOnly(['admins', 'updatedAt'])
+        && newData.updatedAt == request.time;
+      let sending = changed.hasOnly([
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
+        ])
+        && changed.hasAll([
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
+        ])
+        && newData.lastMessage is string
+        && newData.lastMessage.size() > 0
+        && newData.lastMessage.size() <= 2000
+        && newData.lastMessageSenderUid == request.auth.uid
+        && newData.lastMessageAt == request.time
+        && newData.lastMessageId is string
+        && newData.lastMessageId.size() > 0
+        && newData.lastMessageId.size() <= 128
+        && existsAfter(/databases/$(database)/documents/circleGroups/$(groupId)/messages/$(newData.lastMessageId))
+        && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)/messages/$(newData.lastMessageId)).data.senderUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)/messages/$(newData.lastMessageId)).data.text == newData.lastMessage
+        && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)/messages/$(newData.lastMessageId)).data.createdAt == request.time;
+      return (circleGroupMember(oldData) || acceptingInvite)
+        && newData.members is list
+        && newData.members.size() <= 32
+        && newData.members.toSet().size() == newData.members.size()
+        && newData.admins is list
+        && newData.admins.size() <= newData.members.size()
+        && newData.admins.toSet().size() == newData.admins.size()
+        && newData.createdBy == oldData.createdBy
+        && newData.createdAt == oldData.createdAt
+        && newData.diff(oldData).affectedKeys().hasOnly([
+          'members', 'admins', 'name', 'updatedAt',
+          'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
+        ])
+        && (leaving || removingMember || (admin && (renamed || promotingAdmin)) || acceptingInvite || sending);
+    }
+
     match /publicProfiles/{uid} {
       allow get, list: if ageEligible()
         && resource.data.ageCohort == 'adult'
@@ -571,6 +740,63 @@ service cloud.firestore {
           allow update, delete: if false;
         }
       }
+    }
+
+    match /circleGroups/{groupId} {
+      allow create: if validCircleGroupCreate();
+      allow get, list: if circleGroupMember(resource.data);
+      allow update: if validCircleGroupUpdate(groupId);
+      allow delete: if false;
+
+      match /invites/{inviteeUid} {
+        function parentGroup() {
+          return get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
+        }
+
+        allow get: if circleEligible()
+          && (request.auth.uid == inviteeUid
+            || (circleGroupMember(parentGroup()) && request.auth.uid in parentGroup().admins));
+        allow list: if circleEligible()
+          && (resource.data.inviteeUid == request.auth.uid
+            || (circleGroupMember(parentGroup()) && request.auth.uid in parentGroup().admins));
+        allow create: if validCircleGroupInviteCreate(groupId, inviteeUid);
+        allow update: if validCircleGroupInviteAccept(groupId, inviteeUid)
+          || validCircleGroupInviteReissue(groupId, inviteeUid);
+        allow delete: if false;
+      }
+
+      match /messages/{messageId} {
+        function parentGroup() {
+          return get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
+        }
+
+        allow get, list: if circleGroupMember(parentGroup());
+        allow create: if circleEligible()
+          && circleGroupMember(parentGroup())
+          && request.resource.data.keys().hasAll(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000
+          && request.resource.data.createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/circleGroups/$(groupId))
+          && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessageId == messageId
+          && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessage == request.resource.data.text
+          && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessageSenderUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    match /{path=**}/invites/{inviteeUid} {
+      allow get: if circleEligible()
+        && request.auth.uid == resource.data.inviteeUid
+        && resource.data.inviteeUid == inviteeUid
+        && resource.data.keys().hasAll(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt']);
+      allow list: if circleEligible()
+        && request.auth.uid == resource.data.inviteeUid
+        && resource.data.status == 'pending';
+      allow create, update, delete: if false;
     }
 
     match /peopleContactRequests/{recipientUid}/incoming/{senderUid} {
