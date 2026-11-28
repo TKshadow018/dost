@@ -37,7 +37,11 @@ foreach ($productPlans as $productId => $expected) {
 }
 dost_premium_test_assert(dost_premium_product('dost_premium_monthly') === false, 'Retired Premium products are rejected.');
 dost_premium_test_assert(
-    dost_premium_plan_enabled('explore_plus', array('plan_explore_plus_enabled' => 'false')) === false
+    dost_premium_plan_enabled('explore_plus', array()) === false
+        && dost_premium_plan_enabled('cipher', array()) === false
+        && dost_premium_plan_enabled('shield_team', array()) === false
+        && dost_premium_plan_enabled('plus_bundle', array()) === false
+        && dost_premium_plan_enabled('explore_plus', array('plan_explore_plus_enabled' => 'false')) === false
         && dost_premium_plan_enabled('explore_plus', array('plan_explore_plus_enabled' => 'true')) === true
         && dost_premium_plan_enabled('plus_bundle', array(
             'plan_explore_plus_enabled' => 'true',
@@ -81,6 +85,16 @@ dost_premium_test_assert(
         && !dost_premium_user_adult_eligible(array(
             'dostAgeEligible' => true,
             'dostAgeEligibleUntil' => $now,
+            'dostAgeCohort' => 'adult'
+        ), $now)
+        && !dost_premium_user_adult_eligible(array(
+            'dostAgeEligible' => false,
+            'dostAgeEligibleUntil' => $now + 3600,
+            'dostAgeCohort' => 'adult'
+        ), $now)
+        && !dost_premium_user_adult_eligible(array(
+            'dostAgeEligible' => true,
+            'dostAgeEligibleUntil' => (string) ($now + 3600),
             'dostAgeCohort' => 'adult'
         ), $now),
     'Only current adult eligibility authorizes age-restricted plans.'
