@@ -261,6 +261,27 @@ async function createSecureOrg(
   });
 }
 
+function circleGroup({ members = ["alice"], admins = ["alice"], name = "Friends" } = {}) {
+  return {
+    members,
+    admins,
+    createdBy: "alice",
+    name,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    lastMessage: "",
+    lastMessageSenderUid: "",
+    lastMessageAt: serverTimestamp(),
+    lastMessageId: "",
+  };
+}
+
+async function createCircleGroup(groupId = "friends") {
+  await assertSucceeds(
+    setDoc(doc(user("alice"), `circleGroups/${groupId}`), circleGroup()),
+  );
+}
+
 test("Shield org creation requires its server-controlled flag and owner entitlement", async () => {
   await setSecureFeatureEnabled(true);
   await assertSucceeds(getDoc(doc(secureUser("alice"), "secureOrgConfig/superSecure")));
@@ -1241,6 +1262,130 @@ test("legacy under-18 chats and messages are inaccessible", async () => {
 
   await assertFails(getDoc(doc(user("alice"), "peopleChats/alice-bob")));
   await assertFails(getDocs(collection(user("alice"), "peopleChats/alice-bob/messages")));
+});
+
+test("Circle group creation is private and group membership is capped", async () => {
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "circleGroups/friends"), circleGroup()),
+  );
+  await assertFails(
+    getDoc(doc(user("mallory"), "circleGroups/friends")),
+  );
+  await assertFails(
+    setDoc(doc(user("bob"), "circleGroups/invalid"), circleGroup({
+      members: ["alice", "bob"],
+      admins: ["alice"],
+    })),
+  );
+});
+
+test("Circle group invites require admin authority and invitee acceptance", async () => {
+  await createCircleGroup();
+  const alice = user("alice");
+  const teen = user("teen", { dostAgeCohort: "teen" });
+  const invite = doc(alice, "circleGroups/friends/invites/teen");
+  await assertFails(
+    setDoc(doc(user("mallory"), "circleGroups/friends/invites/charlie"), {
+      groupId: "friends",
+      inviteeUid: "charlie",
+      invitedBy: "mallory",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  await assertSucceeds(setDoc(invite, {
+    groupId: "friends",
+    inviteeUid: "teen",
+    invitedBy: "alice",
+    status: "pending",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(
+    updateDoc(doc(user("alice"), "circleGroups/friends"), {
+      members: ["alice", "teen"],
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  const batch = writeBatch(teen);
+  batch.update(doc(teen, "circleGroups/friends/invites/teen"), {
+    status: "accepted",
+    acceptedAt: serverTimestamp(),
+  });
+  batch.update(doc(teen, "circleGroups/friends"), {
+    members: ["alice", "teen"],
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(batch.commit());
+  await assertSucceeds(getDoc(doc(teen, "circleGroups/friends")));
+  await assertFails(getDoc(doc(user("mallory"), "circleGroups/friends")));
+});
+
+test("Circle group invites reject blocked people and cannot exceed 32 members", async () => {
+  await createCircleGroup();
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "peopleBlocks/alice/blockedUsers/bob"), {
+      createdAt: serverTimestamp(),
+    }),
+  );
+  await assertFails(
+    setDoc(doc(user("alice"), "circleGroups/friends/invites/bob"), {
+      groupId: "friends",
+      inviteeUid: "bob",
+      invitedBy: "alice",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  const members = ["alice", ...Array.from({ length: 31 }, (_, index) => `member-${index}`)];
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "circleGroups/at-capacity"), {
+      ...circleGroup({ members }),
+    });
+  });
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "circleGroups/at-capacity/invites/extra"), {
+      groupId: "at-capacity",
+      inviteeUid: "extra",
+      invitedBy: "alice",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  const extra = user("extra");
+  const batch = writeBatch(extra);
+  batch.update(doc(extra, "circleGroups/at-capacity/invites/extra"), {
+    status: "accepted",
+    acceptedAt: serverTimestamp(),
+  });
+  batch.update(doc(extra, "circleGroups/at-capacity"), {
+    members: [...members, "extra"],
+    updatedAt: serverTimestamp(),
+  });
+  await assertFails(batch.commit());
+});
+
+test("Circle group admins can rename, members can leave, and outsiders cannot send", async () => {
+  await createCircleGroup();
+  const alice = user("alice");
+  const rename = writeBatch(alice);
+  rename.update(doc(alice, "circleGroups/friends"), {
+    name: "Weekend group",
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(rename.commit());
+  await assertFails(
+    updateDoc(doc(user("bob"), "circleGroups/friends"), {
+      name: "Changed by outsider",
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertFails(
+    setDoc(doc(user("mallory"), "circleGroups/friends/messages/forged"), {
+      senderUid: "mallory",
+      text: "Not a member",
+      createdAt: serverTimestamp(),
+    }),
+  );
 });
 
 test("only a participant can send a correctly attributed bounded message", async () => {
