@@ -2245,7 +2245,6 @@ internal fun CircleGroupChatScreen(
     var draft by rememberSaveable(group.id) { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var showSafetyMenu by remember { mutableStateOf(false) }
     var safetyAction by remember { mutableStateOf("") }
     var safetyTargetUid by remember { mutableStateOf("") }
     var reportReason by rememberSaveable(group.id) { mutableStateOf("") }

@@ -682,7 +682,10 @@ internal fun ChatScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showTeenSessionReminder = false }) {
+                TextButton(onClick = {
+                    showTeenSessionReminder = false
+                    onBack()
+                }) {
                     Text(chatLabel(language, "Take a break", "বিরতি নিন", "विराम लें"))
                 }
             }

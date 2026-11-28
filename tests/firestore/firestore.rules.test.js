@@ -1095,6 +1095,10 @@ test("message push tokens are private and writable only by their owner", async (
     updatedAt: serverTimestamp(),
     text: "must not be stored in a push token",
   }));
+  await assertSucceeds(setDoc(doc(user("teen", { dostAgeCohort: "teen" }), "peopleMessageTokens/teen/devices/device-1"), {
+    token: "fcm-registration-token".padEnd(64, "t"),
+    updatedAt: serverTimestamp(),
+  }));
 });
 
 test("creating a chat requires two adult public profiles and exact snapshots", async () => {
