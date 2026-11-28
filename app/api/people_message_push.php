@@ -50,9 +50,13 @@ if (!is_string($serviceToken)) {
 }
 $isCipher = isset($request['cipher']) && $request['cipher'] === true;
 $isCircleGroup = isset($request['circle_group']) && $request['circle_group'] === true;
+$isCircleDirect = isset($request['circle_direct']) && $request['circle_direct'] === true;
+$isCircle = $isCircleGroup || $isCircleDirect;
 $chatPath = $isCircleGroup
     ? 'circleGroups/' . $request['chat_id']
-    : ($isCipher ? 'cipherChats/' . $request['chat_id'] : 'peopleChats/' . $request['chat_id']);
+    : ($isCircleDirect
+        ? 'circleDirectChats/' . $request['chat_id']
+        : ($isCipher ? 'cipherChats/' . $request['chat_id'] : 'peopleChats/' . $request['chat_id']));
 $chatResponse = dost_call_firestore_get($settings['project_id'], $serviceToken, $chatPath);
 $messageResponse = dost_call_firestore_get(
     $settings['project_id'],
@@ -74,9 +78,11 @@ $chat = dost_call_document_fields($chatResponse);
 $messageFields = dost_call_document_fields($messageResponse);
 $validMessage = $isCircleGroup
     ? dost_circle_group_message_push_context_is_valid($chat, $messageFields, $uid)
-    : ($isCipher
-        ? dost_cipher_message_push_context_is_valid($chat, $messageFields, $uid, $request['chat_id'])
-        : dost_message_push_context_is_valid($chat, $messageFields, $uid));
+    : ($isCircleDirect
+        ? dost_circle_direct_message_push_context_is_valid($chat, $messageFields, $uid)
+        : ($isCipher
+            ? dost_cipher_message_push_context_is_valid($chat, $messageFields, $uid, $request['chat_id'])
+            : dost_message_push_context_is_valid($chat, $messageFields, $uid)));
 if (!$validMessage) {
     dost_call_respond(403, array('error' => 'This message is not available'));
 }
@@ -87,7 +93,7 @@ $recipientUids = $isCircleGroup
     }))
     : array($members[0] === $uid ? $members[1] : $members[0]);
 $now = time();
-$eligibleUser = $isCipher || $isCircleGroup
+$eligibleUser = $isCipher || $isCircle
     ? dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $uid)
     : dost_call_user_is_eligible($settings['project_id'], $serviceToken, $uid, $now);
 if (!$eligibleUser) {
@@ -95,7 +101,7 @@ if (!$eligibleUser) {
 }
 if (!$isCircleGroup) {
     $peerUid = $recipientUids[0];
-    $eligiblePeer = $isCipher
+    $eligiblePeer = ($isCipher || $isCircleDirect)
         ? dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $peerUid)
         : dost_call_user_is_eligible($settings['project_id'], $serviceToken, $peerUid, $now);
     if (!$eligiblePeer) {
@@ -130,7 +136,7 @@ if ($isCipher) {
 }
 $allowedRecipients = array();
 foreach ($recipientUids as $recipientUid) {
-    if ($isCircleGroup
+    if ($isCircle
         && !dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $recipientUid)
     ) {
         continue;
@@ -202,7 +208,7 @@ foreach ($allowedRecipients as $recipientUid) {
                 'data' => array(
                     'type' => $isCircleGroup
                         ? 'circle_group_message'
-                        : ($isCipher ? 'cipher_message' : 'people_message'),
+                        : ($isCircleDirect ? 'circle_direct_message' : ($isCipher ? 'cipher_message' : 'people_message')),
                     'chat_id' => $request['chat_id'],
                     'message_id' => $request['message_id'],
                     'sender_uid' => $uid,

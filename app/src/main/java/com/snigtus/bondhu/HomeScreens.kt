@@ -60,8 +60,7 @@ internal fun shouldShowExploreDisabledState(exploreEnabled: Boolean, circleOnly:
 
 internal enum class HomeInboxFilter { ALL, AI_FRIENDS, PEOPLE, ARCHIVED }
 
-internal fun shouldShowCircleContactsComingSoon(ageCohort: String): Boolean =
-    ageCohort == "teen"
+internal fun shouldShowCircleContactsComingSoon(ageCohort: String): Boolean = false
 
 internal fun circleInboxFilter(selectedFilter: HomeInboxFilter): HomeInboxFilter =
     if (selectedFilter == HomeInboxFilter.ARCHIVED) selectedFilter else HomeInboxFilter.PEOPLE

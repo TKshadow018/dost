@@ -1562,6 +1562,433 @@ internal class PeopleRepository(context: Context) {
         )
     }
 
+
+    fun listenCircleContacts(
+        uid: String,
+        onError: (Exception) -> Unit,
+        onContacts: (List<CircleContact>) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_CONTACTS).document(uid).collection(CONTACTS)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error ?: IllegalStateException("Could not load Circle contacts."))
+                    return@addSnapshotListener
+                }
+                val contacts = snapshot?.documents.orEmpty().mapNotNull { document ->
+                    val peer = document.id
+                    val status = document.getString("status").orEmpty()
+                    val source = document.getString("source").orEmpty()
+                    if (peer.isBlank() || status !in setOf("pending", "accepted")) null
+                    else CircleContact(peer, status, source, incoming = status == "pending")
+                }
+                onContacts(contacts)
+            }
+    }
+
+    fun listenIncomingCircleContactRequests(
+        uid: String,
+        onError: (Exception) -> Unit,
+        onRequests: (List<CircleContact>) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_CONTACTS).document(uid).collection(CONTACTS)
+            .whereEqualTo("status", "pending")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error ?: IllegalStateException("Could not load contact requests."))
+                    return@addSnapshotListener
+                }
+                val requests = snapshot?.documents.orEmpty().map { document ->
+                    CircleContact(
+                        uid = document.id,
+                        status = "pending",
+                        source = document.getString("source").orEmpty(),
+                        incoming = true
+                    )
+                }
+                onRequests(requests)
+            }
+    }
+
+    suspend fun ensureCirclePrivacyProfile(uid: String, ageCohort: String): CirclePrivacyProfile {
+        requireSignedIn(uid)
+        require(ageCohort in setOf("teen", "adult"))
+        val document = database().collection(CIRCLE_PROFILES).document(uid)
+        val existing = document.get().await()
+        if (existing.exists()) {
+            return existing.toCirclePrivacyProfile(uid, ageCohort)
+        }
+        val profile = mapOf(
+            "uid" to uid,
+            "ageCohort" to ageCohort,
+            "handleLookupEnabled" to false,
+            "lastSeenVisibility" to if (ageCohort == "teen") "nobody" else "contacts",
+            "onlineVisibility" to if (ageCohort == "teen") "nobody" else "contacts",
+            "photoVisibility" to "contacts",
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        document.set(profile).await()
+        return CirclePrivacyProfile(
+            uid = uid,
+            ageCohort = ageCohort,
+            handleLookupEnabled = false,
+            lastSeenVisibility = if (ageCohort == "teen") "nobody" else "contacts",
+            onlineVisibility = if (ageCohort == "teen") "nobody" else "contacts",
+            photoVisibility = "contacts"
+        )
+    }
+
+    suspend fun updateCirclePrivacyProfile(
+        uid: String,
+        ageCohort: String,
+        handleLookupEnabled: Boolean,
+        lastSeenVisibility: String,
+        onlineVisibility: String
+    ) {
+        requireSignedIn(uid)
+        val lookup = if (ageCohort == "teen") handleLookupEnabled else handleLookupEnabled
+        val lastSeen = if (ageCohort == "teen") "nobody" else lastSeenVisibility
+        val online = if (ageCohort == "teen") "nobody" else onlineVisibility
+        database().collection(CIRCLE_PROFILES).document(uid).update(
+            mapOf(
+                "uid" to uid,
+                "ageCohort" to ageCohort,
+                "handleLookupEnabled" to lookup,
+                "lastSeenVisibility" to lastSeen,
+                "onlineVisibility" to online,
+                "photoVisibility" to "contacts",
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+    }
+
+    suspend fun claimCircleHandle(uid: String, ageCohort: String, handle: String) {
+        requireSignedIn(uid)
+        val normalized = normalizeCircleHandle(handle)
+        require(isValidCircleHandle(normalized)) { "Choose a handle that starts with a letter and uses 3 to 20 letters, numbers, or underscores." }
+        ensureCirclePrivacyProfile(uid, ageCohort)
+        if (ageCohort == "teen") {
+            val profile = database().collection(CIRCLE_PROFILES).document(uid).get().await()
+            check(profile.getBoolean("handleLookupEnabled") == true) {
+                "Turn on handle lookup before claiming a handle."
+            }
+        }
+        database().collection(CIRCLE_HANDLES).document(normalized).set(
+            mapOf(
+                "ownerUid" to uid,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+    }
+
+    suspend fun currentCircleHandle(uid: String): String? {
+        requireSignedIn(uid)
+        val snapshot = database().collection(CIRCLE_HANDLES).whereEqualTo("ownerUid", uid).limit(5).get().await()
+        // list is denied by rules; owner get of known id only. Keep local cache via returned claims.
+        return null
+    }
+
+    suspend fun createCircleInviteLink(uid: String): String {
+        requireSignedIn(uid)
+        val token = newCircleInviteToken()
+        database().collection(CIRCLE_INVITE_LINKS).document(token).set(
+            mapOf(
+                "ownerUid" to uid,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "expiresAt" to com.google.firebase.Timestamp(Date(System.currentTimeMillis() + 7L * 24 * 60 * 60 * 1000))
+            )
+        ).await()
+        return token
+    }
+
+    suspend fun lookupCircleHandle(uid: String, handle: String): String {
+        requireSignedIn(uid)
+        return callApiClient.lookupCircleHandle(uid, normalizeCircleHandle(handle))
+    }
+
+    suspend fun sendCircleHandleRequest(uid: String, peerUid: String) {
+        requireSignedIn(uid)
+        require(uid != peerUid)
+        database().collection(CIRCLE_CONTACTS).document(peerUid).collection(CONTACTS).document(uid)
+            .set(mapOf(
+                "status" to "pending",
+                "source" to "handle",
+                "createdAt" to FieldValue.serverTimestamp()
+            )).await()
+    }
+
+    suspend fun acceptCircleHandleRequest(uid: String, peerUid: String) {
+        requireSignedIn(uid)
+        val database = database()
+        val incoming = database.collection(CIRCLE_CONTACTS).document(uid).collection(CONTACTS).document(peerUid)
+        val reciprocal = database.collection(CIRCLE_CONTACTS).document(peerUid).collection(CONTACTS).document(uid)
+        database.runTransaction { transaction ->
+            val current = transaction.get(incoming)
+            check(current.exists() && current.getString("status") == "pending") { "This request is no longer pending." }
+            transaction.update(incoming, mapOf(
+                "status" to "accepted",
+                "acceptedAt" to FieldValue.serverTimestamp()
+            ))
+            transaction.set(reciprocal, mapOf(
+                "status" to "accepted",
+                "source" to "handle",
+                "createdAt" to FieldValue.serverTimestamp(),
+                "acceptedAt" to FieldValue.serverTimestamp()
+            ))
+            null
+        }.await()
+    }
+
+    suspend fun redeemCircleInvite(uid: String, token: String, source: String = "invite") {
+        requireSignedIn(uid)
+        require(token.matches(CIRCLE_INVITE_TOKEN_PATTERN.toRegex()))
+        require(source in setOf("invite", "qr"))
+        val invite = database().collection(CIRCLE_INVITE_LINKS).document(token).get().await()
+        check(invite.exists()) { "This invite link is invalid or has expired." }
+        val ownerUid = invite.getString("ownerUid").orEmpty()
+        val expiresAt = invite.getTimestamp("expiresAt")?.toDate()?.time ?: 0L
+        check(ownerUid.isNotBlank() && ownerUid != uid) { "You cannot accept your own invite." }
+        check(expiresAt > System.currentTimeMillis()) { "This invite link has expired." }
+        val database = database()
+        val batch = database.batch()
+        val payload = mapOf(
+            "status" to "accepted",
+            "source" to source,
+            "inviteToken" to token,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "acceptedAt" to FieldValue.serverTimestamp()
+        )
+        batch.set(
+            database.collection(CIRCLE_CONTACTS).document(uid).collection(CONTACTS).document(ownerUid),
+            payload
+        )
+        batch.set(
+            database.collection(CIRCLE_CONTACTS).document(ownerUid).collection(CONTACTS).document(uid),
+            payload
+        )
+        batch.commit().await()
+    }
+
+    suspend fun removeCircleContact(uid: String, peerUid: String) {
+        requireSignedIn(uid)
+        val database = database()
+        val batch = database.batch()
+        batch.delete(database.collection(CIRCLE_CONTACTS).document(uid).collection(CONTACTS).document(peerUid))
+        batch.delete(database.collection(CIRCLE_CONTACTS).document(peerUid).collection(CONTACTS).document(uid))
+        batch.commit().await()
+    }
+
+    fun listenCircleDirectChats(
+        uid: String,
+        onError: (Exception) -> Unit,
+        onChats: (List<CircleDirectChat>) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_DIRECT_CHATS)
+            .whereArrayContains("members", uid)
+            .orderBy("lastMessageAt", Query.Direction.DESCENDING)
+            .limit(MAX_CONVERSATIONS.toLong())
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error ?: IllegalStateException("Could not load Circle chats."))
+                    return@addSnapshotListener
+                }
+                val chats = snapshot?.documents.orEmpty().mapNotNull { document ->
+                    val members = (document.get("members") as? List<*>)?.filterIsInstance<String>().orEmpty()
+                    val peer = members.firstOrNull { it != uid } ?: return@mapNotNull null
+                    CircleDirectChat(
+                        id = document.id,
+                        peerUid = peer,
+                        lastMessage = document.getString("lastMessage").orEmpty(),
+                        lastMessageAtMillis = document.getTimestamp("lastMessageAt")?.toDate()?.time ?: 0L
+                    )
+                }
+                onChats(chats)
+            }
+    }
+
+    suspend fun openCircleDirectChat(uid: String, peerUid: String): CircleDirectChat {
+        requireSignedIn(uid)
+        require(uid != peerUid)
+        val chatId = circleDirectChatId(uid, peerUid)
+        val members = listOf(uid, peerUid).sorted()
+        val document = database().collection(CIRCLE_DIRECT_CHATS).document(chatId)
+        val existing = document.get().await()
+        if (!existing.exists()) {
+            document.set(
+                mapOf(
+                    "members" to members,
+                    "createdBy" to uid,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                    "lastMessage" to "",
+                    "lastMessageSenderUid" to "",
+                    "lastMessageAt" to FieldValue.serverTimestamp(),
+                    "lastMessageId" to ""
+                )
+            ).await()
+        }
+        return CircleDirectChat(chatId, peerUid, existing.getString("lastMessage").orEmpty(), existing.getTimestamp("lastMessageAt")?.toDate()?.time ?: 0L)
+    }
+
+    fun listenCircleDirectMessages(
+        uid: String,
+        chatId: String,
+        onError: (Exception) -> Unit,
+        onMessages: (List<SocialChatMessage>) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_DIRECT_CHATS).document(chatId).collection(MESSAGES)
+            .orderBy("createdAt", Query.Direction.ASCENDING)
+            .limit(200)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error ?: IllegalStateException("Could not load this chat."))
+                    return@addSnapshotListener
+                }
+                val messages = snapshot?.documents.orEmpty().map { document ->
+                    val readBy = (document.get("readBy") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet()
+                        ?: emptySet()
+                    SocialChatMessage(
+                        id = document.id,
+                        senderUid = document.getString("senderUid").orEmpty(),
+                        text = document.getString("text").orEmpty(),
+                        createdAtMillis = document.getTimestamp("createdAt")?.toDate()?.time ?: 0L,
+                        readBy = readBy
+                    )
+                }
+                onMessages(messages)
+            }
+    }
+
+    fun listenCircleDirectTyping(
+        uid: String,
+        chatId: String,
+        onError: (Exception) -> Unit,
+        onTyping: (List<Pair<String, Long>>) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_DIRECT_CHATS).document(chatId).collection(TYPING_INDICATORS)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error ?: IllegalStateException("Could not load typing indicators."))
+                    return@addSnapshotListener
+                }
+                val typing = snapshot?.documents.orEmpty().mapNotNull { document ->
+                    val expires = document.getTimestamp("expiresAt")?.toDate()?.time ?: return@mapNotNull null
+                    if (expires <= System.currentTimeMillis() || document.id == uid) null
+                    else document.id to expires
+                }
+                onTyping(typing)
+            }
+    }
+
+    suspend fun setCircleDirectTyping(uid: String, chatId: String, typing: Boolean) {
+        requireSignedIn(uid)
+        val document = database().collection(CIRCLE_DIRECT_CHATS).document(chatId)
+            .collection(TYPING_INDICATORS).document(uid)
+        if (!typing) {
+            document.delete().await()
+            return
+        }
+        document.set(
+            mapOf(
+                "updatedAt" to FieldValue.serverTimestamp(),
+                "expiresAt" to com.google.firebase.Timestamp(Date(System.currentTimeMillis() + 20_000))
+            )
+        ).await()
+    }
+
+    suspend fun sendCircleDirectMessage(
+        uid: String,
+        chatId: String,
+        text: String,
+        clientMessageId: String
+    ) {
+        requireSignedIn(uid)
+        val trimmed = text.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= MAX_SOCIAL_MESSAGE_LENGTH)
+        require(isValidSocialMessageId(clientMessageId))
+        val database = database()
+        val chat = database.collection(CIRCLE_DIRECT_CHATS).document(chatId)
+        val message = chat.collection(MESSAGES).document(clientMessageId)
+        val created = database.runTransaction { transaction ->
+            val chatSnapshot = transaction.get(chat)
+            val existing = transaction.get(message)
+            check(chatSnapshot.exists() && uid in (chatSnapshot.get("members") as? List<*>).orEmpty()) {
+                "This chat is not available."
+            }
+            if (existing.exists()) {
+                check(existing.getString("senderUid") == uid && existing.getString("text") == trimmed) {
+                    "A different message already uses this ID."
+                }
+                return@runTransaction false
+            }
+            transaction.update(chat, mapOf(
+                "lastMessage" to trimmed,
+                "lastMessageSenderUid" to uid,
+                "lastMessageAt" to FieldValue.serverTimestamp(),
+                "lastMessageId" to clientMessageId,
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+            transaction.set(message, mapOf(
+                "senderUid" to uid,
+                "text" to trimmed,
+                "createdAt" to FieldValue.serverTimestamp()
+            ))
+            true
+        }.await()
+        if (created) {
+            try {
+                PeopleMessageNotificationWork.enqueue(
+                    applicationContext,
+                    activeProfileNamespace(applicationContext),
+                    uid,
+                    chatId,
+                    clientMessageId,
+                    circleDirect = true
+                )
+            } catch (error: Exception) {
+                Log.e(TAG, "A sent Circle message could not be queued for notification delivery.", error)
+            }
+        }
+    }
+
+    suspend fun notifyCircleDirectMessage(uid: String, chatId: String, messageId: String) {
+        requireSignedIn(uid)
+        callApiClient.notifyCircleDirectMessage(uid, chatId, messageId)
+    }
+
+    suspend fun reportCircleDirectContact(uid: String, chatId: String, peerUid: String, reason: String) {
+        requireSignedIn(uid)
+        val trimmed = reason.trim()
+        require(trimmed.length in 3..500)
+        val teen = FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.await()
+            ?.claims?.get("dostAgeCohort") == "teen"
+        database().collection(SAFETY_REPORTS).document().set(
+            mapOf(
+                "reporterUid" to uid,
+                "surface" to "circle_direct",
+                "conversationId" to chatId,
+                "targetId" to peerUid,
+                "reason" to trimmed,
+                "priorityReview" to true,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+        if (teen) {
+            // Teen reports stay priority-labelled by rule; the unused flag documents the path.
+        }
+    }
+
+    suspend fun blockCircleContact(uid: String, peerUid: String) {
+        requireSignedIn(uid)
+        require(uid != peerUid)
+        database().collection(BLOCKS).document(uid).collection(BLOCKED_USERS).document(peerUid)
+            .set(mapOf("createdAt" to FieldValue.serverTimestamp())).await()
+    }
+
     private companion object {
         const val TAG = "PeopleRepository"
         const val PROFILES = "publicProfiles"
@@ -1575,6 +2002,12 @@ internal class PeopleRepository(context: Context) {
         const val INCOMING_REQUESTS = "incoming"
         const val CONTACT_APPROVALS = "peopleContactApprovals"
         const val CIRCLE_GROUPS = "circleGroups"
+        const val CIRCLE_CONTACTS = "circleContacts"
+        const val CONTACTS = "contacts"
+        const val CIRCLE_PROFILES = "circleProfiles"
+        const val CIRCLE_HANDLES = "circleHandles"
+        const val CIRCLE_INVITE_LINKS = "circleInviteLinks"
+        const val CIRCLE_DIRECT_CHATS = "circleDirectChats"
         const val CIRCLE_GROUP_INVITES = "invites"
         const val TYPING_INDICATORS = "typingIndicators"
         const val CALLS = "calls"
@@ -1597,3 +2030,13 @@ internal class PeopleRepository(context: Context) {
                 .joinToString("") { "%02x".format(it) }
     }
 }
+
+private fun DocumentSnapshot.toCirclePrivacyProfile(uid: String, fallbackCohort: String): CirclePrivacyProfile =
+    CirclePrivacyProfile(
+        uid = getString("uid") ?: uid,
+        ageCohort = getString("ageCohort") ?: fallbackCohort,
+        handleLookupEnabled = getBoolean("handleLookupEnabled") ?: false,
+        lastSeenVisibility = getString("lastSeenVisibility") ?: "nobody",
+        onlineVisibility = getString("onlineVisibility") ?: "nobody",
+        photoVisibility = getString("photoVisibility") ?: "contacts"
+    )

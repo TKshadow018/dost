@@ -153,6 +153,7 @@ dependencies {
     implementation libs.play.billing
     implementation libs.tink.android
     implementation libs.bouncycastle
+    implementation libs.zxing.core
     testImplementation libs.junit
     testImplementation libs.kotlinx.coroutines.test
     // Unit tests run against the Android SDK stubs, whose org.json throws. Use the real parser in tests only.

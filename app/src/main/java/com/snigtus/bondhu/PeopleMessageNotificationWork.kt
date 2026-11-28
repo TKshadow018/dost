@@ -25,7 +25,8 @@ internal object PeopleMessageNotificationWork {
         chatId: String,
         messageId: String,
         cipher: Boolean = false,
-        circleGroup: Boolean = false
+        circleGroup: Boolean = false,
+        circleDirect: Boolean = false
     ) {
         val request = OneTimeWorkRequestBuilder<PeopleMessageNotificationWorker>()
             .setInputData(workDataOf(
@@ -34,7 +35,8 @@ internal object PeopleMessageNotificationWork {
                 CONVERSATION_ID to chatId,
                 MESSAGE_ID to messageId,
                 CIPHER to cipher,
-                CIRCLE_GROUP to circleGroup
+                CIRCLE_GROUP to circleGroup,
+                CIRCLE_DIRECT to circleDirect
             ))
             .setConstraints(
                 Constraints.Builder()
@@ -63,6 +65,7 @@ internal object PeopleMessageNotificationWork {
     private const val MESSAGE_ID = "message_id"
     private const val CIPHER = "cipher"
     private const val CIRCLE_GROUP = "circle_group"
+    private const val CIRCLE_DIRECT = "circle_direct"
 }
 
 internal class PeopleMessageNotificationWorker(context: Context, parameters: WorkerParameters) :
@@ -76,11 +79,14 @@ internal class PeopleMessageNotificationWorker(context: Context, parameters: Wor
         val messageId = inputData.getString("message_id") ?: return Result.failure()
         val cipher = inputData.getBoolean("cipher", false)
         val circleGroup = inputData.getBoolean("circle_group", false)
+        val circleDirect = inputData.getBoolean("circle_direct", false)
         if (FirebaseAuth.getInstance().currentUser?.uid != uid) return Result.success()
 
         return try {
             if (circleGroup) {
                 PeopleRepository(applicationContext).notifyCircleGroupMessage(uid, conversationId, messageId)
+            } else if (circleDirect) {
+                PeopleRepository(applicationContext).notifyCircleDirectMessage(uid, conversationId, messageId)
             } else if (cipher) {
                 CipherRepository(applicationContext).notifyNewMessage(uid, conversationId, messageId)
             } else {
