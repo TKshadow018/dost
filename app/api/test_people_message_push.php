@@ -151,3 +151,30 @@ dost_message_push_test_assert(
 );
 
 fwrite(STDOUT, "PASS: People message push authorization checks passed.\n");
+
+$request = array('chat_id' => 'alice_bob', 'message_id' => 'm1');
+assert(
+    dost_message_push_request_is_valid($request + array('circle_direct' => true)),
+    'circle direct push requests are valid'
+);
+assert(
+    !dost_message_push_request_is_valid($request + array('circle_direct' => false)),
+    'circle direct must be explicitly true'
+);
+$circleDirect = array(
+    'members' => array('alice', 'bob'),
+    'createdBy' => 'alice',
+);
+$circleDirectMessage = array(
+    'senderUid' => 'alice',
+    'text' => 'Hello from Circle.',
+    'createdAt' => 1700000000,
+);
+assert(
+    dost_circle_direct_message_push_context_is_valid($circleDirect, $circleDirectMessage, 'alice'),
+    'circle direct sender can notify'
+);
+assert(
+    !dost_circle_direct_message_push_context_is_valid($circleDirect, $circleDirectMessage, 'mallory'),
+    'outsiders cannot notify a circle direct chat'
+);

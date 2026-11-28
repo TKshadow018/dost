@@ -384,6 +384,10 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     fun setCircleTypingIndicatorsEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("circle_typing_indicators_enabled", enabled).apply()
     }
+    fun circleHandle(): String = preferences.getString("circle_handle", "").orEmpty()
+    fun setCircleHandle(handle: String) {
+        preferences.edit().putString("circle_handle", handle).apply()
+    }
     fun aiNotificationPreviewsEnabled(): Boolean =
         preferences.getBoolean("ai_notification_previews_enabled", false)
     fun setAiNotificationPreviewsEnabled(enabled: Boolean) {

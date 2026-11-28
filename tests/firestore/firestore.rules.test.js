@@ -869,7 +869,8 @@ test("teen Circle privacy defaults keep handles, presence, and photos private", 
     photoVisibility: "contacts",
     updatedAt: serverTimestamp(),
   }));
-  await assertSucceeds(getDoc(doc(user("alice"), "circleHandles/teen-handle")));
+  await assertFails(getDoc(doc(user("alice"), "circleHandles/teen-handle")));
+  await assertSucceeds(getDoc(doc(teen, "circleHandles/teen-handle")));
 });
 
 test("People data requires an unexpired server age-eligibility claim", async () => {
@@ -2084,6 +2085,168 @@ test("blocking a Cipher participant denies chat access but still permits a safet
     conversationId: "circle-chat",
     targetId: "bob",
     reason: "I need to report this person.",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
+});
+
+test("Circle handle documents are owner-only and reject invalid handle ids", async () => {
+  const alice = user("alice");
+  await assertSucceeds(setDoc(doc(alice, "circleProfiles/alice"), {
+    uid: "alice",
+    ageCohort: "adult",
+    handleLookupEnabled: true,
+    lastSeenVisibility: "contacts",
+    onlineVisibility: "contacts",
+    photoVisibility: "contacts",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(alice, "circleHandles/BadHandle"), {
+    ownerUid: "alice",
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(alice, "circleHandles/alice_one"), {
+    ownerUid: "alice",
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(alice, "circleHandles/alice_one")));
+  await assertFails(getDoc(doc(user("bob"), "circleHandles/alice_one")));
+  await assertFails(getDocs(collection(alice, "circleHandles")));
+});
+
+test("QR and invite links create mutual accepted Circle contacts", async () => {
+  const token = "a".repeat(64);
+  await assertSucceeds(setDoc(doc(user("alice"), `circleInviteLinks/${token}`), {
+    ownerUid: "alice",
+    createdAt: serverTimestamp(),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  }));
+  await assertFails(getDocs(collection(user("bob"), "circleInviteLinks")));
+  await assertSucceeds(getDoc(doc(user("bob"), `circleInviteLinks/${token}`)));
+  const bob = user("bob");
+  const add = writeBatch(bob);
+  add.set(doc(bob, "circleContacts/bob/contacts/alice"), {
+    status: "accepted",
+    source: "invite",
+    inviteToken: token,
+    createdAt: serverTimestamp(),
+    acceptedAt: serverTimestamp(),
+  });
+  add.set(doc(bob, "circleContacts/alice/contacts/bob"), {
+    status: "accepted",
+    source: "invite",
+    inviteToken: token,
+    createdAt: serverTimestamp(),
+    acceptedAt: serverTimestamp(),
+  });
+  await assertSucceeds(add.commit());
+  await assertSucceeds(getDoc(doc(user("alice"), "circleContacts/alice/contacts/bob")));
+  await assertFails(setDoc(doc(user("mallory"), "circleContacts/alice/contacts/bob"), {
+    status: "accepted",
+    source: "invite",
+    inviteToken: token,
+    createdAt: serverTimestamp(),
+    acceptedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(user("mallory"), "circleContacts/alice/contacts/mallory"), {
+    status: "accepted",
+    source: "invite",
+    inviteToken: "b".repeat(64),
+    createdAt: serverTimestamp(),
+    acceptedAt: serverTimestamp(),
+  }));
+});
+
+test("handle contact requests require acceptance before a 1:1 Circle chat", async () => {
+  const alice = user("alice");
+  const bob = user("bob");
+  await assertSucceeds(setDoc(doc(alice, "circleContacts/bob/contacts/alice"), {
+    status: "pending",
+    source: "handle",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(alice, "circleDirectChats/alice_bob"), {
+    members: ["alice", "bob"],
+    createdBy: "alice",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    lastMessage: "",
+    lastMessageSenderUid: "",
+    lastMessageAt: serverTimestamp(),
+    lastMessageId: "",
+  }));
+  const accept = writeBatch(bob);
+  accept.update(doc(bob, "circleContacts/bob/contacts/alice"), {
+    status: "accepted",
+    acceptedAt: serverTimestamp(),
+  });
+  accept.set(doc(bob, "circleContacts/alice/contacts/bob"), {
+    status: "accepted",
+    source: "handle",
+    createdAt: serverTimestamp(),
+    acceptedAt: serverTimestamp(),
+  });
+  await assertSucceeds(accept.commit());
+  await assertSucceeds(setDoc(doc(alice, "circleDirectChats/alice_bob"), {
+    members: ["alice", "bob"],
+    createdBy: "alice",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    lastMessage: "",
+    lastMessageSenderUid: "",
+    lastMessageAt: serverTimestamp(),
+    lastMessageId: "",
+  }));
+  const message = writeBatch(alice);
+  message.update(doc(alice, "circleDirectChats/alice_bob"), {
+    lastMessage: "Hello from Circle.",
+    lastMessageSenderUid: "alice",
+    lastMessageAt: serverTimestamp(),
+    lastMessageId: "m1",
+    updatedAt: serverTimestamp(),
+  });
+  message.set(doc(alice, "circleDirectChats/alice_bob/messages/m1"), {
+    senderUid: "alice",
+    text: "Hello from Circle.",
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(message.commit());
+  await assertSucceeds(getDoc(doc(bob, "circleDirectChats/alice_bob/messages/m1")));
+  await assertFails(getDoc(doc(user("mallory"), "circleDirectChats/alice_bob")));
+  await assertSucceeds(setDoc(doc(user("teen", { dostAgeCohort: "teen" }), "circleContacts/alice/contacts/teen"), {
+    status: "pending",
+    source: "handle",
+    createdAt: serverTimestamp(),
+  }));
+});
+
+test("blocking a Circle 1:1 contact denies the direct chat but still allows a safety report", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const firestore = context.firestore();
+    await setDoc(doc(firestore, "circleContacts/alice/contacts/bob"), { status: "accepted", source: "invite" });
+    await setDoc(doc(firestore, "circleContacts/bob/contacts/alice"), { status: "accepted", source: "invite" });
+    await setDoc(doc(firestore, "circleDirectChats/alice_bob"), {
+      members: ["alice", "bob"],
+      createdBy: "alice",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastMessage: "Hi",
+      lastMessageSenderUid: "alice",
+      lastMessageAt: new Date(),
+      lastMessageId: "m1",
+    });
+  });
+  await assertSucceeds(setDoc(doc(user("alice"), "peopleBlocks/alice/blockedUsers/bob"), {
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(user("bob"), "circleDirectChats/alice_bob")));
+  await assertFails(getDoc(doc(user("alice"), "circleDirectChats/alice_bob")));
+  await assertSucceeds(setDoc(doc(user("alice"), "safetyReports/alice-bob-direct"), {
+    reporterUid: "alice",
+    surface: "circle_direct",
+    conversationId: "alice_bob",
+    targetId: "bob",
+    reason: "Unwanted messages in a Circle chat.",
     priorityReview: true,
     createdAt: serverTimestamp(),
   }));

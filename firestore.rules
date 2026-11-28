@@ -432,6 +432,12 @@ service cloud.firestore {
             && cipherParticipant(get(/databases/$(database)/documents/cipherChats/$(data.conversationId)).data)
             && data.targetId in get(/databases/$(database)/documents/cipherChats/$(data.conversationId)).data.members
             && data.targetId != request.auth.uid)
+          || (data.surface == 'circle_direct'
+            && data.keys().hasAll(['conversationId'])
+            && !data.keys().hasAny(['groupId', 'organizationId'])
+            && exists(/databases/$(database)/documents/circleDirectChats/$(data.conversationId))
+            && request.auth.uid in get(/databases/$(database)/documents/circleDirectChats/$(data.conversationId)).data.members
+            && data.targetId in get(/databases/$(database)/documents/circleDirectChats/$(data.conversationId)).data.members)
           || (data.surface == 'shield'
             && data.keys().hasAll(['organizationId'])
             && !data.keys().hasAny(['groupId', 'conversationId'])
@@ -675,12 +681,10 @@ service cloud.firestore {
 
       allow get: if circleEligible()
         && resource.data.ownerUid is string
-        && (resource.data.ownerUid == request.auth.uid
-          || (profileForOwner(resource.data.ownerUid) is map
-            && (profileForOwner(resource.data.ownerUid).ageCohort != 'teen'
-              || profileForOwner(resource.data.ownerUid).handleLookupEnabled == true)));
+        && resource.data.ownerUid == request.auth.uid;
       allow list: if false;
       allow create: if circleEligible()
+        && handle.matches('^[a-z][a-z0-9_]{2,19}$')
         && request.resource.data.keys().hasAll(['ownerUid', 'createdAt'])
         && request.resource.data.keys().hasOnly(['ownerUid', 'createdAt'])
         && request.resource.data.ownerUid == request.auth.uid
@@ -717,6 +721,231 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['photoUrl', 'updatedAt'])
         && request.resource.data.updatedAt == request.time;
       allow delete: if circleEligible() && request.auth.uid == uid;
+    }
+
+    function requestInviteToken() {
+      return request.resource.data.keys().hasAny(['inviteToken'])
+        && request.resource.data.inviteToken is string
+        ? request.resource.data.inviteToken
+        : '';
+    }
+
+    function validCircleInviteToken(token) {
+      return token is string
+        && token.matches('^[a-f0-9]{64}$')
+        && exists(/databases/$(database)/documents/circleInviteLinks/$(token))
+        && get(/databases/$(database)/documents/circleInviteLinks/$(token)).data.ownerUid is string
+        && get(/databases/$(database)/documents/circleInviteLinks/$(token)).data.expiresAt is timestamp
+        && get(/databases/$(database)/documents/circleInviteLinks/$(token)).data.expiresAt > request.time;
+    }
+
+    function validCircleContactShape(data) {
+      return data.keys().hasAll(['status', 'createdAt', 'source'])
+        && data.keys().hasOnly(['status', 'createdAt', 'source', 'acceptedAt', 'inviteToken'])
+        && data.status in ['pending', 'accepted']
+        && data.source in ['handle', 'invite', 'qr']
+        && data.createdAt == request.time
+        && (!data.keys().hasAny(['acceptedAt']) || data.acceptedAt == request.time)
+        && (!data.keys().hasAny(['inviteToken'])
+          || (data.inviteToken is string && data.inviteToken.matches('^[a-f0-9]{64}$')));
+    }
+
+    match /circleInviteLinks/{token} {
+      allow get: if circleEligible()
+        && token.matches('^[a-f0-9]{64}$')
+        && resource.data.ownerUid is string
+        && resource.data.expiresAt is timestamp;
+      allow list: if false;
+      allow create: if circleEligible()
+        && token.matches('^[a-f0-9]{64}$')
+        && request.resource.data.keys().hasAll(['ownerUid', 'createdAt', 'expiresAt'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'createdAt', 'expiresAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(7, 'd');
+      allow update: if false;
+      allow delete: if circleEligible() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /circleContacts/{ownerUid}/contacts/{contactUid} {
+      allow get, list: if circleEligible()
+        && (request.auth.uid == ownerUid || request.auth.uid == contactUid);
+      allow create: if circleEligible()
+        && ownerUid != contactUid
+        && !exists(blockPath(ownerUid, contactUid))
+        && !exists(blockPath(contactUid, ownerUid))
+        && validCircleContactShape(request.resource.data)
+        && (
+          (request.auth.uid == ownerUid
+            && request.resource.data.status == 'pending'
+            && request.resource.data.source == 'handle'
+            && !request.resource.data.keys().hasAny(['inviteToken', 'acceptedAt']))
+          || (request.auth.uid == contactUid
+            && request.resource.data.status == 'pending'
+            && request.resource.data.source == 'handle'
+            && !request.resource.data.keys().hasAny(['inviteToken', 'acceptedAt']))
+          || (request.auth.uid == ownerUid
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.source in ['invite', 'qr']
+            && request.resource.data.keys().hasAll(['acceptedAt', 'inviteToken'])
+            && validCircleInviteToken(requestInviteToken())
+            && get(/databases/$(database)/documents/circleInviteLinks/$(request.resource.data.inviteToken)).data.ownerUid == contactUid)
+          || (request.auth.uid == contactUid
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.source in ['invite', 'qr']
+            && request.resource.data.keys().hasAll(['acceptedAt', 'inviteToken'])
+            && validCircleInviteToken(requestInviteToken())
+            && get(/databases/$(database)/documents/circleInviteLinks/$(request.resource.data.inviteToken)).data.ownerUid == ownerUid)
+          || (request.auth.uid == contactUid
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.source == 'handle'
+            && request.resource.data.keys().hasAll(['acceptedAt'])
+            && !request.resource.data.keys().hasAny(['inviteToken'])
+            && exists(circleContactPath(contactUid, ownerUid))
+            && existsAfter(circleContactPath(contactUid, ownerUid))
+            && getAfter(circleContactPath(contactUid, ownerUid)).data.status == 'accepted')
+        );
+      allow update: if circleEligible()
+        && request.auth.uid == ownerUid
+        && resource.data.status == 'pending'
+        && resource.data.source == 'handle'
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.source == 'handle'
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.acceptedAt == request.time
+        && !request.resource.data.keys().hasAny(['inviteToken']);
+      allow delete: if circleEligible()
+        && (request.auth.uid == ownerUid || request.auth.uid == contactUid);
+    }
+
+    match /circleDirectChats/{chatId} {
+      function directMembers() {
+        return resource.data.members;
+      }
+
+      function validCircleDirectMembers(members) {
+        return members is list
+          && members.size() == 2
+          && members[0] is string
+          && members[1] is string
+          && members[0] != members[1]
+          && members[0] < members[1]
+          && chatId == members[0] + '_' + members[1]
+          && request.auth.uid in members
+          && mutualCircleContacts(members[0], members[1])
+          && neitherBlocked(members[0], members[1]);
+      }
+
+      function circleDirectCanAccess() {
+        return circleEligible()
+          && resource.data.members is list
+          && request.auth.uid in resource.data.members
+          && neitherBlocked(resource.data.members[0], resource.data.members[1]);
+      }
+
+      function validCircleDirectCreate() {
+        let data = request.resource.data;
+        return circleEligible()
+          && data.keys().hasAll([
+            'members', 'createdBy', 'createdAt', 'updatedAt',
+            'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
+          ])
+          && data.keys().hasOnly([
+            'members', 'createdBy', 'createdAt', 'updatedAt',
+            'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
+          ])
+          && validCircleDirectMembers(data.members)
+          && data.createdBy == request.auth.uid
+          && data.createdAt == request.time
+          && data.updatedAt == request.time
+          && data.lastMessage == ''
+          && data.lastMessageSenderUid == ''
+          && data.lastMessageAt == request.time
+          && data.lastMessageId == '';
+      }
+
+      function validCircleDirectSummaryUpdate() {
+        return request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId', 'updatedAt'])
+          && request.resource.data.members == resource.data.members
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.lastMessage is string
+          && request.resource.data.lastMessage.size() <= 2000
+          && request.resource.data.lastMessageSenderUid == request.auth.uid
+          && request.resource.data.lastMessageAt == request.time
+          && request.resource.data.lastMessageId is string;
+      }
+
+      allow create: if validCircleDirectCreate();
+      allow get, list: if circleDirectCanAccess();
+      allow update: if circleDirectCanAccess() && validCircleDirectSummaryUpdate();
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        function parentChat() {
+          return get(/databases/$(database)/documents/circleDirectChats/$(chatId)).data;
+        }
+
+        allow get, list: if circleEligible()
+          && parentChat().members is list
+          && request.auth.uid in parentChat().members
+          && neitherBlocked(parentChat().members[0], parentChat().members[1]);
+        allow create: if circleEligible()
+          && parentChat().members is list
+          && request.auth.uid in parentChat().members
+          && neitherBlocked(parentChat().members[0], parentChat().members[1])
+          && request.resource.data.keys().hasAll(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000
+          && request.resource.data.createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/circleDirectChats/$(chatId))
+          && getAfter(/databases/$(database)/documents/circleDirectChats/$(chatId)).data.lastMessageId == messageId
+          && getAfter(/databases/$(database)/documents/circleDirectChats/$(chatId)).data.lastMessage == request.resource.data.text
+          && getAfter(/databases/$(database)/documents/circleDirectChats/$(chatId)).data.lastMessageSenderUid == request.auth.uid;
+        allow update: if circleEligible()
+          && parentChat().members is list
+          && request.auth.uid in parentChat().members
+          && neitherBlocked(parentChat().members[0], parentChat().members[1])
+          && validCircleReadReceiptUpdate();
+        allow delete: if false;
+      }
+
+      match /typingIndicators/{uid} {
+        function parentChat() {
+          return get(/databases/$(database)/documents/circleDirectChats/$(chatId)).data;
+        }
+
+        function validTypingIndicator() {
+          return request.resource.data.keys().hasAll(['updatedAt', 'expiresAt'])
+            && request.resource.data.keys().hasOnly(['updatedAt', 'expiresAt'])
+            && request.resource.data.updatedAt == request.time
+            && request.resource.data.expiresAt is timestamp
+            && request.resource.data.expiresAt > request.time
+            && request.resource.data.expiresAt <= request.time + duration.value(20, 's');
+        }
+
+        allow get, list: if circleEligible()
+          && parentChat().members is list
+          && request.auth.uid in parentChat().members
+          && neitherBlocked(parentChat().members[0], parentChat().members[1]);
+        allow create, update: if circleEligible()
+          && parentChat().members is list
+          && request.auth.uid in parentChat().members
+          && neitherBlocked(parentChat().members[0], parentChat().members[1])
+          && request.auth.uid == uid
+          && validTypingIndicator();
+        allow delete: if circleEligible()
+          && parentChat().members is list
+          && request.auth.uid in parentChat().members
+          && request.auth.uid == uid;
+      }
     }
 
     match /peopleChats/{chatId} {

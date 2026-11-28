@@ -125,7 +125,11 @@ php.exe -l premium_intro_grant.php
 php.exe -l people_call_support.php
 php.exe -l people_call_push.php
 php.exe -l people_call_ice_servers.php
+php.exe -l circle_support.php
+php.exe -l circle_handle_lookup.php
+php.exe -l circle_invite.php
 php.exe test_age_eligibility.php
+php.exe test_circle_contacts.php
 php.exe test_premium_support.php
 php.exe test_romance_safety.php
 php.exe test_people_call_support.php

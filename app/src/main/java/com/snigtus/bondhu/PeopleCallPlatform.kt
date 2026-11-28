@@ -321,7 +321,7 @@ class PeopleCallMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         if (data["type"] == "people_message" || data["type"] == "cipher_message"
-            || data["type"] == "circle_group_message"
+            || data["type"] == "circle_group_message" || data["type"] == "circle_direct_message"
         ) {
             showMessageNotification(data)
             return
@@ -378,7 +378,7 @@ class PeopleCallMessagingService : FirebaseMessagingService() {
         val messageId = data["message_id"].orEmpty()
         val senderUid = data["sender_uid"].orEmpty()
         val recipientUid = data["recipient_uid"].orEmpty()
-        val circleGroup = data["type"] == "circle_group_message"
+        val circleGroup = data["type"] == "circle_group_message" || data["type"] == "circle_direct_message"
         if (!chatId.matches(ID_PATTERN) || !messageId.matches(ID_PATTERN)
             || !senderUid.matches(UID_PATTERN) || !recipientUid.matches(UID_PATTERN)
             || senderUid == recipientUid

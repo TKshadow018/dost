@@ -100,7 +100,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-private enum class PeopleTab { DISCOVER, CHATS, GROUPS, REQUESTS, PROFILE }
+private enum class PeopleTab { CONTACTS, DISCOVER, CHATS, GROUPS, REQUESTS, PROFILE }
 
 @Composable
 internal fun PeopleScreen(
@@ -113,7 +113,10 @@ internal fun PeopleScreen(
     circleMode: Boolean = false,
     onBack: () -> Unit,
     onOpenConversation: (SocialConversation) -> Unit,
-    onOpenGroup: (CircleGroup) -> Unit
+    onOpenGroup: (CircleGroup) -> Unit,
+    pendingInviteToken: String? = null,
+    onConsumedInviteToken: () -> Unit = {},
+    onOpenDirectChat: (CircleDirectChat) -> Unit = {}
 ) {
     val context = LocalContext.current
     val repository = remember(context) { PeopleRepository(context) }
@@ -121,7 +124,7 @@ internal fun PeopleScreen(
     val cohort = socialAgeCohort(userAge)
     val teenCircle = circleMode && userAge.toIntOrNull()?.let { it in MINIMUM_ACCOUNT_AGE until ROMANCE_MINIMUM_AGE } == true
     var tab by rememberSaveable(uid, circleMode, userAge) {
-        mutableStateOf(if (teenCircle) PeopleTab.GROUPS else if (circleMode) PeopleTab.CHATS else PeopleTab.DISCOVER)
+        mutableStateOf(if (circleMode) PeopleTab.CONTACTS else PeopleTab.DISCOVER)
     }
     var ownProfile by remember(uid) { mutableStateOf<PublicPersonProfile?>(null) }
     val savedDraft = remember(uid) { store.peopleProfileDraft() }
@@ -615,14 +618,15 @@ internal fun PeopleScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 PeopleTab.values().filterNot {
-                    (!circleMode && it == PeopleTab.GROUPS)
-                        || (circleMode && (it == PeopleTab.DISCOVER || (teenCircle && it != PeopleTab.GROUPS)))
+                    (!circleMode && (it == PeopleTab.GROUPS || it == PeopleTab.CONTACTS))
+                        || (circleMode && (it == PeopleTab.DISCOVER || it == PeopleTab.REQUESTS || it == PeopleTab.CHATS))
                 }.forEach { item ->
                     FilterChip(
                         selected = tab == item,
                         onClick = { tab = item },
                         label = {
                             Text(when (item) {
+                                PeopleTab.CONTACTS -> socialLabel(language, "Contacts", "পরিচিতি", "संपर्क")
                                 PeopleTab.DISCOVER -> socialLabel(language, "Discover", "খুঁজুন", "खोजें")
                                 PeopleTab.CHATS -> socialLabel(language, "Chats", "চ্যাট", "चैट")
                                 PeopleTab.GROUPS -> socialLabel(language, "Groups", "গ্রুপ", "समूह")
@@ -675,6 +679,15 @@ internal fun PeopleScreen(
                 }
             }
             when (tab) {
+                PeopleTab.CONTACTS -> CircleContactsPanel(
+                    language = language,
+                    uid = uid,
+                    ageCohort = if (teenCircle || cohort == DostAgeCohort.TEEN) "teen" else "adult",
+                    store = store,
+                    pendingInviteToken = pendingInviteToken,
+                    onConsumedInviteToken = onConsumedInviteToken,
+                    onOpenChat = onOpenDirectChat
+                )
                 PeopleTab.PROFILE -> PeopleProfileEditor(
                     language = language,
                     userName = userName,

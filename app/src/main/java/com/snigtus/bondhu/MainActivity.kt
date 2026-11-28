@@ -54,13 +54,17 @@ import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val openFriendRequests = MutableStateFlow<OpenFriendRequest?>(null)
+    private val openCircleInvites = MutableStateFlow<OpenCircleInvite?>(null)
     private var appViewModel: DostAppViewModel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val reloadProfile = intent.getBooleanExtra(EXTRA_RELOAD_PROFILE, false)
         intent.removeExtra(EXTRA_RELOAD_PROFILE)
-        if (savedInstanceState == null) publishOpenFriend(intent)
+        if (savedInstanceState == null) {
+            publishOpenFriend(intent)
+            publishCircleInvite(intent)
+        }
         enableEdgeToEdge()
         setContent {
             DostTheme {
@@ -82,7 +86,7 @@ class MainActivity : ComponentActivity() {
                             appViewModel = it
                         }
                     }
-                    DostApp(openFriendRequests, viewModel)
+                    DostApp(openFriendRequests, openCircleInvites, viewModel)
                 }
             }
         }
@@ -100,6 +104,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         publishOpenFriend(intent)
+        publishCircleInvite(intent)
     }
 
     override fun onStart() {
@@ -113,6 +118,13 @@ class MainActivity : ComponentActivity() {
         if (requestedProfile != activeProfileNamespace(this)) return
         val friendId = intent?.getStringExtra(ChatLaunch.EXTRA_FRIEND_ID)?.takeIf { it.isNotBlank() } ?: return
         openFriendRequests.value = OpenFriendRequest(friendId, System.nanoTime())
+    }
+
+    private fun publishCircleInvite(intent: Intent?) {
+        val token = parseCircleInviteToken(intent?.data?.toString())
+            ?: parseCircleInviteToken(intent?.data?.getQueryParameter("t"))
+        if (token.isNullOrBlank()) return
+        openCircleInvites.value = OpenCircleInvite(token, System.nanoTime())
     }
 }
 
@@ -145,6 +157,7 @@ private fun restartForActiveProfile(context: Context): Boolean {
 @Composable
 fun DostApp(
     openFriendRequests: StateFlow<OpenFriendRequest?> = MutableStateFlow(null),
+    openCircleInvites: StateFlow<OpenCircleInvite?> = MutableStateFlow(null),
     viewModel: DostAppViewModel? = null
 ) {
     val context = LocalContext.current
@@ -183,6 +196,9 @@ fun DostApp(
     var selectedMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
     var peopleReturnMainTab by rememberSaveable { mutableStateOf(MainTab.CHATS) }
     var peopleCircleMode by rememberSaveable { mutableStateOf(true) }
+    var selectedCircleDirectChat by remember { mutableStateOf<CircleDirectChat?>(null) }
+    var pendingCircleInviteToken by remember { mutableStateOf<String?>(null) }
+    var circleDirectReturnScreen by rememberSaveable { mutableStateOf(AppScreen.PEOPLE) }
     var exploreEnabled by remember { mutableStateOf(store.exploreEnabled()) }
     LaunchedEffect(exploreEnabled) {
         if (!exploreEnabled && selectedMainTab == MainTab.DISCOVER) selectedMainTab = MainTab.CHATS
@@ -541,6 +557,7 @@ fun DostApp(
             AppScreen.PEOPLE,
             AppScreen.PEOPLE_CHAT,
             AppScreen.CIRCLE_GROUP_CHAT,
+            AppScreen.CIRCLE_DIRECT_CHAT,
             AppScreen.CIPHER,
             AppScreen.SUPER_SECURE,
             AppScreen.FRIEND_PROFILE,
@@ -557,6 +574,7 @@ fun DostApp(
             AppScreen.CHAT -> screen = chatReturnScreen
             AppScreen.PEOPLE_CHAT -> screen = peopleChatReturnScreen
             AppScreen.CIRCLE_GROUP_CHAT -> screen = circleGroupReturnScreen
+            AppScreen.CIRCLE_DIRECT_CHAT -> screen = circleDirectReturnScreen
             AppScreen.CIPHER -> screen = AppScreen.PEOPLE_CHAT
             AppScreen.SUPER_SECURE -> {
                 closeSuperSecure()
@@ -647,6 +665,15 @@ fun DostApp(
     var generatingProfileIds by appViewModel.generatingProfileIds
     var profileErrors by appViewModel.profileErrors
     val openFriendRequest by openFriendRequests.collectAsState()
+    val openCircleInvite by openCircleInvites.collectAsState()
+    LaunchedEffect(openCircleInvite?.nonce, activeFirebaseUid) {
+        val token = openCircleInvite?.token ?: return@LaunchedEffect
+        if (activeFirebaseUid.isBlank()) return@LaunchedEffect
+        pendingCircleInviteToken = token
+        peopleCircleMode = true
+        peopleReturnMainTab = MainTab.CHATS
+        screen = AppScreen.PEOPLE
+    }
 
     fun storedAccountIds(): List<String> = listOf(
         store.authenticationAccountId(),
@@ -838,7 +865,7 @@ fun DostApp(
             }
             return@LaunchedEffect
         }
-        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.CIRCLE_GROUP_CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
+        if (screen !in setOf(AppScreen.HOME, AppScreen.SYSTEM_FRIEND_PICKER, AppScreen.CHAT, AppScreen.PEOPLE, AppScreen.PEOPLE_CHAT, AppScreen.CIRCLE_GROUP_CHAT, AppScreen.CIRCLE_DIRECT_CHAT, AppScreen.CIRCLE_DIRECT_CHAT, AppScreen.GAMES, AppScreen.KNOWLEDGE) || hasLocalAccountAccess()) return@LaunchedEffect
         val currentAccountId = currentAccount?.uid
         if (!currentAccountId.isNullOrBlank() && storedAccountIds().any { it != currentAccountId }) {
             if (store.activateAccount(currentAccountId)) {
@@ -1665,6 +1692,13 @@ fun DostApp(
                 selectedCircleGroup = group
                 circleGroupReturnScreen = AppScreen.PEOPLE
                 screen = AppScreen.CIRCLE_GROUP_CHAT
+            },
+            pendingInviteToken = pendingCircleInviteToken,
+            onConsumedInviteToken = { pendingCircleInviteToken = null },
+            onOpenDirectChat = { chat ->
+                selectedCircleDirectChat = chat
+                circleDirectReturnScreen = AppScreen.PEOPLE
+                screen = AppScreen.CIRCLE_DIRECT_CHAT
             }
         ) else {
             selectedPeopleConversation = null
@@ -1699,6 +1733,21 @@ fun DostApp(
             )
         } ?: run { screen = AppScreen.PEOPLE } else {
             selectedCircleGroup = null
+            screen = AppScreen.HOME
+        }
+        AppScreen.CIRCLE_DIRECT_CHAT -> if (peopleCircleMode && BuildConfig.DOST_PEOPLE_ENABLED
+            && hasLocalAccountAccess()
+            && (store.userAge().toIntOrNull() ?: 0) >= MINIMUM_ACCOUNT_AGE
+        ) selectedCircleDirectChat?.let { chat ->
+            CircleDirectChatScreen(
+                language = language,
+                uid = activeFirebaseUid,
+                chat = chat,
+                store = store,
+                onBack = { screen = circleDirectReturnScreen }
+            )
+        } ?: run { screen = AppScreen.PEOPLE } else {
+            selectedCircleDirectChat = null
             screen = AppScreen.HOME
         }
         AppScreen.CIPHER -> if (BuildConfig.DOST_CIPHER_ENABLED && BuildConfig.DOST_PEOPLE_ENABLED
