@@ -90,6 +90,17 @@ internal fun ChatScreen(
     }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    LaunchedEffect(friend.id) {
+        delay(45 * 60 * 1000L)
+        snackbarHostState.showSnackbar(
+            chatLabel(
+                language,
+                "You’ve been chatting for a while. Consider taking a break.",
+                "অনেকক্ষণ চ্যাট করছেন। একটু বিরতি নেওয়ার কথা ভাবুন।",
+                "आप काफ़ी देर से चैट कर रहे हैं। थोड़ा विराम लेने पर विचार करें।"
+            )
+        )
+    }
     var searchQuery by remember { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
     var sessionSummaries by remember(friend.id) { mutableStateOf(store.loadSessionSummaries(friend.id).takeLast(10).reversed()) }
@@ -101,6 +112,7 @@ internal fun ChatScreen(
         store.loadSharedMoments(friend.id).filter { it.kind == "shared_ritual" }
     }
     var showFriendInfo by remember { mutableStateOf(false) }
+    var showTeenSessionReminder by remember { mutableStateOf(false) }
     val displayedMessages = remember(messages, searchQuery, dismissedChatNoticeId) {
         messages.filter { message ->
             (!isChatNotice(message) || message.category == ERROR_MESSAGE_CATEGORY) &&
@@ -111,6 +123,16 @@ internal fun ChatScreen(
     }
     val friendAgeBlocked = friendAgeResult(friend.age) != AccountAgeResult.VALID
     val profileBlocked = friend.profilePending || friendAgeBlocked
+    val userAge = store.userAge()
+    LaunchedEffect(friend.id, userAge) {
+        if (ageCohortForAge(userAge.toIntOrNull() ?: 0) == DostAgeCohort.TEEN) {
+            while (true) {
+                delay(TEEN_LONG_SESSION_REMINDER_MILLIS)
+                showTeenSessionReminder = true
+                while (showTeenSessionReminder) delay(1_000)
+            }
+        }
+    }
     val busyUntil = friend.replyAvailableAt(currentTime)
     LaunchedEffect(friend.id) {
         while (true) {
@@ -156,6 +178,11 @@ internal fun ChatScreen(
                                     )
                                 }
                                     ?: "${friendshipLevel(friend.friendshipScore, language)} · ${friend.friendshipScore}/100",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                chatLabel(language, "AI, not a real person", "AI, বাস্তব মানুষ নয়", "AI, असली व्यक्ति नहीं"),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -242,6 +269,23 @@ internal fun ChatScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             RelationshipMeters(friend = friend, language = language, userAge = store.userAge())
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer
+            ) {
+                Text(
+                    chatLabel(
+                        language,
+                        "AI, not a real person. This fictional character may give inaccurate replies.",
+                        "AI, বাস্তব ব্যক্তি নয়। এই কাল্পনিক চরিত্রের উত্তর ভুল হতে পারে।",
+                        "AI, वास्तविक व्यक्ति नहीं। यह काल्पनिक पात्र गलत जवाब दे सकता है।"
+                    ),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
             if (latestRecap != null && latestRecap.sessionId != dismissedRecapSessionId) {
                 Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                     Column(
@@ -572,6 +616,34 @@ internal fun ChatScreen(
         onTimeZoneChange = onFriendTimeZoneChange,
         onDismiss = { showFriendInfo = false }
     )
+    if (showTeenSessionReminder) {
+        AlertDialog(
+            onDismissRequest = { showTeenSessionReminder = false },
+            title = {
+                Text(chatLabel(language, "Take a short break?", "একটু বিরতি নেবে?", "थोड़ा विराम लें?"))
+            },
+            text = {
+                Text(
+                    chatLabel(
+                        language,
+                        "You have been chatting for a while. AI is not a real person, and it is okay to step away.",
+                        "অনেকক্ষণ কথা হয়েছে। AI বাস্তব ব্যক্তি নয়; চাইলে এখন বিরতি নিতে পারো।",
+                        "आप काफी देर से चैट कर रहे हैं। AI वास्तविक व्यक्ति नहीं है; चाहें तो थोड़ा विराम लें।"
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showTeenSessionReminder = false }) {
+                    Text(chatLabel(language, "Continue", "চালিয়ে যান", "जारी रखें"))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTeenSessionReminder = false }) {
+                    Text(chatLabel(language, "Take a break", "বিরতি নিন", "विराम लें"))
+                }
+            }
+        )
+    }
     if (showChatLanguagePicker) ChatLanguageDialog(
         language = language,
         selectedLanguage = chatLanguage,

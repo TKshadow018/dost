@@ -40,6 +40,14 @@ internal class PeopleCallApiClient(
         )
     }
 
+    suspend fun notifyCipherMessage(uid: String, chatId: String, messageId: String) {
+        post(
+            uid,
+            "people_message_push.php",
+            JSONObject().put("chat_id", chatId).put("message_id", messageId).put("cipher", true)
+        )
+    }
+
     suspend fun iceServers(uid: String, chatId: String, callId: String): List<PeopleIceServer> {
         val response = post(
             uid,

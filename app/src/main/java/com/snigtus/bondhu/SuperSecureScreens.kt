@@ -1,6 +1,8 @@
 package com.snigtus.dost
 
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -48,6 +50,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun SuperSecureScreen(
@@ -79,9 +83,9 @@ internal fun SuperSecureScreen(
             TopAppBar(
                 title = {
                     Text(organization?.name ?: when (language) {
-                            AppLanguage.BANGLA -> "সুপার সিকিউর"
-                            AppLanguage.HINDI -> "सुपर सिक्योर"
-                            AppLanguage.ENGLISH -> "Super Secure"
+                            AppLanguage.BANGLA -> "Shield"
+                            AppLanguage.HINDI -> "Shield"
+                            AppLanguage.ENGLISH -> "Shield"
                         })
                 },
                 navigationIcon = {
@@ -102,6 +106,7 @@ internal fun SuperSecureScreen(
         val selectedOrganization = organization
         if (selectedOrganization != null) {
             SecureOrganizationWorkspace(
+                context = context,
                 repository = repository,
                 organization = selectedOrganization,
                 uid = uid,
@@ -114,16 +119,16 @@ internal fun SuperSecureScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    "Private organization messaging",
+                    "Shield — private organisation messaging",
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    "Text only. There are no AI chats, public People discovery, calls, media, or analytics in this space. Group messages are visible to current members; direct messages are visible to their participants. Firebase project administrators can technically access stored data. Messages are not end-to-end encrypted.",
+                    "Closed, admin-controlled organisation messaging. Shield data is isolated from AI and is never used for analytics, product improvement, or testing. Google Cloud encrypts it in transit and at rest; it is not end-to-end encrypted.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    "Enter an organization ID shared by its owner or manager, or create an organization. Members are admitted by Firebase UID; share the organization ID with them separately.",
+                    "Join with an organisation ID shared by its owner or manager, or create an organisation. Managers admit members by Firebase UID. Members aged 13+ join for free; the 18+ owner pays for the seat plan.",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 OutlinedTextField(
@@ -193,7 +198,7 @@ internal fun SuperSecureScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Owners can request organization deletion; members can ask Dost support about their own messages. Automated export and customer-managed hosting are not available in this MVP.",
+                    "Owners can export the member list and messages as JSON. Moving data to a customer-owned server remains a manual service arranged with Dost; no automatic migration is available.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -204,6 +209,7 @@ internal fun SuperSecureScreen(
 
 @Composable
 private fun SecureOrganizationWorkspace(
+    context: Context,
     repository: SuperSecureRepository,
     organization: SecureOrgSummary,
     uid: String,
@@ -224,6 +230,32 @@ private fun SecureOrganizationWorkspace(
         mutableStateOf<List<SecureOrgAuditEntry>?>(null)
     }
     val scope = rememberCoroutineScope()
+    val planReadOnly = secureOrganizationIsReadOnly(
+        organization.activeUntilMillis,
+        System.currentTimeMillis()
+    )
+    val overSeatLimit = secureOrganizationExceedsSeatLimit(
+        members?.size ?: organization.memberCount,
+        organization.seatLimit
+    )
+    val readOnly = planReadOnly || overSeatLimit
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) scope.launch {
+            notice = "Preparing Shield export…"
+            notice = try {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        repository.exportOrganization(uid, organization.id, output)
+                    } ?: error("The selected export file could not be opened.")
+                }
+                "Shield data exported."
+            } catch (_: Exception) {
+                "Shield export failed. Check your connection and try again."
+            }
+        }
+    }
     DisposableEffect(repository, organization.id, uid) {
         val registrations = mutableListOf<ListenerRegistration>()
         try {
@@ -252,11 +284,16 @@ private fun SecureOrganizationWorkspace(
     ) {
         Text("Organization ID: ${organization.id}", style = MaterialTheme.typography.bodySmall)
         Text(
-            "Members: ${members?.size ?: organization.memberCount}/$MAX_SECURE_ORG_MEMBERS",
+            "Active members: ${members?.size ?: organization.memberCount}/${organization.seatLimit}",
             style = MaterialTheme.typography.bodySmall
         )
+        if (planReadOnly) {
+            Text("This Shield organisation is read-only. You can still read and export its data.")
+        } else if (overSeatLimit) {
+            Text("This organisation is over its seat limit. Members can read and export data, but cannot send until the owner removes enough members.")
+        }
         Text(
-            "Current members only. Text messages are encrypted in transit and at rest by Firebase, but are not end-to-end encrypted.",
+            "Closed, admin-controlled messaging. Data is isolated from AI and analytics, encrypted in transit and at rest by Google Cloud, and not end-to-end encrypted.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -272,6 +309,14 @@ private fun SecureOrganizationWorkspace(
                     "Role: ${state.member.role.value}",
                     style = MaterialTheme.typography.bodySmall
                 )
+                if (state.member.role == SecureOrgRole.OWNER) {
+                    OutlinedButton(
+                        onClick = { exportLauncher.launch("Shield-${organization.id}.json") },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Export organisation JSON")
+                    }
+                }
                 TabRow(
                     selectedTabIndex = when {
                         showAudit -> 2
@@ -302,6 +347,7 @@ private fun SecureOrganizationWorkspace(
                         uid = uid,
                         currentMember = state.member,
                         members = members,
+                        readOnly = planReadOnly,
                         onOpenDirect = { member ->
                             notice = ""
                             scope.launch {
@@ -324,6 +370,7 @@ private fun SecureOrganizationWorkspace(
                         conversation = selectedConversation,
                         uid = uid,
                         members = members.orEmpty(),
+                        readOnly = readOnly,
                         onBackToGroup = {
                             selectedConversation = SecureOrgConversation("main")
                             showMembers = false
@@ -347,6 +394,7 @@ private fun SecureMemberList(
     uid: String,
     currentMember: SecureOrgMember,
     members: List<SecureOrgMember>?,
+    readOnly: Boolean,
     onOpenDirect: (SecureOrgMember) -> Unit,
     onNotice: (String) -> Unit
 ) {
@@ -401,10 +449,10 @@ private fun SecureMemberList(
     }
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (secureCanManageMembers(currentMember.role)) {
+        if (secureCanManageMembers(currentMember.role) && !readOnly) {
             OutlinedButton(
                 onClick = { showAddDialog = true },
-                enabled = !busy && members != null && members.size < MAX_SECURE_ORG_MEMBERS,
+                enabled = !busy && members != null && secureCanAddMembers(members.size, organization.seatLimit),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Filled.Add, contentDescription = null)
@@ -541,6 +589,7 @@ private fun SecureChatPanel(
     conversation: SecureOrgConversation,
     uid: String,
     members: List<SecureOrgMember>,
+    readOnly: Boolean,
     onBackToGroup: () -> Unit,
     onNotice: (String) -> Unit
 ) {
@@ -591,14 +640,14 @@ private fun SecureChatPanel(
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it.take(4_000) },
-                enabled = messages != null && !sending,
+                enabled = messages != null && !sending && !readOnly,
                 label = { Text("Text message") },
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
             )
             IconButton(
-                enabled = messages != null && draft.isNotBlank() && !sending,
+                enabled = messages != null && draft.isNotBlank() && !sending && !readOnly,
                 onClick = {
                     val text = draft
                     sending = true

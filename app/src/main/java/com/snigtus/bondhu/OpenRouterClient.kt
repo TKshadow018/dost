@@ -16,7 +16,10 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-class OpenRouterClient {
+class OpenRouterClient(
+    private val requestAllowed: () -> Boolean = { false },
+    private val authTokenProvider: suspend () -> String? = { null }
+) {
     private val backendUrl = "https://bisque-bear-900175.hostingersite.com/api/ai.php"
     companion object {
         const val FALLBACK_FREE_MODEL = "openrouter/free"
@@ -54,28 +57,38 @@ class OpenRouterClient {
             messages.takeLast(MAX_SUMMARY_MESSAGES)
     }
 
-    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile = structuredProfileFromMemories(userName, userMemories)): AiReply = withContext(Dispatchers.IO) {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+    suspend fun reply(apiKey: String, model: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary> = emptyList(), userTimeZoneId: String = ZoneId.systemDefault().id, forceFollowUp: Boolean = false, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile = structuredProfileFromMemories(userName, userMemories), firebaseIdToken: String = ""): AiReply = withContext(Dispatchers.IO) {
+        check(requestAllowed()) { "Explore mode is turned off." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         require(friendAgeResult(friend.age) == AccountAgeResult.VALID) {
             "Messaging is disabled for friend profiles under 18."
         }
-        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction, userAge, structuredUserProfile)
+        val verifiedFirebaseIdToken = firebaseIdToken.ifBlank { authTokenProvider().orEmpty() }
+        request(model, apiKey, installationId, userName, friend, history, language, userMemories, friendshipScore, loveScore, sessionSummaries, userTimeZoneId, forceFollowUp, sessionId, ephemeralInstruction, userAge, structuredUserProfile, verifiedFirebaseIdToken)
     }
 
-    suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage): FriendProfile = withContext(Dispatchers.IO) {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+    suspend fun generateFriendProfile(apiKey: String, model: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, firebaseIdToken: String = "", friendId: String? = null, installationId: String? = null): FriendProfile = withContext(Dispatchers.IO) {
+        check(requestAllowed()) { "Explore mode is turned off." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         require(friendAgeResult(age) == AccountAgeResult.VALID) {
             "Generated friend profiles must be 18 or older."
         }
-        requestProfile(model, apiKey, name, age, gender, personality, language)
+        requestProfile(
+            model, apiKey, name, age, gender, personality, language,
+            firebaseIdToken.ifBlank { authTokenProvider().orEmpty() },
+            friendId,
+            installationId
+        )
     }
 
-    suspend fun summarizeSession(apiKey: String, model: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String = withContext(Dispatchers.IO) {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
-        requestSessionSummary(model, apiKey, friendName, messages, language)
+    suspend fun summarizeSession(apiKey: String, model: String, friend: Friend, installationId: String, messages: List<ChatMessage>, language: AppLanguage, firebaseIdToken: String = ""): String = withContext(Dispatchers.IO) {
+        check(requestAllowed()) { "Explore mode is turned off." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
+        requestSessionSummary(model, apiKey, friend, installationId, messages, language, firebaseIdToken.ifBlank { authTokenProvider().orEmpty() })
     }
 
     fun logConversationMessage(installationId: String, userName: String, friendId: String, friendName: String, message: ChatMessage): Boolean {
+        if (!requestAllowed()) return true
         if (!superSecureSessionAllowsAi()) return true
         val body = JSONObject().apply {
             put("operation", "log_message")
@@ -104,7 +117,8 @@ class OpenRouterClient {
     }
 
     suspend fun deleteServerArchive(installationId: String): Int = withContext(Dispatchers.IO) {
-        check(superSecureSessionAllowsAi()) { "AI archives are unavailable in Super Secure mode." }
+        check(requestAllowed()) { "Explore mode is turned off." }
+        check(superSecureSessionAllowsAi()) { "AI archives are unavailable in Shield." }
         require(installationId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
             "The installation id is invalid."
         }
@@ -144,8 +158,8 @@ class OpenRouterClient {
         }
     }
 
-    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile): AiReply {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+    private fun request(model: String, apiKey: String, installationId: String, userName: String, friend: Friend, history: List<ChatMessage>, language: AppLanguage, userMemories: List<UserMemory>, friendshipScore: Int, loveScore: Int, sessionSummaries: List<SessionSummary>, userTimeZoneId: String, forceFollowUp: Boolean, sessionId: String = "", ephemeralInstruction: String = "", userAge: String = "", structuredUserProfile: StructuredUserProfile, firebaseIdToken: String = ""): AiReply {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         val resolvedSessionId = sessionId.ifBlank { history.lastOrNull()?.sessionId.orEmpty() }
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM uuuu h:mm a z", Locale.getDefault())
         val userDateTime = ZonedDateTime.now(validZoneId(userTimeZoneId)).format(formatter)
@@ -240,6 +254,8 @@ class OpenRouterClient {
             put("friend_name", friend.name)
             put("user_age", userAge)
             put("friend_age", friend.age)
+            put("friend_kind", if (friend.catalogId.isBlank()) "custom" else "catalog")
+            if (friend.catalogId.isNotBlank()) put("catalog_id", friend.catalogId)
             put("chat_language", when (language) {
                 AppLanguage.BANGLA -> "bn"
                 AppLanguage.HINDI -> "hi"
@@ -249,7 +265,7 @@ class OpenRouterClient {
             put("messages", messages)
             put("temperature", 0.8)
         }
-        val connection = post(apiKey, installationId, friend.id, resolvedSessionId, body.toString().toByteArray())
+        val connection = post(apiKey, installationId, friend.id, resolvedSessionId, body.toString().toByteArray(), firebaseIdToken)
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "OpenRouter request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -270,8 +286,8 @@ class OpenRouterClient {
         return '{' !in trimmed && '}' !in trimmed
     }
 
-    private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, personality: String, language: AppLanguage): FriendProfile {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+    private fun requestProfile(model: String, apiKey: String, name: String, age: String, gender: String, personality: String, language: AppLanguage, firebaseIdToken: String, friendId: String?, installationId: String?): FriendProfile {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         val system = """
             Create a complete fictional friend character for a social chat app. The user provided this personality and it must remain consistent: $personality. Never imply this is a real person and never use real private data. Invent plausible, internally consistent details located somewhere in Bangladesh. Reply in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}.
             Return only valid JSON with these exact string fields: personality, interests, family, familyMembers, familyActivities, financialCondition, address, height, weight, facialFeatures, bodyFeatures, conversationStyle.
@@ -282,8 +298,14 @@ class OpenRouterClient {
             put(JSONObject().apply { put("role", "system"); put("content", system) })
             put(JSONObject().apply { put("role", "user"); put("content", user) })
         }
-        val body = JSONObject().apply { put("model", model); put("messages", messages); put("temperature", 0.9) }
-        val connection = post(apiKey, null, null, null, body.toString().toByteArray())
+        val body = JSONObject().apply {
+            put("operation", "profile_generation")
+            put("friend_age", age)
+            put("model", model)
+            put("messages", messages)
+            put("temperature", 0.9)
+        }
+        val connection = post(apiKey, installationId, friendId, null, body.toString().toByteArray(), firebaseIdToken)
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Profile request failed"))
         val raw = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -296,18 +318,25 @@ class OpenRouterClient {
         )
     }
 
-    private fun requestSessionSummary(model: String, apiKey: String, friendName: String, messages: List<ChatMessage>, language: AppLanguage): String {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+    private fun requestSessionSummary(model: String, apiKey: String, friend: Friend, installationId: String, messages: List<ChatMessage>, language: AppLanguage, firebaseIdToken: String): String {
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         val transcript = summaryMessages(messages).joinToString("\n") { message ->
-            "${if (message.role == "user") "User" else friendName}: ${message.content}"
+            "${if (message.role == "user") "User" else friend.name}: ${message.content}"
         }
         val system = "Summarize this complete conversation in ${when (language) { AppLanguage.BANGLA -> "Bangla"; AppLanguage.HINDI -> "Hindi"; AppLanguage.ENGLISH -> "English" }}. Preserve important topics, decisions, emotions, plans, and explicitly stated personal details. Do not infer or invent facts. Return only the summary."
         val requestMessages = JSONArray().apply {
             put(JSONObject().apply { put("role", "system"); put("content", system) })
             put(JSONObject().apply { put("role", "user"); put("content", transcript) })
         }
-        val body = JSONObject().apply { put("model", model); put("messages", requestMessages); put("temperature", 0.2) }
-        val connection = post(apiKey, null, null, null, body.toString().toByteArray())
+        val body = JSONObject().apply {
+            put("operation", "session_summary")
+            put("friend_kind", if (friend.catalogId.isBlank()) "custom" else "catalog")
+            if (friend.catalogId.isNotBlank()) put("catalog_id", friend.catalogId)
+            put("model", model)
+            put("messages", requestMessages)
+            put("temperature", 0.2)
+        }
+        val connection = post(apiKey, installationId, friend.id, null, body.toString().toByteArray(), firebaseIdToken)
         val response = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }
         if (connection.responseCode !in 200..299) throw IllegalStateException(JSONObject(response).optString("error", "Session summary request failed"))
         return JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
@@ -350,8 +379,9 @@ class OpenRouterClient {
         .replace(Regex("\\n{3,}"), "\n\n")
         .trim()
 
-    private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null, nowEpochSeconds: Long = System.currentTimeMillis() / 1000): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
-        check(superSecureSessionAllowsAi()) { "AI is unavailable in Super Secure mode." }
+    private fun openConnection(apiKey: String, installationId: String? = null, friendId: String? = null, sessionId: String? = null, nowEpochSeconds: Long = System.currentTimeMillis() / 1000, firebaseIdToken: String = ""): HttpURLConnection = (URL(backendUrl).openConnection() as HttpURLConnection).apply {
+        check(requestAllowed()) { "Explore mode is turned off." }
+        check(superSecureSessionAllowsAi()) { "AI is unavailable in Shield." }
         requestMethod = "POST"
         doOutput = true
         connectTimeout = 15_000
@@ -359,6 +389,7 @@ class OpenRouterClient {
         setRequestProperty("Content-Type", "application/json")
         setRequestProperty("Accept", "application/json")
         if (apiKey.isNotBlank()) setRequestProperty("X-OpenRouter-Key", apiKey.trim())
+        if (firebaseIdToken.isNotBlank()) setRequestProperty("Authorization", "Bear" + "er " + firebaseIdToken)
         val installHeader = installationId?.trim().orEmpty()
         if (installationId != null) setRequestProperty("X-Dost-Install-ID", installHeader)
         if (friendId != null) setRequestProperty("X-Dost-Friend-ID", friendId)
@@ -367,9 +398,9 @@ class OpenRouterClient {
         if (credential != null) setRequestProperty("X-Dost-App-Credential", credential)
     }
 
-    private fun post(apiKey: String, installationId: String?, friendId: String?, sessionId: String?, body: ByteArray): HttpURLConnection {
+    private fun post(apiKey: String, installationId: String?, friendId: String?, sessionId: String?, body: ByteArray, firebaseIdToken: String = ""): HttpURLConnection {
         fun send(nowEpochSeconds: Long): HttpURLConnection {
-            val connection = openConnection(apiKey, installationId, friendId, sessionId, nowEpochSeconds)
+            val connection = openConnection(apiKey, installationId, friendId, sessionId, nowEpochSeconds, firebaseIdToken)
             connection.outputStream.use { it.write(body) }
             return connection
         }

@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'catalog_validation.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'explore_support.php';
 
 function respond_json($status, $payload)
 {
@@ -116,9 +117,9 @@ function public_friend_profile($profile)
     return $profile;
 }
 
-if (!isset($_SERVER['REQUEST_METHOD']) || $_SERVER['REQUEST_METHOD'] !== 'GET') {
-    header('Allow: GET');
-    respond_json(405, array('error' => 'GET requests only'));
+if (!isset($_SERVER['REQUEST_METHOD']) || !in_array($_SERVER['REQUEST_METHOD'], array('GET', 'POST'), true)) {
+    header('Allow: GET, POST');
+    respond_json(405, array('error' => 'GET or POST requests only'));
 }
 
 $catalogDirectory = __DIR__ . DIRECTORY_SEPARATOR . 'system_friends';
@@ -126,11 +127,32 @@ if (!is_dir($catalogDirectory) || !is_readable($catalogDirectory)) {
     respond_json(503, array('error' => 'System friend catalog is unavailable'));
 }
 
-if (isset($_GET['photo'])) {
+if (isset($_SERVER['CONTENT_LENGTH']) && (int) $_SERVER['CONTENT_LENGTH'] > 4096) {
+    respond_json(413, array('error' => 'Request is too large'));
+}
+$config = array();
+$configPath = __DIR__ . DIRECTORY_SEPARATOR . 'config.php';
+if (is_file($configPath)) {
+    $loadedConfig = require $configPath;
+    if (is_array($loadedConfig)) {
+        $config = $loadedConfig;
+    }
+}
+$authorization = dost_explore_authorization_header($_SERVER);
+$identity = dost_explore_authorize($authorization, $config, time());
+if ($identity['status'] !== 200) {
+    respond_json($identity['status'], array('error' => $identity['error']));
+}
+if (!dost_explore_enabled($config)) {
+    respond_json(503, array('error' => 'Explore is not enabled'));
+}
+$explorePlusActive = dost_explore_plus_active($identity['claims'], time());
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['photo'])) {
     $chatLanguage = isset($_GET['chat_language']) ? $_GET['chat_language'] : 'en';
     $loaded = load_system_friend($_GET['photo'], $catalogDirectory, $chatLanguage);
     if ($loaded['status'] !== 200) {
-        respond_json($loaded['status'], array('error' => $loaded['error']));
+        respond_json(404, array('error' => 'Friend photo not found'));
     }
     $photoPath = $loaded['profile']['_photo_path'];
     if (!is_string($photoPath) || $photoPath === '' || !is_readable($photoPath) || filesize($photoPath) > 5242880) {
@@ -147,10 +169,46 @@ if (isset($_GET['photo'])) {
     }
     header('Content-Type: ' . $mime);
     header('Content-Length: ' . (string) filesize($photoPath));
-    header('Cache-Control: public, max-age=86400');
+    header('Cache-Control: private, max-age=86400');
     header('X-Content-Type-Options: nosniff');
     readfile($photoPath);
     exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $body = file_get_contents('php://input', false, null, 0, 4097);
+    if (is_string($body) && strlen($body) > 4096) {
+        respond_json(413, array('error' => 'Request is too large'));
+    }
+    $request = is_string($body) ? json_decode($body, true) : null;
+    if (!is_array($request) || json_last_error() !== JSON_ERROR_NONE
+        || !isset($request['friend_id'], $request['kind'], $request['action'])
+        || !is_string($request['friend_id']) || !is_string($request['kind'])
+        || !is_string($request['action'])
+    ) {
+        respond_json(400, array('error' => 'Invalid friend registration'));
+    }
+    if ($request['kind'] === 'catalog') {
+        $catalogProfile = load_system_friend($request['friend_id'], $catalogDirectory);
+        if ($catalogProfile['status'] !== 200) {
+            respond_json(400, array('error' => 'Invalid catalog friend ID'));
+        }
+    } elseif ($request['kind'] !== 'custom' || !dost_explore_valid_uuid($request['friend_id'])) {
+        respond_json(400, array('error' => 'Invalid custom friend ID'));
+    }
+    $storageDirectory = dost_explore_storage_directory($config);
+    if ($storageDirectory === false) {
+        respond_json(503, array('error' => 'Explore friend storage is unavailable'));
+    }
+    $result = dost_explore_registry_change(
+        $storageDirectory,
+        $identity['uid'],
+        $request['friend_id'],
+        $request['kind'],
+        $request['action'],
+        $explorePlusActive
+    );
+    respond_json($result['status'], $result);
 }
 
 if (isset($_GET['id'])) {

@@ -50,6 +50,10 @@ android {
     if (!dostPeopleEnabledValue.equalsIgnoreCase("true") && !dostPeopleEnabledValue.equalsIgnoreCase("false")) {
         throw new GradleException("DOST_PEOPLE_ENABLED must be either true or false.")
     }
+    def dostExploreEnabledValue = System.getenv("DOST_EXPLORE_ENABLED") ?: providers.gradleProperty("DOST_EXPLORE_ENABLED").orNull ?: "false"
+    if (!dostExploreEnabledValue.equalsIgnoreCase("true") && !dostExploreEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_EXPLORE_ENABLED must be either true or false.")
+    }
     def dostPremiumEnabledValue = System.getenv("DOST_PREMIUM_ENABLED") ?: providers.gradleProperty("DOST_PREMIUM_ENABLED").orNull ?: "false"
     if (!dostPremiumEnabledValue.equalsIgnoreCase("true") && !dostPremiumEnabledValue.equalsIgnoreCase("false")) {
         throw new GradleException("DOST_PREMIUM_ENABLED must be either true or false.")
@@ -58,9 +62,15 @@ android {
     if (!dostSuperSecureEnabledValue.equalsIgnoreCase("true") && !dostSuperSecureEnabledValue.equalsIgnoreCase("false")) {
         throw new GradleException("DOST_SUPER_SECURE_ENABLED must be either true or false.")
     }
+    def dostCipherEnabledValue = System.getenv("DOST_CIPHER_ENABLED") ?: providers.gradleProperty("DOST_CIPHER_ENABLED").orNull ?: "false"
+    if (!dostCipherEnabledValue.equalsIgnoreCase("true") && !dostCipherEnabledValue.equalsIgnoreCase("false")) {
+        throw new GradleException("DOST_CIPHER_ENABLED must be either true or false.")
+    }
     def dostPeopleEnabled = dostPeopleEnabledValue.equalsIgnoreCase("true")
+    def dostExploreEnabled = dostExploreEnabledValue.equalsIgnoreCase("true")
     def dostPremiumEnabled = dostPremiumEnabledValue.equalsIgnoreCase("true")
     def dostSuperSecureEnabled = dostSuperSecureEnabledValue.equalsIgnoreCase("true")
+    def dostCipherEnabled = dostCipherEnabledValue.equalsIgnoreCase("true")
     def escapedDostAppCredentialSecret = dostAppCredentialSecret.replace("\\", "\\\\").replace("\"", "\\\"")
 
     signingConfigs {
@@ -82,8 +92,10 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "DOST_APP_CREDENTIAL_SECRET", "\"${escapedDostAppCredentialSecret}\""
         buildConfigField "boolean", "DOST_PEOPLE_ENABLED", dostPeopleEnabled.toString()
+        buildConfigField "boolean", "DOST_EXPLORE_ENABLED", dostExploreEnabled.toString()
         buildConfigField "boolean", "DOST_PREMIUM_ENABLED", dostPremiumEnabled.toString()
         buildConfigField "boolean", "DOST_SUPER_SECURE_ENABLED", dostSuperSecureEnabled.toString()
+        buildConfigField "boolean", "DOST_CIPHER_ENABLED", dostCipherEnabled.toString()
         buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseApiKey)
         buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseAppId)
         buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseProjectId)
@@ -139,6 +151,8 @@ dependencies {
     implementation libs.play.age.signals
     implementation libs.play.integrity
     implementation libs.play.billing
+    implementation libs.tink.android
+    implementation libs.bouncycastle
     testImplementation libs.junit
     testImplementation libs.kotlinx.coroutines.test
     // Unit tests run against the Android SDK stubs, whose org.json throws. Use the real parser in tests only.

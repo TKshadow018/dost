@@ -108,6 +108,7 @@ internal fun PeopleScreen(
     userAge: String,
     userGender: String,
     store: DostStore,
+    circleMode: Boolean = false,
     onBack: () -> Unit,
     onOpenConversation: (SocialConversation) -> Unit
 ) {
@@ -115,7 +116,9 @@ internal fun PeopleScreen(
     val repository = remember(context) { PeopleRepository(context) }
     val scope = rememberCoroutineScope()
     val cohort = socialAgeCohort(userAge)
-    var tab by rememberSaveable { mutableStateOf(PeopleTab.DISCOVER) }
+    var tab by rememberSaveable(uid, circleMode) {
+        mutableStateOf(if (circleMode) PeopleTab.CHATS else PeopleTab.DISCOVER)
+    }
     var ownProfile by remember(uid) { mutableStateOf<PublicPersonProfile?>(null) }
     val savedDraft = remember(uid) { store.peopleProfileDraft() }
     var country by rememberSaveable(uid) { mutableStateOf(savedDraft.country) }
@@ -523,7 +526,11 @@ internal fun PeopleScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(socialLabel(language, "People", "মানুষ", "लोग")) },
+                title = {
+                    Text(
+                        if (circleMode) "Circle" else socialLabel(language, "People", "মানুষ", "लोग")
+                    )
+                },
                 navigationIcon = { DostBackButton(language, onBack) },
                 actions = {
                     if (tab == PeopleTab.DISCOVER && isPublic) {
@@ -543,7 +550,7 @@ internal fun PeopleScreen(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                PeopleTab.values().forEach { item ->
+                PeopleTab.values().filterNot { circleMode && it == PeopleTab.DISCOVER }.forEach { item ->
                     FilterChip(
                         selected = tab == item,
                         onClick = { tab = item },
@@ -1869,7 +1876,8 @@ internal fun PeopleChatScreen(
     language: AppLanguage,
     uid: String,
     conversation: SocialConversation,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenCipher: () -> Unit
 ) {
     val context = LocalContext.current
     val repository = remember(context) { PeopleRepository(context) }
@@ -2196,6 +2204,11 @@ internal fun PeopleChatScreen(
                 },
                 navigationIcon = { DostBackButton(language, onBack) },
                 actions = {
+                    if (BuildConfig.DOST_CIPHER_ENABLED) {
+                        TextButton(onClick = onOpenCipher) {
+                            Text("Cipher")
+                        }
+                    }
                     IconButton(onClick = {
                         context.startActivity(
                             Intent(context, PeopleCallActivity::class.java).apply {

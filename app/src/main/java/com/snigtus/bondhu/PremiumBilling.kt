@@ -38,6 +38,7 @@ internal data class PremiumBillingState(
     val isLoading: Boolean = true,
     val isBusy: Boolean = false,
     val isPremium: Boolean = false,
+    val isCipher: Boolean = false,
     val message: String? = null
 )
 
@@ -71,15 +72,17 @@ internal class PremiumBillingManager(
         scope.launch {
             try {
                 val active = authRepository.hasPremiumEntitlement()
-                mutableState.value = mutableState.value.copy(isPremium = active)
+                val cipherActive = authRepository.hasPlanEntitlement(CIPHER_PRODUCT_ID)
+                mutableState.value = mutableState.value.copy(isPremium = active, isCipher = cipherActive)
                 onEntitlementChanged(active)
                 connect()
-                val products = queryProducts()
+                val products = queryProducts(authRepository.hasAdultEligibility())
                 mutableState.value = mutableState.value.copy(
                     products = products,
                     isLoading = false,
                     isPremium = active,
-                    message = if (products.isEmpty()) "Premium plans are not available right now." else null
+                    isCipher = cipherActive,
+                    message = if (products.isEmpty()) "Paid plans are not available right now." else null
                 )
             } catch (error: CancellationException) {
                 throw error
@@ -92,23 +95,24 @@ internal class PremiumBillingManager(
         }
     }
 
-    fun purchase(activity: Activity, productId: String) {
+    fun purchase(activity: Activity, productId: String, selectedOfferToken: String? = null) {
         if (!BuildConfig.DOST_PREMIUM_ENABLED) {
-            mutableState.value = mutableState.value.copy(message = "Premium purchases are not available yet.")
+            mutableState.value = mutableState.value.copy(message = "Explore Plus purchases are not available yet.")
             return
         }
         val product = mutableState.value.products.firstOrNull { it.productId == productId }
         if (product == null) {
-            mutableState.value = mutableState.value.copy(message = "This Premium plan is unavailable.")
+            mutableState.value = mutableState.value.copy(message = "This Explore Plus plan is unavailable.")
             return
         }
         val uid = authRepository.currentAccount?.uid
         if (uid.isNullOrBlank()) {
-            mutableState.value = mutableState.value.copy(message = "Sign in before purchasing Premium.")
+            mutableState.value = mutableState.value.copy(message = "Sign in before purchasing Explore Plus.")
             return
         }
         val offerToken = if (product.productType == BillingClient.ProductType.SUBS) {
-            product.subscriptionOfferDetails?.firstOrNull()?.offerToken
+            selectedOfferToken
+                ?: product.subscriptionOfferDetails?.firstOrNull()?.offerToken
         } else {
             null
         }
@@ -120,15 +124,49 @@ internal class PremiumBillingManager(
             .setProductDetails(product)
             .apply { offerToken?.let(::setOfferToken) }
             .build()
-        val params = BillingFlowParams.newBuilder()
-            .setProductDetailsParamsList(listOf(productParams))
-            .setObfuscatedAccountId(obfuscatedAccountId(uid))
-            .build()
-        val result = billingClient.launchBillingFlow(activity, params)
-        if (result.responseCode != BillingClient.BillingResponseCode.OK) {
-            mutableState.value = mutableState.value.copy(
-                message = result.debugMessage.ifBlank { "Google Play could not start the purchase." }
-            )
+        scope.launch {
+            try {
+                val oldShieldPurchase = if (productId in SHIELD_PRODUCT_IDS) {
+                    queryPurchases(BillingClient.ProductType.SUBS).firstOrNull { purchase ->
+                        purchase.purchaseState == Purchase.PurchaseState.PURCHASED
+                            && purchase.products.any { it in SHIELD_PRODUCT_IDS && it != productId }
+                    }
+                } else {
+                    null
+                }
+                val params = BillingFlowParams.newBuilder()
+                    .setProductDetailsParamsList(listOf(productParams))
+                    .setObfuscatedAccountId(obfuscatedAccountId(uid))
+                    .apply {
+                        oldShieldPurchase?.let { oldPurchase ->
+                            setSubscriptionUpdateParams(
+                                BillingFlowParams.SubscriptionUpdateParams.newBuilder()
+                                    .setOldPurchaseToken(oldPurchase.purchaseToken)
+                                    .setSubscriptionReplacementMode(
+                                        if (productId == SHIELD_BUSINESS_PRODUCT_ID) {
+                                            BillingFlowParams.SubscriptionUpdateParams.ReplacementMode.CHARGE_PRORATED_PRICE
+                                        } else {
+                                            BillingFlowParams.SubscriptionUpdateParams.ReplacementMode.DEFERRED
+                                        }
+                                    )
+                                    .build()
+                            )
+                        }
+                    }
+                    .build()
+                val result = billingClient.launchBillingFlow(activity, params)
+                if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+                    mutableState.value = mutableState.value.copy(
+                        message = result.debugMessage.ifBlank { "Google Play could not start the purchase." }
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                mutableState.value = mutableState.value.copy(
+                    message = error.message ?: "Google Play could not start the purchase."
+                )
+            }
         }
     }
 
@@ -141,7 +179,7 @@ internal class PremiumBillingManager(
                 if (purchases.isEmpty()) {
                     mutableState.value = mutableState.value.copy(
                         isBusy = false,
-                        message = "No Premium purchases were found for this Google Play account."
+                        message = "No Explore Plus purchases were found for this Google Play account."
                     )
                 } else {
                     verifyAndAcknowledge(purchases.distinctBy { it.purchaseToken })
@@ -217,12 +255,15 @@ internal class PremiumBillingManager(
         }
     }
 
-    private suspend fun queryProducts(): List<ProductDetails> =
+    private suspend fun queryProducts(adultEligible: Boolean): List<ProductDetails> =
         suspendCancellableCoroutine { continuation ->
             val products = listOf(
-                BillingClient.ProductType.SUBS to PREMIUM_MONTHLY_PRODUCT_ID,
-                BillingClient.ProductType.SUBS to PREMIUM_ANNUAL_PRODUCT_ID,
-                BillingClient.ProductType.INAPP to PREMIUM_LIFETIME_PRODUCT_ID
+                BillingClient.ProductType.SUBS to EXPLORE_PLUS_PRODUCT_ID,
+                BillingClient.ProductType.INAPP to EXPLORE_PLUS_LIFETIME_PRODUCT_ID,
+                BillingClient.ProductType.SUBS to CIPHER_PRODUCT_ID,
+                BillingClient.ProductType.SUBS to SHIELD_TEAM_PRODUCT_ID,
+                BillingClient.ProductType.SUBS to SHIELD_BUSINESS_PRODUCT_ID,
+                BillingClient.ProductType.SUBS to PLUS_BUNDLE_PRODUCT_ID
             ).map { (type, id) ->
                 QueryProductDetailsParams.Product.newBuilder()
                     .setProductId(id)
@@ -235,10 +276,12 @@ internal class PremiumBillingManager(
             billingClient.queryProductDetailsAsync(params) { result, detailsResult ->
                 if (!continuation.isActive) return@queryProductDetailsAsync
                 if (result.responseCode == BillingClient.BillingResponseCode.OK) {
-                    continuation.resume(detailsResult.productDetailsList)
+                    continuation.resume(detailsResult.productDetailsList.filter { product ->
+                        adultEligible || product.productId !in ADULT_ONLY_PRODUCT_IDS
+                    })
                 } else {
                     continuation.resumeWithException(
-                        IOException(result.debugMessage.ifBlank { "Could not load Premium plans." })
+                        IOException(result.debugMessage.ifBlank { "Could not load Explore Plus plans." })
                     )
                 }
             }
@@ -264,21 +307,23 @@ internal class PremiumBillingManager(
     private suspend fun verifyAndAcknowledge(purchases: List<Purchase>) {
         mutableState.value = mutableState.value.copy(isBusy = true, message = null)
         val uid = authRepository.currentAccount?.uid
-            ?: throw IOException("Sign in again to restore Premium.")
+            ?: throw IOException("Sign in again to restore Explore Plus.")
         var verified = false
+        val verifiedProducts = mutableSetOf<String>()
         purchases.forEach { purchase ->
             when (purchase.purchaseState) {
                 Purchase.PurchaseState.PENDING -> {
                     mutableState.value = mutableState.value.copy(
                         isBusy = false,
-                        message = "Payment is pending. Premium starts after Google confirms payment."
+                        message = "Payment is pending. Explore Plus starts after Google confirms payment."
                     )
                 }
                 Purchase.PurchaseState.PURCHASED -> {
                     val productId = purchase.products.firstOrNull { it in PREMIUM_PRODUCT_IDS }
-                        ?: throw IOException("Google Play returned an unrecognized Premium product.")
+                        ?: throw IOException("Google Play returned an unrecognized Explore Plus product.")
                     verifyPurchase(uid, productId, purchase.purchaseToken)
                     if (!purchase.isAcknowledged) acknowledge(purchase.purchaseToken)
+                    verifiedProducts += productId
                     verified = true
                 }
                 else -> Unit
@@ -286,9 +331,16 @@ internal class PremiumBillingManager(
         }
         if (!verified) return
         val active = authRepository.hasPremiumEntitlement(forceRefresh = true)
-        if (!active) throw IOException("The verified Premium entitlement was not returned by Firebase.")
-        mutableState.value = mutableState.value.copy(isBusy = false, isPremium = true, message = null)
-        onEntitlementChanged(true)
+        val cipherActive = authRepository.hasPlanEntitlement(CIPHER_PRODUCT_ID, forceRefresh = true)
+        val planActive = verifiedProducts.any { authRepository.hasPlanEntitlement(it, forceRefresh = true) }
+        if (!planActive) throw IOException("The verified plan entitlement was not returned by Firebase.")
+        mutableState.value = mutableState.value.copy(
+            isBusy = false,
+            isPremium = active,
+            isCipher = cipherActive,
+            message = null
+        )
+        onEntitlementChanged(active)
     }
 
     private suspend fun verifyPurchase(uid: String, productId: String, purchaseToken: String) {
@@ -355,13 +407,27 @@ internal class PremiumBillingManager(
             .joinToString("") { byte -> "%02x".format(byte) }
 
     private companion object {
-        const val PREMIUM_MONTHLY_PRODUCT_ID = "dost_premium_monthly"
-        const val PREMIUM_ANNUAL_PRODUCT_ID = "dost_premium_annual"
-        const val PREMIUM_LIFETIME_PRODUCT_ID = "dost_premium_lifetime"
+        const val EXPLORE_PLUS_PRODUCT_ID = "dost_explore_plus"
+        const val EXPLORE_PLUS_LIFETIME_PRODUCT_ID = "dost_explore_plus_lifetime"
+        const val CIPHER_PRODUCT_ID = "dost_cipher"
+        const val SHIELD_TEAM_PRODUCT_ID = "dost_shield_team"
+        const val SHIELD_BUSINESS_PRODUCT_ID = "dost_shield_business"
+        const val PLUS_BUNDLE_PRODUCT_ID = "dost_plus"
+        val SHIELD_PRODUCT_IDS = setOf(SHIELD_TEAM_PRODUCT_ID, SHIELD_BUSINESS_PRODUCT_ID)
+        val ADULT_ONLY_PRODUCT_IDS = setOf(
+            EXPLORE_PLUS_PRODUCT_ID,
+            EXPLORE_PLUS_LIFETIME_PRODUCT_ID,
+            PLUS_BUNDLE_PRODUCT_ID,
+            SHIELD_TEAM_PRODUCT_ID,
+            SHIELD_BUSINESS_PRODUCT_ID
+        )
         val PREMIUM_PRODUCT_IDS = setOf(
-            PREMIUM_MONTHLY_PRODUCT_ID,
-            PREMIUM_ANNUAL_PRODUCT_ID,
-            PREMIUM_LIFETIME_PRODUCT_ID
+            EXPLORE_PLUS_PRODUCT_ID,
+            EXPLORE_PLUS_LIFETIME_PRODUCT_ID,
+            CIPHER_PRODUCT_ID,
+            SHIELD_TEAM_PRODUCT_ID,
+            SHIELD_BUSINESS_PRODUCT_ID,
+            PLUS_BUNDLE_PRODUCT_ID
         )
         const val PREMIUM_API_ROOT = "https://bisque-bear-900175.hostingersite.com/api"
         const val MAX_RESPONSE_CHARS = 32_768

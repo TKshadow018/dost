@@ -64,6 +64,36 @@ dost_age_test_assert(
     && !dost_age_authenticated_uid_matches($uid, 'different-user'),
     'A request UID must match the authenticated Firebase UID.'
 );
+dost_age_test_assert(
+    dost_age_from_birth_month_year(10, 2013, 11, 2026) === 13
+    && dost_age_from_birth_month_year(11, 2013, 11, 2026) === 12
+    && dost_age_from_birth_month_year(13, 2013, 11, 2026) === false,
+    'Birth month and year must derive completed age conservatively and reject invalid months.'
+);
+$teenClaims = dost_age_cohort_claims(array(), 10, 2009, 11, 2026);
+dost_age_test_assert(
+    is_array($teenClaims)
+    && $teenClaims['dostAgeCohort'] === 'teen'
+    && $teenClaims['dostBirthMonth'] === 10
+    && $teenClaims['dostBirthYear'] === 2009,
+    'The trusted cohort helper must attach a teen cohort and immutable month/year claims.'
+);
+dost_age_test_assert(
+    dost_age_cohort_claims(array(), 11, 2013, 11, 2026) === false
+    && dost_age_cohort_claims($teenClaims, 10, 2008, 11, 2026) === false,
+    'Under-13 cohort assignment and client changes to a stored birth date must fail.'
+);
+$turnedAdultClaims = dost_age_cohort_claims($teenClaims, 10, 2009, 11, 2027);
+dost_age_test_assert(
+    is_array($turnedAdultClaims) && $turnedAdultClaims['dostAgeCohort'] === 'adult',
+    'A teen cohort may move to adult only when its immutable stored birth month/year reaches 18.'
+);
+$adultClaims = dost_age_cohort_claims(array(), 10, 2008, 11, 2026);
+dost_age_test_assert(
+    is_array($adultClaims) && $adultClaims['dostAgeCohort'] === 'adult'
+    && dost_age_cohort_claims($adultClaims, 10, 2009, 11, 2026) === false,
+    'Adult cohort assignment must reject a later attempt to move the stored birth date backwards.'
+);
 
 $integrityPayload = array(
     'tokenPayloadExternal' => array(
@@ -235,8 +265,14 @@ $attributes = json_decode(dost_age_custom_attributes(true, $now, 21600), true);
 dost_age_test_assert(
     is_array($attributes)
     && $attributes['dostAgeEligible'] === true
-    && $attributes['dostAgeEligibleUntil'] === $now + 21600,
-    'Custom claim must carry the eligibility result and bounded expiry.'
+    && $attributes['dostAgeEligibleUntil'] === $now + 21600
+    && $attributes['dostAgeCohort'] === 'adult',
+    'Verified adult claims must carry the cohort, eligibility result, and bounded expiry.'
+);
+$ineligibleAttributes = json_decode(dost_age_custom_attributes(false, $now, 21600), true);
+dost_age_test_assert(
+    is_array($ineligibleAttributes) && !isset($ineligibleAttributes['dostAgeCohort']),
+    'A failed adult-eligibility check must not issue an adult cohort.'
 );
 dost_age_test_assert(
     dost_age_custom_attributes(true, $now, 90000) === '',

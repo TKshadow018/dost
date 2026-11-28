@@ -2,7 +2,9 @@
 
 require_once __DIR__ . '/app_credential.php';
 require_once __DIR__ . '/archive_store.php';
+require_once __DIR__ . '/age_eligibility_support.php';
 require_once __DIR__ . '/romance_safety.php';
+require_once __DIR__ . '/explore_support.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -134,6 +136,11 @@ if (!is_array($request) || json_last_error() !== JSON_ERROR_NONE) {
 
 $operation = isset($request['operation']) && is_string($request['operation']) ? $request['operation'] : 'completion';
 enforce_rate_limit($operation === 'log_message' ? 'logs' : 'ai', $operation === 'log_message' ? 120 : 30);
+if ($operation === 'profile_generation'
+    && !dost_ai_profile_age_allowed(isset($request['friend_age']) ? $request['friend_age'] : null)
+) {
+    respond(400, array('error' => 'Generated AI friend profiles must be 18 or older'));
+}
 $config = array();
 $configPath = __DIR__ . '/config.php';
 if (is_file($configPath)) {
@@ -155,6 +162,9 @@ if ($operation === 'log_message') {
     );
     if ($credentialDecision !== null) {
         respond($credentialDecision['status'], array('error' => $credentialDecision['error']));
+    }
+    if (!dost_explore_enabled($config)) {
+        respond(503, array('error' => 'Explore is not enabled'));
     }
     $userName = isset($request['user_name']) && is_string($request['user_name']) ? $request['user_name'] : '';
     $friendName = isset($request['friend_name']) && is_string($request['friend_name']) ? $request['friend_name'] : '';
@@ -212,6 +222,23 @@ if ($serverKeyDecision !== null) {
     }
     respond($serverKeyDecision['status'], array('error' => $serverKeyDecision['error']));
 }
+$authorizationHeader = dost_explore_authorization_header($_SERVER);
+$exploreAuthorization = null;
+if (in_array($operation, array('profile_generation', 'chat_reply', 'session_summary'), true)) {
+    $exploreAuthorization = dost_explore_authorize($authorizationHeader, $config, time());
+    if ($exploreAuthorization['status'] !== 200) {
+        respond($exploreAuthorization['status'], array('error' => $exploreAuthorization['error']));
+    }
+}
+if (!dost_explore_enabled($config)) {
+    respond(503, array('error' => 'Explore is not enabled'));
+}
+if (!is_array($exploreAuthorization) && trim($authorizationHeader) !== '') {
+    $exploreAuthorization = dost_explore_authorize($authorizationHeader, $config, time());
+    if ($exploreAuthorization['status'] !== 200) {
+        respond($exploreAuthorization['status'], array('error' => $exploreAuthorization['error']));
+    }
+}
 $apiKey = $usesClientKey ? $clientApiKey : $serverApiKey;
 if (!is_string($apiKey) || trim($apiKey) === '') {
     write_ai_error_log('missing_api_key', array('model' => bounded_log_text($request['model'] ?? '')));
@@ -250,10 +277,79 @@ foreach ($messages as $message) {
     }
 }
 
-$romanceAllowed = dost_romance_allowed_by_age(
-    isset($request['user_age']) ? $request['user_age'] : null,
-    isset($request['friend_age']) ? $request['friend_age'] : null
+$ageCohort = dost_ai_age_cohort_from_claims(
+    is_array($exploreAuthorization) ? $exploreAuthorization['claims'] : array(),
+    (int) gmdate('n'),
+    (int) gmdate('Y')
 );
+if ($operation === 'profile_generation') {
+    $installationId = isset($_SERVER['HTTP_X_DOST_INSTALL_ID']) && is_string($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+        ? trim($_SERVER['HTTP_X_DOST_INSTALL_ID'])
+        : '';
+    $friendId = isset($_SERVER['HTTP_X_DOST_FRIEND_ID']) && is_string($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        ? trim($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        : '';
+    if (!valid_uuid($installationId) || !valid_uuid($friendId)) {
+        respond(400, array('error' => 'A valid custom friend ID is required'));
+    }
+    $storageDirectory = dost_explore_storage_directory($config);
+    if ($storageDirectory === false) {
+        respond(503, array('error' => 'Explore friend storage is unavailable'));
+    }
+    $registration = dost_explore_registry_change(
+        $storageDirectory,
+        $exploreAuthorization['uid'],
+        $friendId,
+        'custom',
+        'add',
+        dost_explore_plus_active($exploreAuthorization['claims'], time())
+    );
+    if ($registration['status'] !== 200) {
+        respond($registration['status'], array('error' => $registration['error']));
+    }
+} elseif (in_array($operation, array('chat_reply', 'session_summary'), true)) {
+    $friendId = isset($_SERVER['HTTP_X_DOST_FRIEND_ID']) && is_string($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        ? trim($_SERVER['HTTP_X_DOST_FRIEND_ID'])
+        : '';
+    $friendKind = isset($request['friend_kind']) && is_string($request['friend_kind'])
+        ? $request['friend_kind']
+        : '';
+    if ($friendKind === 'catalog') {
+        $catalogId = isset($request['catalog_id']) && is_string($request['catalog_id'])
+            ? trim($request['catalog_id'])
+            : '';
+        $registeredFriendId = preg_match('/\A[A-Za-z0-9][A-Za-z0-9_-]{0,79}\z/', $catalogId) === 1
+            ? $catalogId
+            : '';
+    } elseif ($friendKind === 'custom' && valid_uuid($friendId)) {
+        $registeredFriendId = $friendId;
+    } else {
+        $registeredFriendId = '';
+    }
+    $storageDirectory = dost_explore_storage_directory($config);
+    if ($registeredFriendId === '' || $storageDirectory === false
+        || !dost_explore_registry_contains(
+            $storageDirectory,
+            $exploreAuthorization['uid'],
+            $registeredFriendId,
+            $friendKind
+        )
+    ) {
+        respond(403, array('error' => 'The AI friend is not registered for this account'));
+    }
+}
+$romanceAllowed = $ageCohort === 'adult' && (
+    $operation === 'profile_generation'
+        ? true
+        : dost_romance_allowed_by_age(
+            isset($request['user_age']) ? $request['user_age'] : null,
+            isset($request['friend_age']) ? $request['friend_age'] : null
+        )
+);
+$teenPolicy = $ageCohort !== 'adult';
+if ($teenPolicy) {
+    array_unshift($messages, array('role' => 'system', 'content' => dost_teen_policy_prompt()));
+}
 $chatLanguage = isset($request['chat_language'])
     && is_string($request['chat_language'])
     && in_array($request['chat_language'], array('en', 'bn', 'hi'), true)
@@ -411,6 +507,24 @@ if ($upstreamStatus < 200 || $upstreamStatus >= 300) {
         $errorDetails['provider_error'] = bounded_log_text($providerError, 500, $apiKey);
     }
     write_ai_error_log('provider_http_error', $errorDetails);
+}
+if ($operation === 'profile_generation' && $upstreamStatus >= 200 && $upstreamStatus < 300) {
+    $decodedProfileResponse = json_decode($upstreamResponse, true);
+    $profileContent = isset($decodedProfileResponse['choices'][0]['message']['content'])
+        && is_string($decodedProfileResponse['choices'][0]['message']['content'])
+        ? $decodedProfileResponse['choices'][0]['message']['content']
+        : null;
+    $safeProfileContent = dost_filter_ai_profile_content($profileContent, $romanceAllowed);
+    if (!is_string($safeProfileContent)) {
+        respond(502, array('error' => 'AI provider returned an invalid profile response'));
+    }
+    if ($safeProfileContent !== $profileContent) {
+        $decodedProfileResponse['choices'][0]['message']['content'] = $safeProfileContent;
+        $upstreamResponse = json_encode($decodedProfileResponse, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if (!is_string($upstreamResponse)) {
+            respond(502, array('error' => 'AI profile safety check failed'));
+        }
+    }
 }
 if ($chatLogContext !== null && $upstreamStatus >= 200 && $upstreamStatus < 300) {
     $decodedResponse = json_decode($upstreamResponse, true);

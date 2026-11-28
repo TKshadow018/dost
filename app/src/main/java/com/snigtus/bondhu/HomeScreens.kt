@@ -52,7 +52,19 @@ import java.util.Locale
 
 internal enum class MainTab { CHATS, DISCOVER, PROFILE }
 
+internal fun mainNavigationTabs(exploreEnabled: Boolean): List<MainTab> =
+    MainTab.values().filter { exploreEnabled || it != MainTab.DISCOVER }
+
+internal fun shouldShowExploreDisabledState(exploreEnabled: Boolean, circleOnly: Boolean): Boolean =
+    !exploreEnabled && !circleOnly
+
 internal enum class HomeInboxFilter { ALL, AI_FRIENDS, PEOPLE, ARCHIVED }
+
+internal fun shouldShowCircleContactsComingSoon(ageCohort: String): Boolean =
+    ageCohort == "teen"
+
+internal fun circleInboxFilter(selectedFilter: HomeInboxFilter): HomeInboxFilter =
+    if (selectedFilter == HomeInboxFilter.ARCHIVED) selectedFilter else HomeInboxFilter.PEOPLE
 private enum class ConversationMenuAction { PIN, MUTE, ARCHIVE }
 
 private fun conversationMenuLabel(
@@ -124,6 +136,17 @@ internal fun buildHomeInboxEntries(
     )
 }
 
+internal fun buildCircleInboxEntries(
+    conversations: List<SocialConversation>,
+    pinnedConversationIds: Set<String> = emptySet()
+): List<HomeInboxEntry> =
+    buildHomeInboxEntries(
+        friends = emptyList(),
+        messagesByFriend = emptyMap(),
+        peopleConversations = conversations,
+        pinnedConversationIds = pinnedConversationIds
+    )
+
 internal fun filterHomeInboxEntries(
     entries: List<HomeInboxEntry>,
     filter: HomeInboxFilter,
@@ -154,6 +177,8 @@ internal fun filterHomeInboxEntries(
 @Composable
 internal fun HomeScreen(
     language: AppLanguage,
+    exploreEnabled: Boolean,
+    onManageModes: () -> Unit,
     showFriendCount: Boolean,
     isPremium: Boolean,
     userName: String,
@@ -164,6 +189,7 @@ internal fun HomeScreen(
     archivedConversationIds: Set<String>,
     peopleInboxLoading: Boolean,
     peopleInboxError: String?,
+    circleContactsComingSoon: Boolean = false,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     selectedFilter: HomeInboxFilter,
@@ -188,8 +214,22 @@ internal fun HomeScreen(
     generatingProfileIds: Set<String>,
     profileFailedIds: Set<String>,
     peopleEnabled: Boolean = true,
-    onOpenPremium: () -> Unit
+    showExplorePlus: Boolean = false,
+    onOpenPremium: () -> Unit,
+    circleOnly: Boolean = false
 ) {
+    if (shouldShowExploreDisabledState(exploreEnabled, circleOnly)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("Explore is off", style = MaterialTheme.typography.titleLarge)
+            Text("Your Explore data is kept on this device. Turn Explore on in Settings to use it.")
+            TextButton(onClick = onManageModes) { Text("Open Settings") }
+        }
+        return
+    }
     val unreadCounts = ConversationManager.unread.collectAsState().value
     val messageMap = ConversationManager.messages.collectAsState().value
     val bangla = language == AppLanguage.BANGLA
@@ -199,15 +239,15 @@ internal fun HomeScreen(
     val systemFriendCount = friends.size - customFriendCount
     val canAddCustomFriend = isPremium || customFriendCount < MAX_CUSTOM_FRIENDS
     val canAddAnyFriend = isPremium || canAddCustomFriend || systemFriendCount < MAX_SYSTEM_FRIENDS
-    val allInboxEntries = buildHomeInboxEntries(
-        friends,
-        messageMap,
-        peopleConversations,
-        pinnedConversationIds
-    )
+    val allInboxEntries = if (circleOnly) {
+        buildCircleInboxEntries(peopleConversations, pinnedConversationIds)
+    } else {
+        buildHomeInboxEntries(friends, messageMap, peopleConversations, pinnedConversationIds)
+    }
+    val visibleFilter = if (circleOnly) circleInboxFilter(selectedFilter) else selectedFilter
     val inboxEntries = filterHomeInboxEntries(
         allInboxEntries,
-        selectedFilter,
+        visibleFilter,
         if (showSearch) searchQuery else "",
         archivedConversationIds,
         messageMap
@@ -225,9 +265,21 @@ internal fun HomeScreen(
         contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
-                title = { Text(when { bangla -> "চ্যাট"; hindi -> "चैट"; else -> "Chats" }, style = MaterialTheme.typography.headlineSmall) },
+                title = {
+                    Text(
+                        when {
+                            circleOnly && bangla -> "Circle"
+                            circleOnly && hindi -> "Circle"
+                            circleOnly -> "Circle"
+                            bangla -> "চ্যাট"
+                            hindi -> "चैट"
+                            else -> "Chats"
+                        },
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                },
                 actions = {
-                    IconButton(
+                    if (!circleOnly) IconButton(
                         onClick = {
                             showSearch = !showSearch
                             if (!showSearch) onSearchQueryChange("")
@@ -245,38 +297,59 @@ internal fun HomeScreen(
                             }
                         )
                     }
-                    IconButton(onClick = onOpenGames) {
+                    if (!circleOnly) IconButton(onClick = onOpenGames) {
                         Icon(
                             imageVector = Icons.Filled.SportsEsports,
                             contentDescription = when { bangla -> "খেলা"; hindi -> "खेल"; else -> "Games" }
                         )
                     }
-                    TextButton(onClick = onOpenDiscover) {
-                        Text(when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" })
+                    if (!circleContactsComingSoon && (!circleOnly || peopleEnabled)) TextButton(onClick = if (circleOnly) onOpenPeople else onOpenDiscover) {
+                        Text(when {
+                            circleOnly && bangla -> "যোগাযোগ যোগ করুন"
+                            circleOnly && hindi -> "संपर्क जोड़ें"
+                            circleOnly -> "Add contact"
+                            bangla -> "নতুন চ্যাট"
+                            hindi -> "नई चैट"
+                            else -> "New chat"
+                        })
                     }
                 }
             )
         },
         floatingActionButton = {
-            if (canAddAnyFriend || peopleEnabled) {
+            if (!circleContactsComingSoon && (if (circleOnly) peopleEnabled else canAddAnyFriend || peopleEnabled)) {
                 FloatingActionButton(
-                    onClick = onOpenDiscover,
+                    onClick = if (circleOnly) onOpenPeople else onOpenDiscover,
                     modifier = Modifier.semantics {
-                        contentDescription = when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }
+                        contentDescription = when {
+                            circleOnly && bangla -> "যোগাযোগ যোগ করুন"
+                            circleOnly && hindi -> "संपर्क जोड़ें"
+                            circleOnly -> "Add contact"
+                            bangla -> "নতুন চ্যাট"
+                            hindi -> "नई चैट"
+                            else -> "New chat"
+                        }
                     },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_add),
-                        contentDescription = when { bangla -> "নতুন চ্যাট"; hindi -> "नई चैट"; else -> "New chat" }
+                        contentDescription = when {
+                            circleOnly && bangla -> "যোগাযোগ যোগ করুন"
+                            circleOnly && hindi -> "संपर्क जोड़ें"
+                            circleOnly -> "Add contact"
+                            bangla -> "নতুন চ্যাট"
+                            hindi -> "नई चैट"
+                            else -> "New chat"
+                        }
                     )
                 }
             }
         }
     ) { padding ->
         LazyColumn(state = listState, modifier = Modifier.padding(padding), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-            recentlyAddedSystemFriend?.let { friend ->
+            if (!circleOnly) recentlyAddedSystemFriend?.let { friend ->
                 item(key = "newly-added-ai:${friend.id}") {
                     NewlyAddedSystemFriendNotice(
                         language = language,
@@ -292,15 +365,25 @@ internal fun HomeScreen(
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(when { bangla -> "কথোপকথন"; hindi -> "बातचीत"; else -> "Conversations" }, style = MaterialTheme.typography.titleMedium)
-                        if (showFriendCount) {
+                        Text(
+                            when {
+                                circleOnly && bangla -> "আপনার Circle চ্যাট"
+                                circleOnly && hindi -> "आपकी Circle चैट"
+                                circleOnly -> "Your Circle chats"
+                                bangla -> "কথোপকথন"
+                                hindi -> "बातचीत"
+                                else -> "Conversations"
+                            },
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        if (!circleOnly && showFriendCount) {
                             Text(
                                 if (isPremium) "${friends.size}" else "${friends.size}/$MAX_TOTAL_FRIENDS",
                                 style = MaterialTheme.typography.labelLarge
                             )
                         }
                     }
-                    if (showFriendCount) {
+                    if (!circleOnly && showFriendCount) {
                         Text(
                             if (isPremium) {
                                 when {
@@ -317,12 +400,14 @@ internal fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (!isPremium && (!canAddCustomFriend || systemFriendCount >= MAX_SYSTEM_FRIENDS)) {
+                    if (showExplorePlus && !circleOnly && !isPremium
+                        && (!canAddCustomFriend || systemFriendCount >= MAX_SYSTEM_FRIENDS)
+                    ) {
                         TextButton(onClick = onOpenPremium) {
                             Text(when {
-                                bangla -> "সীমাহীন AI বন্ধুর জন্য প্রিমিয়াম"
-                                hindi -> "असीमित AI दोस्तों के लिए प्रीमियम"
-                                else -> "Explore Premium for more AI friends"
+                                bangla -> "Explore Plus"
+                                hindi -> "Explore Plus"
+                                else -> "Explore Plus for more AI friends"
                             })
                         }
                     }
@@ -341,7 +426,7 @@ internal fun HomeScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-                    Row(
+                    if (!circleOnly) Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -362,7 +447,7 @@ internal fun HomeScreen(
                                 )
                             }
                     }
-                    if (friends.any { it.profilePending }) {
+                    if (!circleOnly && friends.any { it.profilePending }) {
                         val creating = friends.any { it.profilePending && it.id !in profileFailedIds }
                         Text(
                             when {
@@ -380,7 +465,7 @@ internal fun HomeScreen(
                 }
             }
             item { HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)) }
-            if (peopleEnabled && selectedFilter != HomeInboxFilter.AI_FRIENDS
+            if (!circleContactsComingSoon && peopleEnabled && selectedFilter != HomeInboxFilter.AI_FRIENDS
                 && (peopleInboxLoading || peopleInboxError != null)
             ) {
                 item {
@@ -393,7 +478,7 @@ internal fun HomeScreen(
                     )
                 }
             }
-            when (selectedFilter) {
+            when (visibleFilter) {
                 HomeInboxFilter.ALL -> {
                     if (inboxEntries.isEmpty() && query.isNotBlank()
                         && (friends.isNotEmpty() || peopleConversations.isNotEmpty())
@@ -499,7 +584,12 @@ internal fun HomeScreen(
                             if (allInboxEntries.any { it.key.startsWith("people:") && it.key in archivedConversationIds }) {
                                 ArchivedChatsShortcut(language) { onSelectedFilterChange(HomeInboxFilter.ARCHIVED) }
                             } else {
-                                EmptyPeopleInboxState(language, onDiscover = onOpenPeople)
+                                EmptyPeopleInboxState(
+                                    language,
+                                    onDiscover = onOpenPeople,
+                                    circleOnly = circleOnly,
+                                    contactsComingSoon = circleContactsComingSoon
+                                )
                             }
                         }
                     }
@@ -808,7 +898,12 @@ private fun EmptyArchivedChats(language: AppLanguage) {
 }
 
 @Composable
-private fun EmptyPeopleInboxState(language: AppLanguage, onDiscover: () -> Unit) {
+private fun EmptyPeopleInboxState(
+    language: AppLanguage,
+    onDiscover: () -> Unit,
+    circleOnly: Boolean,
+    contactsComingSoon: Boolean
+) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -816,17 +911,32 @@ private fun EmptyPeopleInboxState(language: AppLanguage, onDiscover: () -> Unit)
     ) {
         Text(
             when (language) {
-                AppLanguage.BANGLA -> "এখনো মানুষের সঙ্গে কোনো চ্যাট নেই"
-                AppLanguage.HINDI -> "अभी लोगों के साथ कोई चैट नहीं है"
-                AppLanguage.ENGLISH -> "No People chats yet"
+                AppLanguage.BANGLA -> when {
+                    contactsComingSoon -> "কিশোরদের জন্য Circle যোগাযোগ শিগগিরই আসছে"
+                    circleOnly -> "আপনার Circle এখনো খালি"
+                    else -> "এখনো মানুষের সঙ্গে কোনো চ্যাট নেই"
+                }
+                AppLanguage.HINDI -> when {
+                    contactsComingSoon -> "किशोरों के लिए Circle संपर्क जल्द आ रहे हैं"
+                    circleOnly -> "आपका Circle अभी खाली है"
+                    else -> "अभी लोगों के साथ कोई चैट नहीं है"
+                }
+                AppLanguage.ENGLISH -> when {
+                    contactsComingSoon -> "Circle contacts are coming soon for teens."
+                    circleOnly -> "Your Circle is empty"
+                    else -> "No People chats yet"
+                }
             },
             style = MaterialTheme.typography.titleLarge
         )
-        Button(onClick = onDiscover) {
-            Text(when (language) {
-                AppLanguage.BANGLA -> "মানুষ খুঁজুন"
-                AppLanguage.HINDI -> "लोग खोजें"
-                AppLanguage.ENGLISH -> "Discover people"
+        if (!contactsComingSoon) Button(onClick = onDiscover) {
+            Text(when {
+                circleOnly && language == AppLanguage.BANGLA -> "যোগাযোগ যোগ করুন"
+                circleOnly && language == AppLanguage.HINDI -> "संपर्क जोड़ें"
+                circleOnly -> "Add contact"
+                language == AppLanguage.BANGLA -> "মানুষ খুঁজুন"
+                language == AppLanguage.HINDI -> "लोग खोजें"
+                else -> "Discover people"
             })
         }
     }
@@ -849,13 +959,14 @@ private fun NoChatsMatch(language: AppLanguage) {
 internal fun MainNavigationScaffold(
     language: AppLanguage,
     selectedTab: MainTab,
+    exploreEnabled: Boolean,
     onSelectTab: (MainTab) -> Unit,
     content: @Composable () -> Unit
 ) {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                MainTab.values().forEach { tab ->
+                mainNavigationTabs(exploreEnabled).forEach { tab ->
                     val label = when (tab) {
                         MainTab.CHATS -> when (language) {
                             AppLanguage.BANGLA -> "চ্যাট"
@@ -1104,7 +1215,7 @@ internal fun ProfileHomeScreen(
                 OutlinedButton(onClick = onOpenSuperSecure, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Lock, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Super Secure")
+                    Text("Shield")
                 }
             }
         }
@@ -1388,6 +1499,10 @@ internal fun TimeZonePicker(label: String, timeZoneId: String, onTimeZoneChange:
 internal fun SettingsScreen(
     language: AppLanguage,
     chatLanguage: AppLanguage,
+    exploreAvailable: Boolean,
+    exploreEnabled: Boolean,
+    exploreDisclosureAccepted: Boolean,
+    showExplorePlus: Boolean,
     showFriendCount: Boolean,
     friends: List<Friend>,
     userTimeZoneId: String,
@@ -1403,8 +1518,13 @@ internal fun SettingsScreen(
     quietHoursStartMinute: Int,
     quietHoursEndMinute: Int,
     settingsNotice: String,
+    shieldEnabled: Boolean = false,
     onBack: () -> Unit,
     onOpenPremium: () -> Unit,
+    onOpenShield: () -> Unit = {},
+    onOpenShieldPlans: () -> Unit = onOpenPremium,
+    onExploreEnabledChange: (Boolean) -> Unit,
+    onExploreDisclosureAccepted: () -> Unit,
     onDeleteFriend: (Friend) -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
     onChatLanguageChange: (AppLanguage) -> Unit,
@@ -1423,9 +1543,11 @@ internal fun SettingsScreen(
     onCopyInstallationId: () -> Unit,
     onExportLocalData: () -> Unit,
     onImportLocalData: () -> Unit,
-    onDeleteServerArchive: () -> Unit
+    onDeleteServerArchive: () -> Unit,
+    onOpenPrivacy: () -> Unit
 ) {
     var showAiSettings by remember { mutableStateOf(false) }
+    var showExploreDisclosure by remember { mutableStateOf(false) }
     var confirmArchiveDelete by remember { mutableStateOf(false) }
     var friendToDelete by remember { mutableStateOf<Friend?>(null) }
     val context = LocalContext.current
@@ -1447,23 +1569,51 @@ internal fun SettingsScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
-                SettingsSection(when (language) {
-                    AppLanguage.BANGLA -> "দোস্ত প্রিমিয়াম"
-                    AppLanguage.HINDI -> "दोस्त प्रीमियम"
-                    AppLanguage.ENGLISH -> "Dost Premium"
-                }) {
-                    Text(when (language) {
-                        AppLanguage.BANGLA -> "সীমাহীন AI বন্ধু ও People লাইক, দৈনিক প্রোফাইল বুস্ট, চ্যাট থিম এবং আরও AI কাস্টমাইজেশন।"
-                        AppLanguage.HINDI -> "असीमित AI दोस्त और People लाइक, रोज़ाना प्रोफ़ाइल बूस्ट, चैट थीम और अधिक AI कस्टमाइज़ेशन।"
-                        AppLanguage.ENGLISH -> "Unlimited AI companions and People likes, a daily profile boost, chat themes, and more AI customization."
-                    }, style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = onOpenPremium, modifier = Modifier.fillMaxWidth()) {
-                        Text(when (language) {
-                            AppLanguage.BANGLA -> "প্রিমিয়াম দেখুন"
-                            AppLanguage.HINDI -> "प्रीमियम देखें"
-                            AppLanguage.ENGLISH -> "Explore Premium"
-                        })
+            if (exploreAvailable) item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Explore mode", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Turn on AI friends and People discovery.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        Switch(
+                            checked = exploreEnabled,
+                            onCheckedChange = { enabled ->
+                                if (exploreDisclosureRequired(enabled, exploreDisclosureAccepted)) {
+                                    showExploreDisclosure = true
+                                } else {
+                                    onExploreEnabledChange(enabled)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            if (showExplorePlus) {
+                item {
+                    TextButton(onClick = onOpenPremium) {
+                        Text("Explore Plus")
+                    }
+                }
+            }
+            if (shieldEnabled) item {
+                SettingsSection("Modes") {
+                    Text(
+                        "Shield is closed, admin-controlled organisation messaging, isolated from AI and analytics.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onOpenShield, modifier = Modifier.fillMaxWidth()) {
+                        Text("Open Shield")
+                    }
+                    OutlinedButton(onClick = onOpenShieldPlans, modifier = Modifier.fillMaxWidth()) {
+                        Text("View Shield plans")
                     }
                 }
             }
@@ -1619,7 +1769,7 @@ internal fun SettingsScreen(
                     )
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "বন্ধুর বার্তা"
                     AppLanguage.HINDI -> "दोस्तों के संदेश"
@@ -1755,12 +1905,23 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(LocalizedText.AI_PROVIDER_MODEL.resolve(language)) {
                     Button(onClick = { showAiSettings = true }, modifier = Modifier.fillMaxWidth()) {
                         Text(LocalizedText.AI_PROVIDER_MODEL.resolve(language))
                     }
                     Text(LocalizedText.CHAT_ARCHIVE_NOTICE.resolve(language), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            item {
+                SettingsSection("Privacy") {
+                    Text(
+                        "Dost is for ages 13 and older. Teens can use teen-safe AI, but not stranger discovery or Explore Plus; both require server-verified 18+ eligibility.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedButton(onClick = onOpenPrivacy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Privacy & mode disclosures")
+                    }
                 }
             }
             item {
@@ -1791,7 +1952,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "আপনার তথ্য"
                     AppLanguage.HINDI -> "आपकी जानकारी"
@@ -1806,7 +1967,7 @@ internal fun SettingsScreen(
                     }
                 }
             }
-            item {
+            if (exploreEnabled) item {
                 SettingsSection(when (language) {
                     AppLanguage.BANGLA -> "বন্ধু পরিচালনা"
                     AppLanguage.HINDI -> "दोस्त प्रबंधित करें"
@@ -1838,6 +1999,28 @@ internal fun SettingsScreen(
                 }
             }
         }
+    }
+    if (showExploreDisclosure) {
+        AlertDialog(
+            onDismissRequest = { showExploreDisclosure = false },
+            title = { Text("About Explore") },
+            text = {
+                Text(
+                    "AI friends are fictional. AI chats are sent to a third-party model provider. " +
+                        "When you use People discovery, your profile is shown to strangers."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onExploreDisclosureAccepted()
+                    onExploreEnabledChange(true)
+                    showExploreDisclosure = false
+                }) { Text("Continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExploreDisclosure = false }) { Text("Cancel") }
+            }
+        )
     }
     if (showAiSettings) AiSettingsDialog(
         language = language,
@@ -1887,6 +2070,45 @@ internal fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+internal fun PrivacyScreen(onBack: () -> Unit, onOpenPrivacyPolicy: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Privacy") },
+                navigationIcon = { DostBackButton(AppLanguage.ENGLISH, onBack) }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                SettingsSection("Age and audience") {
+                    Text(
+                        "Under-13 users cannot create an account. Teens aged 13–17 have private-by-default settings and can use teen-safe AI, but not stranger discovery or Explore Plus. Stranger discovery and Explore Plus require server-verified 18+ eligibility."
+                    )
+                }
+            }
+            items(ModePrivacyDisclosures.all) { disclosure ->
+                SettingsSection(disclosure.title) {
+                    Text(disclosure.text)
+                }
+            }
+            item {
+                SettingsSection("Full policy") {
+                    Text("The full policy explains purposes, retention, deletion, and service-provider sharing.")
+                    OutlinedButton(onClick = onOpenPrivacyPolicy, modifier = Modifier.fillMaxWidth()) {
+                        Text("Read the full Privacy Policy")
+                    }
+                }
+            }
+        }
     }
 }
 

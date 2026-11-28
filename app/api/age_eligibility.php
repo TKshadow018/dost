@@ -193,9 +193,32 @@ if (!is_array($customClaims)) {
     error_log('Dost age eligibility custom claims are malformed.');
     dost_age_respond(503, array('error' => 'Age eligibility service is unavailable'));
 }
+if ($request['eligible']) {
+    if (!isset($customClaims['dostBirthMonth'], $customClaims['dostBirthYear'])
+        || !is_int($customClaims['dostBirthMonth'])
+        || !is_int($customClaims['dostBirthYear'])
+    ) {
+        dost_firebase_claim_unlock($claimLock);
+        dost_age_respond(403, array('error' => 'An adult age cohort is required'));
+    }
+    $storedAge = dost_age_from_birth_month_year(
+        $customClaims['dostBirthMonth'],
+        $customClaims['dostBirthYear'],
+        (int) gmdate('n'),
+        (int) gmdate('Y')
+    );
+    if ($storedAge === false || $storedAge < 18) {
+        dost_firebase_claim_unlock($claimLock);
+        dost_age_respond(403, array('error' => 'Adult eligibility is required'));
+    }
+    $customClaims['dostAgeCohort'] = 'adult';
+}
 $expiresAt = time() + 21600;
 $customClaims['dostAgeEligible'] = $request['eligible'];
 $customClaims['dostAgeEligibleUntil'] = $expiresAt;
+if ($request['eligible']) {
+    $customClaims['dostAgeCohort'] = 'adult';
+}
 $customAttributes = json_encode($customClaims, JSON_UNESCAPED_SLASHES);
 if (!is_string($customAttributes)) {
     error_log('Dost age eligibility custom claims could not be encoded.');
