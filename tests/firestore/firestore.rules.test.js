@@ -9,6 +9,7 @@ import {
 import {
   collection,
   collectionGroup,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -1736,6 +1737,70 @@ test("Circle group invitees can list pending invites with a collection-group que
     where("inviteeUid", "==", "teen"),
     where("status", "==", "pending"),
   )));
+});
+
+test("Circle group read receipts and typing indicators are member-only and self-authored", async () => {
+  await createCircleGroup();
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "circleGroups/friends/invites/bob"), {
+      groupId: "friends",
+      groupName: "Friends",
+      inviteeUid: "bob",
+      invitedBy: "alice",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  const bob = user("bob", { dostAgeCohort: "teen" });
+  const join = writeBatch(bob);
+  join.update(doc(bob, "circleGroups/friends/invites/bob"), {
+    status: "accepted",
+    acceptedAt: serverTimestamp(),
+  });
+  join.update(doc(bob, "circleGroups/friends"), {
+    members: ["alice", "bob"],
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(join.commit());
+
+  const alice = user("alice");
+  const send = writeBatch(alice);
+  send.update(doc(alice, "circleGroups/friends"), {
+    lastMessage: "Hello group",
+    lastMessageSenderUid: "alice",
+    lastMessageAt: serverTimestamp(),
+    lastMessageId: "read-receipt-message",
+  });
+  send.set(doc(alice, "circleGroups/friends/messages/read-receipt-message"), {
+    senderUid: "alice",
+    text: "Hello group",
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(send.commit());
+
+  const receipt = doc(bob, "circleGroups/friends/messages/read-receipt-message");
+  await assertSucceeds(updateDoc(receipt, {
+    "readAtByUid.bob": serverTimestamp(),
+  }));
+  await assertFails(updateDoc(receipt, {
+    "readAtByUid.mallory": serverTimestamp(),
+  }));
+  await assertFails(updateDoc(receipt, {
+    "readAtByUid.alice": serverTimestamp(),
+  }));
+
+  const typing = doc(bob, "circleGroups/friends/typingIndicators/bob");
+  await assertSucceeds(setDoc(typing, {
+    updatedAt: serverTimestamp(),
+    expiresAt: new Date(Date.now() + 15_000),
+  }));
+  await assertSucceeds(getDoc(doc(alice, "circleGroups/friends/typingIndicators/bob")));
+  await assertFails(getDoc(doc(user("mallory"), "circleGroups/friends/typingIndicators/bob")));
+  await assertFails(setDoc(doc(user("mallory"), "circleGroups/friends/typingIndicators/mallory"), {
+    updatedAt: serverTimestamp(),
+    expiresAt: new Date(Date.now() + 15_000),
+  }));
+  await assertSucceeds(deleteDoc(typing));
 });
 
 test("only a participant can send a correctly attributed bounded message", async () => {

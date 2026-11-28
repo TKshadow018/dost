@@ -91,6 +91,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -2251,6 +2252,14 @@ internal fun CircleGroupChatScreen(
     var muted by remember(group.id) {
         mutableStateOf(store.isConversationMuted("circle:${group.id}"))
     }
+    var readReceiptsEnabled by remember(uid) {
+        mutableStateOf(store.circleReadReceiptsEnabled())
+    }
+    var typingIndicatorsEnabled by remember(uid) {
+        mutableStateOf(store.circleTypingIndicatorsEnabled())
+    }
+    var showChatSettings by remember { mutableStateOf(false) }
+    var typingMembers by remember(group.id) { mutableStateOf(emptyList<Pair<String, Long>>()) }
 
     DisposableEffect(uid, group.id) {
         val registration = try {
@@ -2277,6 +2286,55 @@ internal fun CircleGroupChatScreen(
         onDispose { registration?.remove() }
     }
 
+    DisposableEffect(uid, group.id) {
+        val registration = repository.listenCircleGroupTyping(
+            uid,
+            group.id,
+            onChange = { typingMembers = it },
+            onError = { typingMembers = emptyList() }
+        )
+        onDispose { registration.remove() }
+    }
+
+    LaunchedEffect(typingMembers) {
+        while (typingMembers.isNotEmpty()) {
+            delay(1_000)
+            val now = System.currentTimeMillis()
+            typingMembers = typingMembers.filter { it.second > now }
+        }
+    }
+
+    LaunchedEffect(uid, group.id, messages, readReceiptsEnabled) {
+        if (readReceiptsEnabled) {
+            try {
+                repository.markCircleGroupMessagesRead(uid, group.id, messages)
+            } catch (exception: Exception) {
+                error = peopleFailureMessage(
+                    exception,
+                    language,
+                    socialLabel(language, "Could not update read receipts.", "পড়ার তথ্য আপডেট করা যায়নি।", "रीड रसीद अपडेट नहीं हो सकी।")
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(uid, group.id, draft, typingIndicatorsEnabled) {
+        if (!typingIndicatorsEnabled || draft.isBlank()) {
+            try {
+                repository.setCircleGroupTyping(uid, group.id, false)
+            } catch (exception: Exception) {
+                if (exception is kotlinx.coroutines.CancellationException) throw exception
+            }
+        } else {
+            delay(700)
+            try {
+                repository.setCircleGroupTyping(uid, group.id, true)
+            } catch (exception: Exception) {
+                if (exception is kotlinx.coroutines.CancellationException) throw exception
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2296,28 +2354,66 @@ internal fun CircleGroupChatScreen(
                 },
                 navigationIcon = { DostBackButton(language, onBack) },
                 actions = {
-                    Box {
-                        IconButton(onClick = { showSafetyMenu = true }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = socialLabel(language, "Group safety options", "গ্রুপ নিরাপত্তার বিকল্প", "समूह सुरक्षा विकल्प"))
-                        }
-                        DropdownMenu(expanded = showSafetyMenu, onDismissRequest = { showSafetyMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text(socialLabel(language, "Report a member", "সদস্যকে রিপোর্ট করুন", "सदस्य की रिपोर्ट करें")) },
-                                onClick = {
-                                    showSafetyMenu = false
-                                    safetyAction = "report"
-                                    safetyTargetUid = ""
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(socialLabel(language, "Block a member", "সদস্যকে ব্লক করুন", "सदस्य को ब्लॉक करें")) },
-                                onClick = {
-                                    showSafetyMenu = false
-                                    safetyAction = "block"
-                                    safetyTargetUid = ""
-                                }
-                            )
-                        }
+                    IconButton(onClick = { showChatSettings = true }) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = socialLabel(language, "Chat settings", "চ্যাট সেটিংস", "चैट सेटिंग्स")
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showChatSettings,
+                        onDismissRequest = { showChatSettings = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    socialLabel(
+                                        language,
+                                        if (readReceiptsEnabled) "Turn off read receipts" else "Turn on read receipts",
+                                        if (readReceiptsEnabled) "পড়ার তথ্য বন্ধ করুন" else "পড়ার তথ্য চালু করুন",
+                                        if (readReceiptsEnabled) "रीड रसीद बंद करें" else "रीड रसीद चालू करें"
+                                    )
+                                )
+                            },
+                            onClick = {
+                                readReceiptsEnabled = !readReceiptsEnabled
+                                store.setCircleReadReceiptsEnabled(readReceiptsEnabled)
+                                showChatSettings = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    socialLabel(
+                                        language,
+                                        if (typingIndicatorsEnabled) "Turn off typing indicators" else "Turn on typing indicators",
+                                        if (typingIndicatorsEnabled) "টাইপিং সূচক বন্ধ করুন" else "টাইপিং সূচক চালু করুন",
+                                        if (typingIndicatorsEnabled) "टाइपिंग संकेत बंद करें" else "टाइपिंग संकेत चालू करें"
+                                    )
+                                )
+                            },
+                            onClick = {
+                                typingIndicatorsEnabled = !typingIndicatorsEnabled
+                                store.setCircleTypingIndicatorsEnabled(typingIndicatorsEnabled)
+                                showChatSettings = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(socialLabel(language, "Report a member", "সদস্যকে রিপোর্ট করুন", "सदस्य की रिपोर्ट करें")) },
+                            onClick = {
+                                showChatSettings = false
+                                safetyAction = "report"
+                                safetyTargetUid = ""
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(socialLabel(language, "Block a member", "সদস্যকে ব্লক করুন", "सदस्य को ब्लॉक करें")) },
+                            onClick = {
+                                showChatSettings = false
+                                safetyAction = "block"
+                                safetyTargetUid = ""
+                            }
+                        )
                     }
                     TextButton(onClick = {
                         muted = !muted
@@ -2338,6 +2434,14 @@ internal fun CircleGroupChatScreen(
                     error,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                     color = MaterialTheme.colorScheme.error
+                )
+            }
+            if (typingMembers.isNotEmpty() && typingIndicatorsEnabled) {
+                Text(
+                    socialLabel(language, "Someone is typing…", "কেউ লিখছেন…", "कोई लिख रहा है…"),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             LazyColumn(
@@ -2364,6 +2468,19 @@ internal fun CircleGroupChatScreen(
                                 style = MaterialTheme.typography.labelSmall
                             )
                             Text(message.text)
+                            val seenCount = message.readBy.count { it != uid }
+                            if (message.senderUid == uid && readReceiptsEnabled && seenCount > 0) {
+                                Text(
+                                    socialLabel(
+                                        language,
+                                        if (seenCount == 1) "Seen" else "Seen by $seenCount",
+                                        if (seenCount == 1) "দেখা হয়েছে" else "$seenCount জন দেখেছেন",
+                                        if (seenCount == 1) "देखा गया" else "$seenCount ने देखा"
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f)
+                                )
+                            }
                         }
                     }
                 }

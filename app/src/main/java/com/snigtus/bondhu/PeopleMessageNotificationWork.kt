@@ -24,7 +24,8 @@ internal object PeopleMessageNotificationWork {
         uid: String,
         chatId: String,
         messageId: String,
-        cipher: Boolean = false
+        cipher: Boolean = false,
+        circleGroup: Boolean = false
     ) {
         val request = OneTimeWorkRequestBuilder<PeopleMessageNotificationWorker>()
             .setInputData(workDataOf(
@@ -32,7 +33,8 @@ internal object PeopleMessageNotificationWork {
                 UID to uid,
                 CONVERSATION_ID to chatId,
                 MESSAGE_ID to messageId,
-                CIPHER to cipher
+                CIPHER to cipher,
+                CIRCLE_GROUP to circleGroup
             ))
             .setConstraints(
                 Constraints.Builder()
@@ -60,6 +62,7 @@ internal object PeopleMessageNotificationWork {
     private const val CONVERSATION_ID = "conversation_id"
     private const val MESSAGE_ID = "message_id"
     private const val CIPHER = "cipher"
+    private const val CIRCLE_GROUP = "circle_group"
 }
 
 internal class PeopleMessageNotificationWorker(context: Context, parameters: WorkerParameters) :
@@ -72,10 +75,13 @@ internal class PeopleMessageNotificationWorker(context: Context, parameters: Wor
         val conversationId = inputData.getString("conversation_id") ?: return Result.failure()
         val messageId = inputData.getString("message_id") ?: return Result.failure()
         val cipher = inputData.getBoolean("cipher", false)
+        val circleGroup = inputData.getBoolean("circle_group", false)
         if (FirebaseAuth.getInstance().currentUser?.uid != uid) return Result.success()
 
         return try {
-            if (cipher) {
+            if (circleGroup) {
+                PeopleRepository(applicationContext).notifyCircleGroupMessage(uid, conversationId, messageId)
+            } else if (cipher) {
                 CipherRepository(applicationContext).notifyNewMessage(uid, conversationId, messageId)
             } else {
                 PeopleRepository(applicationContext).notifyNewMessage(uid, conversationId, messageId)

@@ -269,7 +269,9 @@ function dost_message_push_request_is_valid($request)
 {
     return is_array($request)
         && (count($request) === 2
-            || (count($request) === 3 && isset($request['cipher']) && $request['cipher'] === true))
+            || (count($request) === 3
+                && ((isset($request['cipher']) && $request['cipher'] === true)
+                    || (isset($request['circle_group']) && $request['circle_group'] === true))))
         && isset($request['chat_id'], $request['message_id'])
         && is_string($request['chat_id'])
         && is_string($request['message_id'])
@@ -340,6 +342,32 @@ function dost_message_push_context_is_valid($chat, $message, $uid)
         return false;
     }
     return true;
+}
+
+function dost_circle_group_message_push_context_is_valid($group, $message, $uid)
+{
+    if (!is_array($group) || !is_array($message)
+        || !isset($group['members'], $message['senderUid'], $message['text'], $message['createdAt'])
+        || !is_array($group['members'])
+        || count($group['members']) < 1
+        || count($group['members']) > 32
+        || !in_array($uid, $group['members'], true)
+        || !is_string($uid)
+        || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1
+        || $message['senderUid'] !== $uid
+        || !is_string($message['text'])
+        || trim($message['text']) === ''
+        || strlen($message['text']) > 8192
+        || !is_int($message['createdAt'])
+    ) {
+        return false;
+    }
+    foreach ($group['members'] as $memberUid) {
+        if (!is_string($memberUid) || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $memberUid) !== 1) {
+            return false;
+        }
+    }
+    return count(array_unique($group['members'])) === count($group['members']);
 }
 
 function dost_call_valid_context($call, $chat, $uid, $now, $requireRinging)

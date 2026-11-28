@@ -374,6 +374,16 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     fun setPeopleMessageNotificationsEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("people_message_notifications_enabled", enabled).apply()
     }
+    fun circleReadReceiptsEnabled(): Boolean =
+        preferences.getBoolean("circle_read_receipts_enabled", true)
+    fun setCircleReadReceiptsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("circle_read_receipts_enabled", enabled).apply()
+    }
+    fun circleTypingIndicatorsEnabled(): Boolean =
+        preferences.getBoolean("circle_typing_indicators_enabled", true)
+    fun setCircleTypingIndicatorsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("circle_typing_indicators_enabled", enabled).apply()
+    }
     fun aiNotificationPreviewsEnabled(): Boolean =
         preferences.getBoolean("ai_notification_previews_enabled", false)
     fun setAiNotificationPreviewsEnabled(enabled: Boolean) {
