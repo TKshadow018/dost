@@ -250,10 +250,12 @@ internal object PeopleMessageNotifications {
         )
     }
 
-    fun show(context: Context, chatId: String) {
+    fun show(context: Context, chatId: String, circleGroup: Boolean = false) {
         val store = DostStore(context)
+        val conversationKey = if (circleGroup) "circle:$chatId" else "people:$chatId"
+        val notificationKey = if (circleGroup) "circle_group_$chatId" else "people_message_$chatId"
         if (!store.peopleMessageNotificationsEnabled()
-            || store.isPeopleChatMuted(chatId)
+            || store.isConversationMuted(conversationKey)
             || !ReplyNotifier.canNotify(context)
         ) {
             return
@@ -293,7 +295,7 @@ internal object PeopleMessageNotifications {
             .build()
         try {
             NotificationManagerCompat.from(context)
-                .notify("people_message_$chatId", notificationId, notification)
+                .notify(notificationKey, notificationId, notification)
         } catch (error: SecurityException) {
             Log.e(TAG, "People message notification permission is unavailable.", error)
         }
@@ -318,7 +320,9 @@ internal object PeopleMessageNotifications {
 class PeopleCallMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
-        if (data["type"] == "people_message" || data["type"] == "cipher_message") {
+        if (data["type"] == "people_message" || data["type"] == "cipher_message"
+            || data["type"] == "circle_group_message" || data["type"] == "circle_direct_message"
+        ) {
             showMessageNotification(data)
             return
         }
@@ -374,6 +378,7 @@ class PeopleCallMessagingService : FirebaseMessagingService() {
         val messageId = data["message_id"].orEmpty()
         val senderUid = data["sender_uid"].orEmpty()
         val recipientUid = data["recipient_uid"].orEmpty()
+        val circleGroup = data["type"] == "circle_group_message" || data["type"] == "circle_direct_message"
         if (!chatId.matches(ID_PATTERN) || !messageId.matches(ID_PATTERN)
             || !senderUid.matches(UID_PATTERN) || !recipientUid.matches(UID_PATTERN)
             || senderUid == recipientUid
@@ -383,7 +388,7 @@ class PeopleCallMessagingService : FirebaseMessagingService() {
         }
         val uid = FirebaseAuthRepository(applicationContext).currentAccount?.uid
         if (uid != recipientUid) return
-        PeopleMessageNotifications.show(applicationContext, chatId)
+        PeopleMessageNotifications.show(applicationContext, chatId, circleGroup)
     }
 
     private companion object {

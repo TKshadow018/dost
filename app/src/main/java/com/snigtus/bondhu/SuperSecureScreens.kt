@@ -67,6 +67,7 @@ internal fun SuperSecureScreen(
     var organizationName by remember { mutableStateOf("") }
     var organizationId by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
+    var inviteNotice by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
     BackHandler {
@@ -128,7 +129,7 @@ internal fun SuperSecureScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    "Join with an organisation ID shared by its owner or manager, or create an organisation. Managers admit members by Firebase UID. Members aged 13+ join for free; the 18+ owner pays for the seat plan.",
+                    "Open an organization using its ID. Members aged 13+ must accept an invitation before a manager adds them; only eligible adults can own or create an organization.",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 OutlinedTextField(
@@ -158,6 +159,27 @@ internal fun SuperSecureScreen(
                     }
                 ) {
                     Text(if (busy) "Checking membership…" else "Open organization")
+                }
+                OutlinedButton(
+                    enabled = uid.isNotBlank() && organizationId.isNotBlank() && !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        busy = true
+                        message = ""
+                        inviteNotice = ""
+                        scope.launch {
+                            try {
+                                repository.acceptInvitation(uid, organizationId.trim())
+                                inviteNotice = "Invitation accepted. Ask the owner or manager to add you to the organization."
+                            } catch (_: Exception) {
+                                message = "Could not accept this invitation. Check the organization ID and ask its manager to send an invitation."
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    }
+                ) {
+                    Text("Accept invitation")
                 }
                 OutlinedTextField(
                     value = organizationName,
@@ -195,6 +217,9 @@ internal fun SuperSecureScreen(
                 }
                 if (message.isNotBlank()) {
                     Text(message, color = MaterialTheme.colorScheme.error)
+                }
+                if (inviteNotice.isNotBlank()) {
+                    Text(inviteNotice, color = MaterialTheme.colorScheme.primary)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -411,8 +436,11 @@ private fun SecureMemberList(
                 busy = true
                 scope.launch {
                     try {
-                        repository.addMember(uid, organization.id, memberUid, name, role)
-                        onNotice("Member added.")
+                        val added = repository.addMember(uid, organization.id, memberUid, name, role)
+                        onNotice(
+                            if (added) "Member added."
+                            else "Invitation sent. The member must accept it, then you can add them using the same UID."
+                        )
                         showAddDialog = false
                     } catch (_: Exception) {
                         onNotice("Could not add that member. Check the Firebase UID and your manager permissions.")
@@ -596,6 +624,10 @@ private fun SecureChatPanel(
     var messages by remember(organization.id, conversation.id) { mutableStateOf<List<SecureOrgMessage>?>(null) }
     var draft by remember(organization.id, conversation.id) { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
+    var safetyAction by remember(organization.id, conversation.id) { mutableStateOf("") }
+    var safetyTargetUid by remember(organization.id, conversation.id) { mutableStateOf("") }
+    var reportReason by remember(organization.id, conversation.id) { mutableStateOf("") }
+    var safetyBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
@@ -619,6 +651,27 @@ private fun SecureChatPanel(
         if (conversation.peerUid != null) {
             TextButton(onClick = onBackToGroup) { Text("Back to group chat") }
             Text(conversation.title, style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    safetyTargetUid = conversation.peerUid
+                    safetyAction = "report"
+                }) { Text("Report") }
+                TextButton(onClick = {
+                    safetyTargetUid = conversation.peerUid
+                    safetyAction = "block_confirm"
+                }) { Text("Block") }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    safetyTargetUid = ""
+                    safetyAction = "report_picker"
+                }) { Text("Report member") }
+                TextButton(onClick = {
+                    safetyTargetUid = ""
+                    safetyAction = "block_picker"
+                }) { Text("Block member") }
+            }
         }
         if (messages == null) {
             Text("Connect to view and send organization messages.")
@@ -634,6 +687,110 @@ private fun SecureChatPanel(
                     }
                     Text("$senderName: ${message.text}")
                 }
+            }
+
+            if (safetyAction == "report_picker" || safetyAction == "block_picker") {
+                AlertDialog(
+                    onDismissRequest = { safetyAction = "" },
+                    title = { Text(if (safetyAction == "report_picker") "Choose a member to report" else "Choose a member to block") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            members.filterNot { it.uid == uid }.forEach { member ->
+                                TextButton(onClick = {
+                                    safetyTargetUid = member.uid
+                                    safetyAction = if (safetyAction == "report_picker") "report" else "block_confirm"
+                                }) {
+                                    Text(member.displayName)
+                                }
+                            }
+                            if (members.none { it.uid != uid }) Text("No other active members.")
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { safetyAction = "" }) { Text("Cancel") }
+                    }
+                )
+            }
+
+            if (safetyAction == "report") {
+                AlertDialog(
+                    onDismissRequest = { safetyAction = "" },
+                    title = { Text("Report member") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Reports from or about teens are sent for priority review.")
+                            OutlinedTextField(
+                                value = reportReason,
+                                onValueChange = { reportReason = it.take(500) },
+                                label = { Text("What happened?") },
+                                minLines = 3
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            enabled = reportReason.trim().length >= 3 && !safetyBusy,
+                            onClick = {
+                                safetyBusy = true
+                                scope.launch {
+                                    try {
+                                        repository.reportShieldMember(uid, organization.id, safetyTargetUid, reportReason)
+                                        reportReason = ""
+                                        safetyAction = ""
+                                        onNotice("Report submitted for priority review.")
+                                    } catch (_: Exception) {
+                                        onNotice("Could not submit the report.")
+                                    } finally {
+                                        safetyBusy = false
+                                    }
+                                }
+                            }
+                        ) { Text("Send report") }
+                    },
+                    dismissButton = { TextButton(onClick = { safetyAction = "" }) { Text("Cancel") } }
+                )
+            }
+
+            if (safetyAction == "block_confirm") {
+                AlertDialog(
+                    onDismissRequest = { if (!safetyBusy) safetyAction = "" },
+                    title = { Text("Block member?") },
+                    text = {
+                        Text(
+                            if (conversation.peerUid == null) {
+                                "They will immediately lose access to this Shield group chat."
+                            } else {
+                                "They will no longer be able to send messages in this direct chat."
+                            }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            enabled = !safetyBusy,
+                            onClick = {
+                                safetyBusy = true
+                                scope.launch {
+                                    try {
+                                        repository.blockShieldMember(
+                                            uid,
+                                            organization.id,
+                                            safetyTargetUid,
+                                            groupChat = conversation.peerUid == null
+                                        )
+                                        safetyAction = ""
+                                        onNotice("Member blocked.")
+                                        if (conversation.peerUid != null) onBackToGroup()
+                                    } catch (_: Exception) {
+                                        onNotice("Could not block this member.")
+                                    } finally {
+                                        safetyBusy = false
+                                    }
+                                }
+                            }
+                        ) { Text("Block") }
+                    },
+                    dismissButton = { TextButton(onClick = { safetyAction = "" }) { Text("Cancel") } }
+                )
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {

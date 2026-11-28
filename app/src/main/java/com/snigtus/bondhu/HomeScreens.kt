@@ -60,8 +60,7 @@ internal fun shouldShowExploreDisabledState(exploreEnabled: Boolean, circleOnly:
 
 internal enum class HomeInboxFilter { ALL, AI_FRIENDS, PEOPLE, ARCHIVED }
 
-internal fun shouldShowCircleContactsComingSoon(ageCohort: String): Boolean =
-    ageCohort == "teen"
+internal fun shouldShowCircleContactsComingSoon(ageCohort: String): Boolean = false
 
 internal fun circleInboxFilter(selectedFilter: HomeInboxFilter): HomeInboxFilter =
     if (selectedFilter == HomeInboxFilter.ARCHIVED) selectedFilter else HomeInboxFilter.PEOPLE
@@ -108,13 +107,20 @@ internal sealed interface HomeInboxEntry {
         override val title: String = conversation.peer.displayName
         override val lastActivityMillis: Long = conversation.lastMessageAtMillis
     }
+
+    data class CircleGroupEntry(val group: CircleGroup) : HomeInboxEntry {
+        override val key: String = "circle:${group.id}"
+        override val title: String = group.name
+        override val lastActivityMillis: Long = group.lastMessageAtMillis
+    }
 }
 
 internal fun buildHomeInboxEntries(
     friends: List<Friend>,
     messagesByFriend: Map<String, List<ChatMessage>>,
     peopleConversations: List<SocialConversation>,
-    pinnedConversationIds: Set<String> = emptySet()
+    pinnedConversationIds: Set<String> = emptySet(),
+    circleGroups: List<CircleGroup> = emptyList()
 ): List<HomeInboxEntry> {
     val entries = buildList {
         friends.forEach { friend ->
@@ -127,6 +133,9 @@ internal fun buildHomeInboxEntries(
         peopleConversations.forEach { conversation ->
             add(HomeInboxEntry.Person(conversation))
         }
+        circleGroups.forEach { group ->
+            add(HomeInboxEntry.CircleGroupEntry(group))
+        }
     }
     return entries.sortedWith(
         compareByDescending<HomeInboxEntry> { it.key in pinnedConversationIds }
@@ -138,13 +147,15 @@ internal fun buildHomeInboxEntries(
 
 internal fun buildCircleInboxEntries(
     conversations: List<SocialConversation>,
-    pinnedConversationIds: Set<String> = emptySet()
+    pinnedConversationIds: Set<String> = emptySet(),
+    circleGroups: List<CircleGroup> = emptyList()
 ): List<HomeInboxEntry> =
     buildHomeInboxEntries(
         friends = emptyList(),
         messagesByFriend = emptyMap(),
         peopleConversations = conversations,
-        pinnedConversationIds = pinnedConversationIds
+        pinnedConversationIds = pinnedConversationIds,
+        circleGroups = circleGroups
     )
 
 internal fun filterHomeInboxEntries(
@@ -160,7 +171,8 @@ internal fun filterHomeInboxEntries(
         val matchesFilter = when (filter) {
             HomeInboxFilter.ALL -> !isArchived
             HomeInboxFilter.AI_FRIENDS -> !isArchived && entry is HomeInboxEntry.AiFriend
-            HomeInboxFilter.PEOPLE -> !isArchived && entry is HomeInboxEntry.Person
+            HomeInboxFilter.PEOPLE -> !isArchived
+                && (entry is HomeInboxEntry.Person || entry is HomeInboxEntry.CircleGroupEntry)
             HomeInboxFilter.ARCHIVED -> isArchived
         }
         val matchesQuery = normalizedQuery.isBlank() || when (entry) {
@@ -169,6 +181,8 @@ internal fun filterHomeInboxEntries(
                     .any { it.content.contains(normalizedQuery, ignoreCase = true) }
             is HomeInboxEntry.Person -> entry.title.contains(normalizedQuery, ignoreCase = true)
                 || entry.conversation.lastMessage.contains(normalizedQuery, ignoreCase = true)
+            is HomeInboxEntry.CircleGroupEntry -> entry.group.name.contains(normalizedQuery, ignoreCase = true)
+                || entry.group.lastMessage.contains(normalizedQuery, ignoreCase = true)
         }
         matchesFilter && matchesQuery
     }
@@ -184,6 +198,7 @@ internal fun HomeScreen(
     userName: String,
     friends: List<Friend>,
     peopleConversations: List<SocialConversation>,
+    circleGroups: List<CircleGroup>,
     pinnedConversationIds: Set<String>,
     mutedConversationIds: Set<String>,
     archivedConversationIds: Set<String>,
@@ -202,6 +217,7 @@ internal fun HomeScreen(
     onOpenPeople: () -> Unit,
     onRetryPeopleInbox: () -> Unit,
     onOpenPeopleConversation: (SocialConversation) -> Unit,
+    onOpenCircleGroup: (CircleGroup) -> Unit,
     onOpenGames: () -> Unit,
     onOpenDiscover: () -> Unit,
     onOpenFriendProfile: (Friend) -> Unit,
@@ -240,9 +256,9 @@ internal fun HomeScreen(
     val canAddCustomFriend = isPremium || customFriendCount < MAX_CUSTOM_FRIENDS
     val canAddAnyFriend = isPremium || canAddCustomFriend || systemFriendCount < MAX_SYSTEM_FRIENDS
     val allInboxEntries = if (circleOnly) {
-        buildCircleInboxEntries(peopleConversations, pinnedConversationIds)
+        buildCircleInboxEntries(peopleConversations, pinnedConversationIds, circleGroups)
     } else {
-        buildHomeInboxEntries(friends, messageMap, peopleConversations, pinnedConversationIds)
+        buildHomeInboxEntries(friends, messageMap, peopleConversations, pinnedConversationIds, circleGroups)
     }
     val visibleFilter = if (circleOnly) circleInboxFilter(selectedFilter) else selectedFilter
     val inboxEntries = filterHomeInboxEntries(
@@ -253,7 +269,6 @@ internal fun HomeScreen(
         messageMap
     )
     val visibleFriends = inboxEntries.filterIsInstance<HomeInboxEntry.AiFriend>().map { it.friend }
-    val visiblePeople = inboxEntries.filterIsInstance<HomeInboxEntry.Person>().map { it.conversation }
     val query = if (showSearch) searchQuery.trim() else ""
 
     LaunchedEffect(recentlyAddedSystemFriend?.id) {
@@ -481,7 +496,7 @@ internal fun HomeScreen(
             when (visibleFilter) {
                 HomeInboxFilter.ALL -> {
                     if (inboxEntries.isEmpty() && query.isNotBlank()
-                        && (friends.isNotEmpty() || peopleConversations.isNotEmpty())
+                        && (friends.isNotEmpty() || peopleConversations.isNotEmpty() || circleGroups.isNotEmpty())
                     ) {
                         item { NoChatsMatch(language) }
                     } else if (inboxEntries.isEmpty() && !peopleInboxLoading) {
@@ -517,6 +532,17 @@ internal fun HomeScreen(
                                     entry.conversation,
                                     language,
                                     onClick = { onOpenPeopleConversation(entry.conversation) },
+                                    pinned = entry.key in pinnedConversationIds,
+                                    muted = entry.key in mutedConversationIds,
+                                    archived = entry.key in archivedConversationIds,
+                                    onTogglePinned = { onToggleConversationPinned(entry.key) },
+                                    onToggleMuted = { onToggleConversationMuted(entry.key) },
+                                    onToggleArchived = { onToggleConversationArchived(entry.key) }
+                                )
+                                is HomeInboxEntry.CircleGroupEntry -> CircleGroupInboxRow(
+                                    entry.group,
+                                    language,
+                                    onClick = { onOpenCircleGroup(entry.group) },
                                     pinned = entry.key in pinnedConversationIds,
                                     muted = entry.key in mutedConversationIds,
                                     archived = entry.key in archivedConversationIds,
@@ -562,26 +588,46 @@ internal fun HomeScreen(
                     }
                 }
                 HomeInboxFilter.PEOPLE -> {
-                    if (visiblePeople.isNotEmpty()) {
-                        items(visiblePeople, key = { "people:${it.id}" }) { conversation ->
-                            val key = "people:${conversation.id}"
-                            PeopleInboxRow(
-                                conversation,
-                                language,
-                                onClick = { onOpenPeopleConversation(conversation) },
-                                pinned = key in pinnedConversationIds,
-                                muted = key in mutedConversationIds,
-                                archived = key in archivedConversationIds,
-                                onTogglePinned = { onToggleConversationPinned(key) },
-                                onToggleMuted = { onToggleConversationMuted(key) },
-                                onToggleArchived = { onToggleConversationArchived(key) }
-                            )
+                    val visibleCircleEntries = inboxEntries.filter {
+                        it is HomeInboxEntry.Person || it is HomeInboxEntry.CircleGroupEntry
+                    }
+                    if (visibleCircleEntries.isNotEmpty()) {
+                        items(visibleCircleEntries, key = { it.key }) { entry ->
+                            when (entry) {
+                                is HomeInboxEntry.Person -> PeopleInboxRow(
+                                    entry.conversation,
+                                    language,
+                                    onClick = { onOpenPeopleConversation(entry.conversation) },
+                                    pinned = entry.key in pinnedConversationIds,
+                                    muted = entry.key in mutedConversationIds,
+                                    archived = entry.key in archivedConversationIds,
+                                    onTogglePinned = { onToggleConversationPinned(entry.key) },
+                                    onToggleMuted = { onToggleConversationMuted(entry.key) },
+                                    onToggleArchived = { onToggleConversationArchived(entry.key) }
+                                )
+                                is HomeInboxEntry.CircleGroupEntry -> CircleGroupInboxRow(
+                                    entry.group,
+                                    language,
+                                    onClick = { onOpenCircleGroup(entry.group) },
+                                    pinned = entry.key in pinnedConversationIds,
+                                    muted = entry.key in mutedConversationIds,
+                                    archived = entry.key in archivedConversationIds,
+                                    onTogglePinned = { onToggleConversationPinned(entry.key) },
+                                    onToggleMuted = { onToggleConversationMuted(entry.key) },
+                                    onToggleArchived = { onToggleConversationArchived(entry.key) }
+                                )
+                                is HomeInboxEntry.AiFriend -> Unit
+                            }
                         }
-                    } else if (query.isNotBlank() && peopleConversations.isNotEmpty()) {
+                    } else if (query.isNotBlank() && (peopleConversations.isNotEmpty() || circleGroups.isNotEmpty())) {
                         item { NoChatsMatch(language) }
                     } else if (!peopleInboxLoading && peopleInboxError == null) {
                         item {
-                            if (allInboxEntries.any { it.key.startsWith("people:") && it.key in archivedConversationIds }) {
+                            if (allInboxEntries.any {
+                                    (it.key.startsWith("people:") || it.key.startsWith("circle:"))
+                                        && it.key in archivedConversationIds
+                                }
+                            ) {
                                 ArchivedChatsShortcut(language) { onSelectedFilterChange(HomeInboxFilter.ARCHIVED) }
                             } else {
                                 EmptyPeopleInboxState(
@@ -626,6 +672,17 @@ internal fun HomeScreen(
                                     entry.conversation,
                                     language,
                                     onClick = { onOpenPeopleConversation(entry.conversation) },
+                                    pinned = entry.key in pinnedConversationIds,
+                                    muted = entry.key in mutedConversationIds,
+                                    archived = true,
+                                    onTogglePinned = { onToggleConversationPinned(entry.key) },
+                                    onToggleMuted = { onToggleConversationMuted(entry.key) },
+                                    onToggleArchived = { onToggleConversationArchived(entry.key) }
+                                )
+                                is HomeInboxEntry.CircleGroupEntry -> CircleGroupInboxRow(
+                                    entry.group,
+                                    language,
+                                    onClick = { onOpenCircleGroup(entry.group) },
                                     pinned = entry.key in pinnedConversationIds,
                                     muted = entry.key in mutedConversationIds,
                                     archived = true,
@@ -692,6 +749,77 @@ private fun PeopleInboxStatus(
                             AppLanguage.ENGLISH -> "Open People"
                         })
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CircleGroupInboxRow(
+    group: CircleGroup,
+    language: AppLanguage,
+    onClick: () -> Unit,
+    pinned: Boolean,
+    muted: Boolean,
+    archived: Boolean,
+    onTogglePinned: () -> Unit,
+    onToggleMuted: () -> Unit,
+    onToggleArchived: () -> Unit
+) {
+    var menuExpanded by remember(group.id) { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+            .padding(start = 18.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Surface(
+            modifier = Modifier.size(46.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    group.name.take(1).uppercase(),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(group.name, style = MaterialTheme.typography.titleMedium)
+            Text(
+                when (language) {
+                    AppLanguage.BANGLA -> "গ্রুপ · ${group.lastMessage.ifBlank { "এখনো বার্তা নেই" }}"
+                    AppLanguage.HINDI -> "समूह · ${group.lastMessage.ifBlank { "अभी संदेश नहीं हैं" }}"
+                    AppLanguage.ENGLISH -> "Group · ${group.lastMessage.ifBlank { "No messages yet" }}"
+                },
+                maxLines = 1,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Box {
+            IconButton(onClick = { menuExpanded = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = conversationMenuLabel(language, ConversationMenuAction.PIN, pinned))
+            }
+            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                listOf(
+                    ConversationMenuAction.PIN to onTogglePinned,
+                    ConversationMenuAction.MUTE to onToggleMuted,
+                    ConversationMenuAction.ARCHIVE to onToggleArchived
+                ).forEach { (action, callback) ->
+                    DropdownMenuItem(
+                        text = { Text(conversationMenuLabel(language, action, when (action) {
+                            ConversationMenuAction.PIN -> pinned
+                            ConversationMenuAction.MUTE -> muted
+                            ConversationMenuAction.ARCHIVE -> archived
+                        })) },
+                        onClick = {
+                            menuExpanded = false
+                            callback()
+                        }
+                    )
                 }
             }
         }

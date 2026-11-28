@@ -322,6 +322,16 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     fun markChatNoticeDismissed(friendId: String, messageId: String) {
         preferences.edit().putString("dismissed_chat_notice_$friendId", messageId).apply()
     }
+    fun isAiFriendBlocked(friendId: String): Boolean =
+        friendId in preferences.getStringSet("blocked_ai_friend_ids", emptySet()).orEmpty()
+    fun setAiFriendBlocked(friendId: String, blocked: Boolean) {
+        require(friendId.isNotBlank())
+        val ids = preferences.getStringSet("blocked_ai_friend_ids", emptySet())
+            .orEmpty()
+            .toMutableSet()
+        if (blocked) ids += friendId else ids -= friendId
+        preferences.edit().putStringSet("blocked_ai_friend_ids", ids).apply()
+    }
     fun saveOpenRouterApiKey(apiKey: String) {
         if (apiKey.isBlank()) {
             preferences.edit().remove("openrouter_key_encrypted").apply()
@@ -363,6 +373,20 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
         preferences.getBoolean("people_message_notifications_enabled", false)
     fun setPeopleMessageNotificationsEnabled(enabled: Boolean) {
         preferences.edit().putBoolean("people_message_notifications_enabled", enabled).apply()
+    }
+    fun circleReadReceiptsEnabled(): Boolean =
+        preferences.getBoolean("circle_read_receipts_enabled", true)
+    fun setCircleReadReceiptsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("circle_read_receipts_enabled", enabled).apply()
+    }
+    fun circleTypingIndicatorsEnabled(): Boolean =
+        preferences.getBoolean("circle_typing_indicators_enabled", true)
+    fun setCircleTypingIndicatorsEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean("circle_typing_indicators_enabled", enabled).apply()
+    }
+    fun circleHandle(): String = preferences.getString("circle_handle", "").orEmpty()
+    fun setCircleHandle(handle: String) {
+        preferences.edit().putString("circle_handle", handle).apply()
     }
     fun aiNotificationPreviewsEnabled(): Boolean =
         preferences.getBoolean("ai_notification_previews_enabled", false)

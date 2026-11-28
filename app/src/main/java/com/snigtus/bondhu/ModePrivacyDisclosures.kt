@@ -13,7 +13,7 @@ internal object ModePrivacyDisclosures {
         ModePrivacyDisclosure(
             PrivacyMode.CIRCLE,
             "Circle",
-            "Circle is planned as the default mode for people you choose. Planned contact methods are QR, invite, or handle. Messages, group membership, read receipts, and typing indicators will be stored in Firestore for delivery and visible to conversation members. Data is planned to remain until the conversation or account is deleted; provider backups may persist under their own schedule. These Circle features are not available in this build."
+            "Circle is the default free messenger for people you already know. You add contacts by QR, invite, or handle. Messages, group membership, read receipts, and typing indicators are stored in Firestore for delivery and are visible to conversation members. Data remains until the conversation or account is deleted; provider backups may persist under their own schedule. Handle lookup is exact-match only, rate-limited, and off by default for teens."
         ),
         ModePrivacyDisclosure(
             PrivacyMode.EXPLORE,
@@ -32,7 +32,7 @@ internal object ModePrivacyDisclosures {
         )
     )
 
-    val available = all.filter { it.mode == PrivacyMode.EXPLORE || it.mode == PrivacyMode.SHIELD }
+    val available = all.filter { it.mode in setOf(PrivacyMode.CIRCLE, PrivacyMode.EXPLORE, PrivacyMode.SHIELD) }
     val planned = all.filterNot { it in available }
 
     fun forMode(mode: PrivacyMode): ModePrivacyDisclosure =

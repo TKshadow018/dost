@@ -40,6 +40,39 @@ internal class PeopleCallApiClient(
         )
     }
 
+    suspend fun notifyCircleGroupMessage(uid: String, groupId: String, messageId: String) {
+        post(
+            uid,
+            "people_message_push.php",
+            JSONObject()
+                .put("chat_id", groupId)
+                .put("message_id", messageId)
+                .put("circle_group", true)
+        )
+    }
+
+    suspend fun notifyCircleDirectMessage(uid: String, chatId: String, messageId: String) {
+        post(
+            uid,
+            "people_message_push.php",
+            JSONObject()
+                .put("chat_id", chatId)
+                .put("message_id", messageId)
+                .put("circle_direct", true)
+        )
+    }
+
+    suspend fun lookupCircleHandle(uid: String, handle: String): String {
+        val response = post(
+            uid,
+            "circle_handle_lookup.php",
+            JSONObject().put("handle", handle)
+        )
+        val owner = response.optString("owner_uid")
+        if (owner.isBlank()) throw IOException("No one is using that handle")
+        return owner
+    }
+
     suspend fun notifyCipherMessage(uid: String, chatId: String, messageId: String) {
         post(
             uid,

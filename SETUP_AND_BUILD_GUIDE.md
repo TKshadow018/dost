@@ -64,7 +64,7 @@ The repository does not change Play Console settings or publish policy pages. Co
 - [ ] Turn **off** whole-app **Restrict Minor Access**. Keep adult-only People and Explore Plus enforcement in server claims and Firestore/PHP.
 - [ ] Complete the IARC content-rating questionnaire for **user interaction**, **sharing user-provided information**, and **AI-generated content**; save the submitted answers and rating.
 - [ ] Publish the app's Child Safety Standards / CSAE page on Hostinger. Add the final public URL here, link it in-app and in Play Console, and keep it current: **Owner to provide URL: ____________________**.
-- [ ] Confirm in-app reporting is available from every shipped social/communication surface. Current People reports are admin-reviewed; do not assume that covers Circle, groups, AI chats, Shield, or Cipher until those surfaces exist and have report controls.
+- [ ] Verify in-app report and block controls on Circle 1:1 and groups, Explore AI chats, Shield, and Cipher. Reports are priority-labelled for review, including reports from or about teens; test that blocks take effect immediately in Firestore rules.
 - [ ] Document the CSAM escalation and reporting process, including preservation, platform escalation, and legally required reporting. Do not ask users to upload or send suspected CSAM to support.
 - [ ] Designate and monitor a child-safety contact for Play Console and the published CSAE page: **Owner to provide contact: ____________________**.
 - [ ] Confirm reports from or about minors are prioritized for review, and test that blocks take effect immediately in the server rules.
@@ -125,7 +125,11 @@ php.exe -l premium_intro_grant.php
 php.exe -l people_call_support.php
 php.exe -l people_call_push.php
 php.exe -l people_call_ice_servers.php
+php.exe -l circle_support.php
+php.exe -l circle_handle_lookup.php
+php.exe -l circle_invite.php
 php.exe test_age_eligibility.php
+php.exe test_circle_contacts.php
 php.exe test_premium_support.php
 php.exe test_romance_safety.php
 php.exe test_people_call_support.php
@@ -204,8 +208,10 @@ For Google Play distribution, configure Play App Signing and follow Play Console
 - [ ] Android unit tests, Firestore emulator rules tests, and PHP tests pass.
 - [ ] Two separate devices have been used to test incoming FCM alerts in the background and audio/video calls on real networks.
 - [ ] The published privacy policy and Play Console Data safety declarations match the deployed behavior.
-- [ ] Update the Play IARC questionnaire and target audience to 13–15, 16–17, and 18+ (not under 13; not Designed for Families); switch **Restrict Minor Access** off for the whole app.
-- [ ] Publish the Child Safety Standards / CSAE page, add its Play Console link, and provide the designated child-safety contact and CSAM reporting process.
+- [ ] Update the IARC questionnaire for user interaction, shared information, and AI-generated content.
+- [ ] Set the Play target audience to 13–15, 16–17, and 18+ (not under 13; not Designed for Families); switch **Restrict Minor Access** off for the whole app.
+- [ ] Verify in-app report/block flows and the priority-review process are operational before release.
+- [ ] Publish the Child Safety Standards / CSAE page, record its URL, and link it in-app and in Play Console; document the CSAM reporting process and provide the designated child-safety contact.
 - [ ] Ask counsel to decide regional signup restrictions or parental-consent handling under GDPR Article 8 (13–16 depending on country, including 16 in Germany and the Netherlands), the UK Age Appropriate Design Code, and Japan's APPI rules for minors.
 - [ ] Keep owner/counsel implementation decisions out of the public policy. Publish the privacy policy only after confirming its audience and data-practice statements match the shipped age controls and mode availability.
 - [ ] Before enabling Shield, confirm privacy, customer terms, DPA, Data safety, retention/deletion operations, and any export or customer-hosted migration commitments.

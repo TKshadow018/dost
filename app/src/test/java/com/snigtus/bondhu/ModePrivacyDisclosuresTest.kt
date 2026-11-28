@@ -6,8 +6,14 @@ import org.junit.Test
 class ModePrivacyDisclosuresTest {
     @Test
     fun availableModeDisclosuresDescribeSharingAndImportantLimits() {
+        val circle = ModePrivacyDisclosures.forMode(PrivacyMode.CIRCLE).text
         val explore = ModePrivacyDisclosures.forMode(PrivacyMode.EXPLORE).text
         val shield = ModePrivacyDisclosures.forMode(PrivacyMode.SHIELD).text
+
+        assertTrue(circle.contains("default free messenger"))
+        assertTrue(circle.contains("QR, invite, or handle"))
+        assertTrue(circle.contains("until the conversation or account is deleted"))
+        assertTrue(circle.contains("off by default for teens"))
 
         assertTrue(explore.contains("OpenRouter"))
         assertTrue(explore.contains("1,095 days"))
@@ -25,12 +31,8 @@ class ModePrivacyDisclosuresTest {
 
     @Test
     fun plannedModeDisclosuresDoNotClaimUnavailableFeaturesAreLive() {
-        val circle = ModePrivacyDisclosures.forMode(PrivacyMode.CIRCLE).text
         val cipher = ModePrivacyDisclosures.forMode(PrivacyMode.CIPHER).text
 
-        assertTrue(circle.contains("not available in this build"))
-        assertTrue(circle.contains("QR, invite, or handle"))
-        assertTrue(circle.contains("until the conversation or account is deleted"))
         assertTrue(cipher.contains("not available in this build"))
         assertTrue(cipher.contains("passphrase that Dost never receives"))
         assertTrue(cipher.contains("participants, timestamps, message sizes, and delivery tokens"))
