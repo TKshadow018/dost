@@ -40,6 +40,17 @@ internal class PeopleCallApiClient(
         )
     }
 
+    suspend fun notifyCircleGroupMessage(uid: String, groupId: String, messageId: String) {
+        post(
+            uid,
+            "people_message_push.php",
+            JSONObject()
+                .put("chat_id", groupId)
+                .put("message_id", messageId)
+                .put("circle_group", true)
+        )
+    }
+
     suspend fun notifyCipherMessage(uid: String, chatId: String, messageId: String) {
         post(
             uid,

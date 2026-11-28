@@ -112,7 +112,8 @@ internal data class SocialChatMessage(
     val senderUid: String,
     val text: String,
     val createdAtMillis: Long,
-    val deliveryState: SocialMessageDeliveryState = SocialMessageDeliveryState.SENT
+    val deliveryState: SocialMessageDeliveryState = SocialMessageDeliveryState.SENT,
+    val readBy: Set<String> = emptySet()
 )
 
 internal fun searchSocialMessages(
@@ -241,7 +242,12 @@ private fun DocumentSnapshot.toSocialChatMessage(): SocialChatMessage =
             ?: error("A chat message is missing its sender."),
         text = getString("text")
             ?: error("A chat message is missing its text."),
-        createdAtMillis = getTimestamp("createdAt")?.toDate()?.time ?: 0L
+        createdAtMillis = getTimestamp("createdAt")?.toDate()?.time ?: 0L,
+        readBy = (get("readAtByUid") as? Map<*, *>)
+            ?.keys
+            ?.filterIsInstance<String>()
+            ?.toSet()
+            .orEmpty()
     )
 
 internal data class PeopleCallDescription(
@@ -899,6 +905,63 @@ internal class PeopleRepository(context: Context) {
             }
     }
 
+    suspend fun markCircleGroupMessagesRead(uid: String, groupId: String, messages: List<SocialChatMessage>) {
+        requireSignedIn(uid)
+        require(uid.matches(Regex("[A-Za-z0-9:_-]{1,128}")))
+        val unread = messages.filter { it.senderUid != uid && uid !in it.readBy }
+        val group = database().collection(CIRCLE_GROUPS).document(groupId)
+        unread.chunked(450).forEach { page ->
+            val batch = database().batch()
+            page.forEach { message ->
+                batch.update(
+                    group.collection(MESSAGES).document(message.id),
+                    "readAtByUid.$uid",
+                    FieldValue.serverTimestamp()
+                )
+            }
+            batch.commit().await()
+        }
+    }
+
+    fun listenCircleGroupTyping(
+        uid: String,
+        groupId: String,
+        onChange: (List<Pair<String, Long>>) -> Unit,
+        onError: (Exception) -> Unit
+    ): ListenerRegistration {
+        requireSignedIn(uid)
+        return database().collection(CIRCLE_GROUPS).document(groupId)
+            .collection(TYPING_INDICATORS)
+            .addSnapshotListener { snapshot, listenerError ->
+                if (listenerError != null) {
+                    onError(listenerError)
+                } else if (snapshot == null) {
+                    onError(IllegalStateException("Could not load typing indicators."))
+                } else {
+                    val now = System.currentTimeMillis()
+                    onChange(snapshot.documents.mapNotNull { document ->
+                        val expiresAt = document.getTimestamp("expiresAt")?.toDate()?.time ?: 0L
+                        if (document.id != uid && expiresAt > now) document.id to expiresAt else null
+                    })
+                }
+            }
+    }
+
+    suspend fun setCircleGroupTyping(uid: String, groupId: String, typing: Boolean) {
+        requireSignedIn(uid)
+        require(uid.matches(Regex("[A-Za-z0-9:_-]{1,128}")))
+        val indicator = database().collection(CIRCLE_GROUPS).document(groupId)
+            .collection(TYPING_INDICATORS).document(uid)
+        if (typing) {
+            indicator.set(mapOf(
+                "updatedAt" to FieldValue.serverTimestamp(),
+                "expiresAt" to Timestamp(Date(System.currentTimeMillis() + 15_000L))
+            )).await()
+        } else {
+            indicator.delete().await()
+        }
+    }
+
     suspend fun sendCircleGroupMessage(
         uid: String,
         groupId: String,
@@ -912,7 +975,7 @@ internal class PeopleRepository(context: Context) {
         val database = database()
         val group = database.collection(CIRCLE_GROUPS).document(groupId)
         val message = group.collection(MESSAGES).document(clientMessageId)
-        database.runTransaction { transaction ->
+        val created = database.runTransaction { transaction ->
             val groupSnapshot = transaction.get(group)
             val existing = transaction.get(message)
             check(groupSnapshot.exists() && uid in (groupSnapshot.get("members") as? List<*>).orEmpty()) {
@@ -937,6 +1000,20 @@ internal class PeopleRepository(context: Context) {
             ))
             true
         }.await()
+        if (created) {
+            try {
+                PeopleMessageNotificationWork.enqueue(
+                    applicationContext,
+                    activeProfileNamespace(applicationContext),
+                    uid,
+                    groupId,
+                    clientMessageId,
+                    circleGroup = true
+                )
+            } catch (error: Exception) {
+                Log.e(TAG, "A sent Circle group message could not be queued for notification delivery.", error)
+            }
+        }
     }
 
     suspend fun registerCallToken(uid: String, token: String) {
@@ -1137,6 +1214,11 @@ internal class PeopleRepository(context: Context) {
     suspend fun notifyNewMessage(uid: String, chatId: String, messageId: String) {
         requireSignedIn(uid)
         callApiClient.notifyNewMessage(uid, chatId, messageId)
+    }
+
+    suspend fun notifyCircleGroupMessage(uid: String, groupId: String, messageId: String) {
+        requireSignedIn(uid)
+        callApiClient.notifyCircleGroupMessage(uid, groupId, messageId)
     }
 
     suspend fun callIceServers(uid: String, chatId: String, callId: String): List<PeopleIceServer> {
@@ -1434,6 +1516,7 @@ internal class PeopleRepository(context: Context) {
         const val CONTACT_APPROVALS = "peopleContactApprovals"
         const val CIRCLE_GROUPS = "circleGroups"
         const val CIRCLE_GROUP_INVITES = "invites"
+        const val TYPING_INDICATORS = "typingIndicators"
         const val CALLS = "calls"
         const val CALLER_CANDIDATES = "callerCandidates"
         const val CALLEE_CANDIDATES = "calleeCandidates"

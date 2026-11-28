@@ -529,6 +529,16 @@ service cloud.firestore {
         && (leaving || removingMember || (admin && (renamed || promotingAdmin)) || acceptingInvite || sending);
     }
 
+    function validCircleReadReceiptUpdate() {
+      let oldReceipts = resource.data.get('readAtByUid', {});
+      let newReceipts = request.resource.data.get('readAtByUid', {});
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAtByUid'])
+        && newReceipts is map
+        && newReceipts.diff(oldReceipts).affectedKeys().hasOnly([request.auth.uid])
+        && newReceipts[request.auth.uid] == request.time
+        && request.auth.uid != resource.data.senderUid;
+    }
+
     match /publicProfiles/{uid} {
       allow get, list: if ageEligible()
         && resource.data.ageCohort == 'adult'
@@ -784,7 +794,30 @@ service cloud.firestore {
           && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessageId == messageId
           && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessage == request.resource.data.text
           && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessageSenderUid == request.auth.uid;
-        allow update, delete: if false;
+        allow update: if circleGroupMember(parentGroup())
+          && validCircleReadReceiptUpdate();
+        allow delete: if false;
+      }
+
+      match /typingIndicators/{uid} {
+        function parentGroup() {
+          return get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
+        }
+
+        function validTypingIndicator() {
+          return request.resource.data.keys().hasAll(['updatedAt', 'expiresAt'])
+            && request.resource.data.keys().hasOnly(['updatedAt', 'expiresAt'])
+            && request.resource.data.updatedAt == request.time
+            && request.resource.data.expiresAt is timestamp
+            && request.resource.data.expiresAt > request.time
+            && request.resource.data.expiresAt <= request.time + duration.value(20, 's');
+        }
+
+        allow get, list: if circleGroupMember(parentGroup());
+        allow create, update: if circleGroupMember(parentGroup())
+          && request.auth.uid == uid
+          && validTypingIndicator();
+        allow delete: if circleGroupMember(parentGroup()) && request.auth.uid == uid;
       }
     }
 
