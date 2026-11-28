@@ -103,6 +103,14 @@ dost_message_push_test_assert(
     ),
     'Circle groups above the 32-member limit must not trigger notifications.'
 );
+dost_message_push_test_assert(
+    !dost_circle_group_message_push_context_is_valid(
+        array('members' => array('alice', 'bob', 'bob')),
+        $circleMessage,
+        'alice'
+    ),
+    'Duplicate Circle group members must not receive duplicate notifications.'
+);
 
 $cipherChat = array(
     'members' => array('alice', 'bob'),

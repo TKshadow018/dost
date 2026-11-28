@@ -351,7 +351,6 @@ function dost_circle_group_message_push_context_is_valid($group, $message, $uid)
         || !is_array($group['members'])
         || count($group['members']) < 1
         || count($group['members']) > 32
-        || count(array_unique($group['members'])) !== count($group['members'])
         || !in_array($uid, $group['members'], true)
         || !is_string($uid)
         || preg_match('/\A[A-Za-z0-9:_-]{1,128}\z/', $uid) !== 1
@@ -368,7 +367,7 @@ function dost_circle_group_message_push_context_is_valid($group, $message, $uid)
             return false;
         }
     }
-    return true;
+    return count(array_unique($group['members'])) === count($group['members']);
 }
 
 function dost_call_valid_context($call, $chat, $uid, $now, $requireRinging)
