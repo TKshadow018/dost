@@ -49,7 +49,10 @@ if (!is_string($serviceToken)) {
     dost_call_respond(503, array('error' => 'People messaging is unavailable'));
 }
 $isCipher = isset($request['cipher']) && $request['cipher'] === true;
-$chatPath = $isCipher ? 'cipherChats/' . $request['chat_id'] : 'peopleChats/' . $request['chat_id'];
+$isCircleGroup = isset($request['circle_group']) && $request['circle_group'] === true;
+$chatPath = $isCircleGroup
+    ? 'circleGroups/' . $request['chat_id']
+    : ($isCipher ? 'cipherChats/' . $request['chat_id'] : 'peopleChats/' . $request['chat_id']);
 $chatResponse = dost_call_firestore_get($settings['project_id'], $serviceToken, $chatPath);
 $messageResponse = dost_call_firestore_get(
     $settings['project_id'],
@@ -69,23 +72,35 @@ if ($chatResponse['status'] !== 200 || $messageResponse['status'] !== 200) {
 }
 $chat = dost_call_document_fields($chatResponse);
 $messageFields = dost_call_document_fields($messageResponse);
-$validMessage = $isCipher
-    ? dost_cipher_message_push_context_is_valid($chat, $messageFields, $uid, $request['chat_id'])
-    : dost_message_push_context_is_valid($chat, $messageFields, $uid);
+$validMessage = $isCircleGroup
+    ? dost_circle_group_message_push_context_is_valid($chat, $messageFields, $uid)
+    : ($isCipher
+        ? dost_cipher_message_push_context_is_valid($chat, $messageFields, $uid, $request['chat_id'])
+        : dost_message_push_context_is_valid($chat, $messageFields, $uid));
 if (!$validMessage) {
     dost_call_respond(403, array('error' => 'This message is not available'));
 }
 $members = $chat['members'];
-$peerUid = $members[0] === $uid ? $members[1] : $members[0];
+$recipientUids = $isCircleGroup
+    ? array_values(array_filter($members, function ($memberUid) use ($uid) {
+        return $memberUid !== $uid;
+    }))
+    : array($members[0] === $uid ? $members[1] : $members[0]);
 $now = time();
-$eligibleUser = $isCipher
+$eligibleUser = $isCipher || $isCircleGroup
     ? dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $uid)
     : dost_call_user_is_eligible($settings['project_id'], $serviceToken, $uid, $now);
-$eligiblePeer = $isCipher
-    ? dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $peerUid)
-    : dost_call_user_is_eligible($settings['project_id'], $serviceToken, $peerUid, $now);
-if (!$eligibleUser || !$eligiblePeer) {
+if (!$eligibleUser) {
     dost_call_respond(403, array('error' => 'This message is not available'));
+}
+if (!$isCircleGroup) {
+    $peerUid = $recipientUids[0];
+    $eligiblePeer = $isCipher
+        ? dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $peerUid)
+        : dost_call_user_is_eligible($settings['project_id'], $serviceToken, $peerUid, $now);
+    if (!$eligiblePeer) {
+        dost_call_respond(403, array('error' => 'This message is not available'));
+    }
 }
 if ($isCipher) {
     if ($settings['cipher_enabled'] !== 'true') {
@@ -113,42 +128,60 @@ if ($isCipher) {
         dost_call_respond(403, array('error' => 'This message is not available'));
     }
 }
-foreach (array(
-    'peopleBlocks/' . $uid . '/blockedUsers/' . $peerUid,
-    'peopleBlocks/' . $peerUid . '/blockedUsers/' . $uid
-) as $blockPath) {
-    $blockResponse = dost_call_firestore_get($settings['project_id'], $serviceToken, $blockPath);
-    if ($blockResponse === false) {
-        error_log('Dost People message push could not check block state.');
-        dost_call_respond(503, array('error' => 'People messaging is unavailable'));
+$allowedRecipients = array();
+foreach ($recipientUids as $recipientUid) {
+    if ($isCircleGroup
+        && !dost_call_user_is_cipher_eligible($settings['project_id'], $serviceToken, $recipientUid)
+    ) {
+        continue;
     }
-    if ($blockResponse['status'] === 200) {
-        dost_call_respond(403, array('error' => 'This message is not available'));
+    $blocked = false;
+    foreach (array(
+        'peopleBlocks/' . $uid . '/blockedUsers/' . $recipientUid,
+        'peopleBlocks/' . $recipientUid . '/blockedUsers/' . $uid
+    ) as $blockPath) {
+        $blockResponse = dost_call_firestore_get($settings['project_id'], $serviceToken, $blockPath);
+        if ($blockResponse === false) {
+            error_log('Dost People message push could not check block state.');
+            dost_call_respond(503, array('error' => 'People messaging is unavailable'));
+        }
+        if ($blockResponse['status'] === 200) {
+            $blocked = true;
+            break;
+        }
+        if ($blockResponse['status'] !== 404) {
+            error_log('Dost People message push received an unexpected block lookup response.');
+            dost_call_respond(503, array('error' => 'People messaging is unavailable'));
+        }
     }
-    if ($blockResponse['status'] !== 404) {
-        error_log('Dost People message push received an unexpected block lookup response.');
-        dost_call_respond(503, array('error' => 'People messaging is unavailable'));
+    if ($blocked) {
+        if (!$isCircleGroup) {
+            dost_call_respond(403, array('error' => 'This message is not available'));
+        }
+        continue;
     }
+    $allowedRecipients[] = $recipientUid;
 }
-$devices = dost_call_http_json(
-    'GET',
-    dost_call_firestore_url(
-        $settings['project_id'],
-        'peopleMessageTokens/' . $peerUid . '/devices',
-        'pageSize=100'
-    ),
-    array('Authorization: Bearer ' . $serviceToken)
-);
-if ($devices === false || !in_array($devices['status'], array(200, 404), true)) {
-    error_log('Dost People message push could not read registered devices.');
-    dost_call_respond(503, array('error' => 'People messaging is unavailable'));
-}
-$documents = isset($devices['body']['documents']) && is_array($devices['body']['documents'])
-    ? array_slice($devices['body']['documents'], 0, 100)
-    : array();
 $sent = 0;
 $deliveryFailed = false;
-foreach ($documents as $document) {
+foreach ($allowedRecipients as $recipientUid) {
+    $devices = dost_call_http_json(
+        'GET',
+        dost_call_firestore_url(
+            $settings['project_id'],
+            'peopleMessageTokens/' . $recipientUid . '/devices',
+            'pageSize=100'
+        ),
+        array('Authorization: Bearer ' . $serviceToken)
+    );
+    if ($devices === false || !in_array($devices['status'], array(200, 404), true)) {
+        error_log('Dost People message push could not read registered devices.');
+        dost_call_respond(503, array('error' => 'People messaging is unavailable'));
+    }
+    $documents = isset($devices['body']['documents']) && is_array($devices['body']['documents'])
+        ? array_slice($devices['body']['documents'], 0, 100)
+        : array();
+    foreach ($documents as $document) {
     if (!is_array($document) || !isset($document['name'], $document['fields'])
         || !is_string($document['name']) || !is_array($document['fields'])
     ) {
@@ -167,11 +200,13 @@ foreach ($documents as $document) {
             'message' => array(
                 'token' => $token,
                 'data' => array(
-                    'type' => $isCipher ? 'cipher_message' : 'people_message',
+                    'type' => $isCircleGroup
+                        ? 'circle_group_message'
+                        : ($isCipher ? 'cipher_message' : 'people_message'),
                     'chat_id' => $request['chat_id'],
                     'message_id' => $request['message_id'],
                     'sender_uid' => $uid,
-                    'recipient_uid' => $peerUid
+                    'recipient_uid' => $recipientUid
                 ),
                 'android' => array(
                     'priority' => 'normal',
@@ -196,6 +231,7 @@ foreach ($documents as $document) {
     }
     $deliveryFailed = true;
     error_log('Dost People message push FCM delivery failed.');
+    }
 }
 if ($sent === 0 && $deliveryFailed) {
     dost_call_respond(503, array('error' => 'Could not deliver the message notification'));

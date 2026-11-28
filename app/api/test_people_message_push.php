@@ -37,6 +37,14 @@ dost_message_push_test_assert(
     !dost_message_push_request_is_valid($request + array('cipher' => false)),
     'Cipher notification mode must not be selectable with a false or ambiguous flag.'
 );
+dost_message_push_test_assert(
+    dost_message_push_request_is_valid($request + array('circle_group' => true)),
+    'Circle group notifications should accept only the explicit metadata-only group flag.'
+);
+dost_message_push_test_assert(
+    !dost_message_push_request_is_valid($request + array('circle_group' => false)),
+    'Circle group notification mode must not be selectable with a false or ambiguous flag.'
+);
 
 $chat = array('members' => array('alice', 'bob'), 'ageCohort' => 'adult');
 $message = array(
@@ -63,6 +71,37 @@ $minorChat['ageCohort'] = 'minor';
 dost_message_push_test_assert(
     !dost_message_push_context_is_valid($minorChat, $message, 'alice'),
     'Message notifications must not be authorized for a non-adult chat.'
+);
+
+$circleGroup = array('members' => array('alice', 'bob', 'teen'));
+$circleMessage = array(
+    'senderUid' => 'alice',
+    'text' => 'A group message',
+    'createdAt' => 1770000000
+);
+dost_message_push_test_assert(
+    dost_circle_group_message_push_context_is_valid($circleGroup, $circleMessage, 'alice'),
+    'A member should be able to request notifications for their own Circle group message.'
+);
+dost_message_push_test_assert(
+    !dost_circle_group_message_push_context_is_valid($circleGroup, $circleMessage, 'mallory'),
+    'A nonmember must not request Circle group notifications.'
+);
+dost_message_push_test_assert(
+    !dost_circle_group_message_push_context_is_valid(
+        $circleGroup,
+        array_merge($circleMessage, array('senderUid' => 'bob')),
+        'alice'
+    ),
+    'A group notification request must match the persisted message sender.'
+);
+dost_message_push_test_assert(
+    !dost_circle_group_message_push_context_is_valid(
+        array('members' => array_fill(0, 33, 'alice')),
+        $circleMessage,
+        'alice'
+    ),
+    'Circle groups above the 32-member limit must not trigger notifications.'
 );
 
 $cipherChat = array(

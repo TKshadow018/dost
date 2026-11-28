@@ -912,7 +912,7 @@ internal class PeopleRepository(context: Context) {
         val database = database()
         val group = database.collection(CIRCLE_GROUPS).document(groupId)
         val message = group.collection(MESSAGES).document(clientMessageId)
-        database.runTransaction { transaction ->
+        val created = database.runTransaction { transaction ->
             val groupSnapshot = transaction.get(group)
             val existing = transaction.get(message)
             check(groupSnapshot.exists() && uid in (groupSnapshot.get("members") as? List<*>).orEmpty()) {
@@ -937,6 +937,20 @@ internal class PeopleRepository(context: Context) {
             ))
             true
         }.await()
+        if (created) {
+            try {
+                PeopleMessageNotificationWork.enqueue(
+                    applicationContext,
+                    activeProfileNamespace(applicationContext),
+                    uid,
+                    groupId,
+                    clientMessageId,
+                    circleGroup = true
+                )
+            } catch (error: Exception) {
+                Log.e(TAG, "A sent Circle group message could not be queued for notification delivery.", error)
+            }
+        }
     }
 
     suspend fun registerCallToken(uid: String, token: String) {
@@ -1137,6 +1151,11 @@ internal class PeopleRepository(context: Context) {
     suspend fun notifyNewMessage(uid: String, chatId: String, messageId: String) {
         requireSignedIn(uid)
         callApiClient.notifyNewMessage(uid, chatId, messageId)
+    }
+
+    suspend fun notifyCircleGroupMessage(uid: String, groupId: String, messageId: String) {
+        requireSignedIn(uid)
+        callApiClient.notifyCircleGroupMessage(uid, groupId, messageId)
     }
 
     suspend fun callIceServers(uid: String, chatId: String, callId: String): List<PeopleIceServer> {
