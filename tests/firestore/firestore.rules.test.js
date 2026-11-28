@@ -1295,6 +1295,7 @@ test("Circle group invites require admin authority and invitee acceptance", asyn
   );
   await assertSucceeds(setDoc(invite, {
     groupId: "friends",
+    groupName: "Friends",
     inviteeUid: "teen",
     invitedBy: "alice",
     status: "pending",
@@ -1318,6 +1319,39 @@ test("Circle group invites require admin authority and invitee acceptance", asyn
   await assertSucceeds(batch.commit());
   await assertSucceeds(getDoc(doc(teen, "circleGroups/friends")));
   await assertFails(getDoc(doc(user("mallory"), "circleGroups/friends")));
+  const leave = writeBatch(teen);
+  leave.update(doc(teen, "circleGroups/friends"), {
+    members: ["alice"],
+    admins: ["alice"],
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(leave.commit());
+  await assertFails(
+    updateDoc(doc(teen, "circleGroups/friends"), {
+      members: ["alice", "teen"],
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "circleGroups/friends/invites/teen"), {
+      groupId: "friends",
+      groupName: "Friends",
+      inviteeUid: "teen",
+      invitedBy: "alice",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  const rejoin = writeBatch(teen);
+  rejoin.update(doc(teen, "circleGroups/friends/invites/teen"), {
+    status: "accepted",
+    acceptedAt: serverTimestamp(),
+  });
+  rejoin.update(doc(teen, "circleGroups/friends"), {
+    members: ["alice", "teen"],
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(rejoin.commit());
 });
 
 test("Circle group invites reject blocked people and cannot exceed 32 members", async () => {
@@ -1345,6 +1379,7 @@ test("Circle group invites reject blocked people and cannot exceed 32 members", 
   await assertSucceeds(
     setDoc(doc(user("alice"), "circleGroups/at-capacity/invites/extra"), {
       groupId: "at-capacity",
+      groupName: "Friends",
       inviteeUid: "extra",
       invitedBy: "alice",
       status: "pending",
@@ -1383,6 +1418,111 @@ test("Circle group admins can rename, members can leave, and outsiders cannot se
     setDoc(doc(user("mallory"), "circleGroups/friends/messages/forged"), {
       senderUid: "mallory",
       text: "Not a member",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  await assertSucceeds(
+    setDoc(doc(alice, "circleGroups/friends/invites/bob"), {
+      groupId: "friends",
+      groupName: "Weekend group",
+      inviteeUid: "bob",
+      invitedBy: "alice",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  const bob = user("bob");
+  const join = writeBatch(bob);
+  join.update(doc(bob, "circleGroups/friends/invites/bob"), {
+    status: "accepted",
+    acceptedAt: serverTimestamp(),
+  });
+  join.update(doc(bob, "circleGroups/friends"), {
+    members: ["alice", "bob"],
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(join.commit());
+  await assertFails(
+    updateDoc(doc(alice, "circleGroups/friends"), {
+      members: ["bob"],
+      admins: [],
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(alice, "circleGroups/friends"), {
+      admins: ["alice", "bob"],
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(bob, "circleGroups/friends"), {
+      name: "Renamed by admin",
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertFails(
+    updateDoc(doc(alice, "circleGroups/friends"), {
+      members: ["alice"],
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(alice, "circleGroups/friends"), {
+      members: ["bob"],
+      admins: ["bob"],
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await assertFails(getDoc(doc(alice, "circleGroups/friends")));
+  await assertSucceeds(getDoc(doc(bob, "circleGroups/friends")));
+});
+
+test("Circle group messages require membership and an atomic group summary update", async () => {
+  await createCircleGroup();
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "circleGroups/friends/invites/bob"), {
+      groupId: "friends",
+      groupName: "Friends",
+      inviteeUid: "bob",
+      invitedBy: "alice",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  const bob = user("bob");
+  const join = writeBatch(bob);
+  join.update(doc(bob, "circleGroups/friends/invites/bob"), {
+    status: "accepted",
+    acceptedAt: serverTimestamp(),
+  });
+  join.update(doc(bob, "circleGroups/friends"), {
+    members: ["alice", "bob"],
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(join.commit());
+
+  const alice = user("alice");
+  const send = writeBatch(alice);
+  send.update(doc(alice, "circleGroups/friends"), {
+    lastMessage: "Hello group",
+    lastMessageSenderUid: "alice",
+    lastMessageAt: serverTimestamp(),
+    lastMessageId: "group-message-1",
+  });
+  send.set(doc(alice, "circleGroups/friends/messages/group-message-1"), {
+    senderUid: "alice",
+    text: "Hello group",
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(send.commit());
+  await assertFails(
+    getDoc(doc(user("mallory"), "circleGroups/friends/messages/group-message-1")),
+  );
+  await assertFails(
+    setDoc(doc(user("bob"), "circleGroups/friends/messages/unpaired"), {
+      senderUid: "bob",
+      text: "Unpaired update",
       createdAt: serverTimestamp(),
     }),
   );

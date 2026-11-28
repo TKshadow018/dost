@@ -97,8 +97,9 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
-private enum class PeopleTab { DISCOVER, CHATS, REQUESTS, PROFILE }
+private enum class PeopleTab { DISCOVER, CHATS, GROUPS, REQUESTS, PROFILE }
 
 @Composable
 internal fun PeopleScreen(
@@ -110,14 +111,16 @@ internal fun PeopleScreen(
     store: DostStore,
     circleMode: Boolean = false,
     onBack: () -> Unit,
-    onOpenConversation: (SocialConversation) -> Unit
+    onOpenConversation: (SocialConversation) -> Unit,
+    onOpenGroup: (CircleGroup) -> Unit
 ) {
     val context = LocalContext.current
     val repository = remember(context) { PeopleRepository(context) }
     val scope = rememberCoroutineScope()
     val cohort = socialAgeCohort(userAge)
-    var tab by rememberSaveable(uid, circleMode) {
-        mutableStateOf(if (circleMode) PeopleTab.CHATS else PeopleTab.DISCOVER)
+    val teenCircle = circleMode && userAge.toIntOrNull()?.let { it in MINIMUM_ACCOUNT_AGE until ROMANCE_MINIMUM_AGE } == true
+    var tab by rememberSaveable(uid, circleMode, userAge) {
+        mutableStateOf(if (teenCircle) PeopleTab.GROUPS else if (circleMode) PeopleTab.CHATS else PeopleTab.DISCOVER)
     }
     var ownProfile by remember(uid) { mutableStateOf<PublicPersonProfile?>(null) }
     val savedDraft = remember(uid) { store.peopleProfileDraft() }
@@ -130,6 +133,8 @@ internal fun PeopleScreen(
     var conversations by remember(uid) { mutableStateOf(emptyList<SocialConversation>()) }
     var contactRequests by remember(uid) { mutableStateOf(emptyList<SocialContactRequest>()) }
     var outgoingRequests by remember(uid) { mutableStateOf(emptyList<SocialOutgoingContactRequest>()) }
+    var circleGroups by remember(uid) { mutableStateOf(emptyList<CircleGroup>()) }
+    var circleGroupInvites by remember(uid) { mutableStateOf(emptyList<Pair<String, String>>()) }
     var blockedIds by remember(uid) { mutableStateOf(emptySet<String>()) }
     var busy by remember { mutableStateOf(false) }
     var loadingProfile by remember { mutableStateOf(true) }
@@ -355,6 +360,13 @@ internal fun PeopleScreen(
             loadingProfile = false
             return@LaunchedEffect
         }
+        if (teenCircle) {
+            ownProfile = null
+            blockedIds = emptySet()
+            loadingProfile = false
+            fatalError = ""
+            return@LaunchedEffect
+        }
         try {
             ownProfile = repository.getOwnProfile(uid)
             ownProfile?.let {
@@ -377,7 +389,7 @@ internal fun PeopleScreen(
     }
 
     LaunchedEffect(uid) {
-        if (uid.isBlank()) return@LaunchedEffect
+        if (uid.isBlank() || teenCircle) return@LaunchedEffect
         val notificationsAllowed = ReplyNotifier.canNotify(context)
         callAlertsEnabled = store.peopleCallAlertsEnabled(notificationsAllowed) && notificationsAllowed
         if (callAlertsEnabled) {
@@ -494,6 +506,57 @@ internal fun PeopleScreen(
     }
 
     DisposableEffect(uid, tab) {
+        if (tab != PeopleTab.GROUPS || uid.isBlank()) {
+            onDispose { }
+        } else {
+            val groupsRegistration = try {
+                repository.listenCircleGroups(
+                    uid,
+                    onChange = { circleGroups = it },
+                    onError = {
+                        fatalError = peopleFailureMessage(
+                            it,
+                            language,
+                            socialLabel(language, "Could not load groups.", "গ্রুপ লোড করা যায়নি।", "समूह लोड नहीं हो सके।")
+                        )
+                    }
+                )
+            } catch (error: Exception) {
+                fatalError = peopleFailureMessage(
+                    error,
+                    language,
+                    socialLabel(language, "Could not load groups.", "গ্রুপ লোড করা যায়নি।", "समूह लोड नहीं हो सके।")
+                )
+                null
+            }
+            val invitesRegistration = try {
+                repository.listenCircleGroupInvites(
+                    uid,
+                    onChange = { circleGroupInvites = it },
+                    onError = {
+                        fatalError = peopleFailureMessage(
+                            it,
+                            language,
+                            socialLabel(language, "Could not load group invitations.", "গ্রুপের আমন্ত্রণ লোড করা যায়নি।", "समूह आमंत्रण लोड नहीं हो सके।")
+                        )
+                    }
+                )
+            } catch (error: Exception) {
+                fatalError = peopleFailureMessage(
+                    error,
+                    language,
+                    socialLabel(language, "Could not load group invitations.", "গ্রুপের আমন্ত্রণ লোড করা যায়নি।", "समूह आमंत्रण लोड नहीं हो सके।")
+                )
+                null
+            }
+            onDispose {
+                groupsRegistration?.remove()
+                invitesRegistration?.remove()
+            }
+        }
+    }
+
+    DisposableEffect(uid, tab) {
         if (tab != PeopleTab.DISCOVER || uid.isBlank()) {
             onDispose { }
         } else {
@@ -550,7 +613,10 @@ internal fun PeopleScreen(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                PeopleTab.values().filterNot { circleMode && it == PeopleTab.DISCOVER }.forEach { item ->
+                PeopleTab.values().filterNot {
+                    (!circleMode && it == PeopleTab.GROUPS)
+                        || (circleMode && (it == PeopleTab.DISCOVER || (teenCircle && it != PeopleTab.GROUPS)))
+                }.forEach { item ->
                     FilterChip(
                         selected = tab == item,
                         onClick = { tab = item },
@@ -558,6 +624,7 @@ internal fun PeopleScreen(
                             Text(when (item) {
                                 PeopleTab.DISCOVER -> socialLabel(language, "Discover", "খুঁজুন", "खोजें")
                                 PeopleTab.CHATS -> socialLabel(language, "Chats", "চ্যাট", "चैट")
+                                PeopleTab.GROUPS -> socialLabel(language, "Groups", "গ্রুপ", "समूह")
                                 PeopleTab.REQUESTS -> socialLabel(language, "Requests", "অনুরোধ", "अनुरोध")
                                 PeopleTab.PROFILE -> socialLabel(language, "My profile", "আমার প্রোফাইল", "मेरी प्रोफ़ाइल")
                             })
@@ -850,6 +917,130 @@ internal fun PeopleScreen(
                         }
                     }
                 }
+                PeopleTab.GROUPS -> CircleGroupsContent(
+                    language = language,
+                    uid = uid,
+                    groups = circleGroups,
+                    invites = circleGroupInvites,
+                    busy = busy,
+                    onOpen = onOpenGroup,
+                    onCreate = { name ->
+                        busy = true
+                        scope.launch {
+                            try {
+                                repository.createCircleGroup(uid, name)
+                                notice = socialLabel(language, "Group created.", "গ্রুপ তৈরি হয়েছে।", "समूह बनाया गया।")
+                            } catch (error: Exception) {
+                                fatalError = peopleFailureMessage(
+                                    error,
+                                    language,
+                                    socialLabel(language, "Could not create the group.", "গ্রুপ তৈরি করা যায়নি।", "समूह नहीं बनाया जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    onInvite = { groupId, memberUid ->
+                        busy = true
+                        scope.launch {
+                            try {
+                                repository.inviteCircleGroupMember(uid, groupId, memberUid)
+                                notice = socialLabel(language, "Invitation sent. They must accept before joining.", "আমন্ত্রণ পাঠানো হয়েছে। যোগ দেওয়ার আগে তাদের গ্রহণ করতে হবে।", "आमंत्रण भेजा गया। जुड़ने से पहले उन्हें स्वीकार करना होगा।")
+                            } catch (error: Exception) {
+                                fatalError = peopleFailureMessage(
+                                    error,
+                                    language,
+                                    socialLabel(language, "Could not invite this account.", "এই অ্যাকাউন্টকে আমন্ত্রণ জানানো যায়নি।", "इस खाते को आमंत्रित नहीं किया जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    onAcceptInvite = { groupId ->
+                        busy = true
+                        scope.launch {
+                            try {
+                                repository.acceptCircleGroupInvite(uid, groupId)
+                                circleGroupInvites = circleGroupInvites.filterNot { it.first == groupId }
+                            } catch (error: Exception) {
+                                fatalError = peopleFailureMessage(
+                                    error,
+                                    language,
+                                    socialLabel(language, "Could not accept this invitation.", "এই আমন্ত্রণ গ্রহণ করা যায়নি।", "यह आमंत्रण स्वीकार नहीं किया जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    onRename = { groupId, name ->
+                        busy = true
+                        scope.launch {
+                            try {
+                                repository.renameCircleGroup(uid, groupId, name)
+                            } catch (error: Exception) {
+                                fatalError = peopleFailureMessage(
+                                    error,
+                                    language,
+                                    socialLabel(language, "Could not rename this group.", "গ্রুপের নাম বদলানো যায়নি।", "समूह का नाम नहीं बदला जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    onLeave = { groupId ->
+                        busy = true
+                        scope.launch {
+                            try {
+                                repository.leaveCircleGroup(uid, groupId)
+                                circleGroups = circleGroups.filterNot { it.id == groupId }
+                            } catch (error: Exception) {
+                                fatalError = peopleFailureMessage(
+                                    error,
+                                    language,
+                                    socialLabel(language, "Could not leave this group.", "গ্রুপ ছেড়ে যাওয়া যায়নি।", "समूह छोड़ा नहीं जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    onRemove = { groupId, memberUid ->
+                        busy = true
+                        scope.launch {
+                            try {
+                                repository.removeCircleGroupMember(uid, groupId, memberUid)
+                            } catch (error: Exception) {
+                                fatalError = peopleFailureMessage(
+                                    error,
+                                    language,
+                                    socialLabel(language, "Could not remove this member.", "সদস্যকে সরানো যায়নি।", "सदस्य को हटाया नहीं जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    onPromote = { groupId, memberUid ->
+                        busy = true
+                        scope.launch {
+                            try {
+                                repository.promoteCircleGroupAdmin(uid, groupId, memberUid)
+                            } catch (error: Exception) {
+                                fatalError = peopleFailureMessage(
+                                    error,
+                                    language,
+                                    socialLabel(language, "Could not make this member an admin.", "সদস্যকে অ্যাডমিন করা যায়নি।", "सदस्य को एडमिन नहीं बनाया जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    }
+                )
                 PeopleTab.REQUESTS -> when {
                     loadingRequests -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
@@ -1867,6 +2058,331 @@ private fun EmptyPeopleState(
         if (onProfile != null) {
             Spacer(Modifier.height(8.dp))
             Button(onClick = onProfile) { Text(onProfileLabel) }
+        }
+    }
+}
+
+@Composable
+private fun CircleGroupsContent(
+    language: AppLanguage,
+    uid: String,
+    groups: List<CircleGroup>,
+    invites: List<Pair<String, String>>,
+    busy: Boolean,
+    onOpen: (CircleGroup) -> Unit,
+    onCreate: (String) -> Unit,
+    onInvite: (String, String) -> Unit,
+    onAcceptInvite: (String) -> Unit,
+    onRename: (String, String) -> Unit,
+    onLeave: (String) -> Unit,
+    onRemove: (String, String) -> Unit,
+    onPromote: (String, String) -> Unit
+) {
+    var newGroupName by rememberSaveable(uid) { mutableStateOf("") }
+    var inviteTargets by remember(uid) { mutableStateOf(emptyMap<String, String>()) }
+    var renameDrafts by remember(uid) { mutableStateOf(emptyMap<String, String>()) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)
+    ) {
+        item {
+            Card {
+                Column(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        socialLabel(language, "Create a group", "গ্রুপ তৈরি করুন", "समूह बनाएँ"),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    OutlinedTextField(
+                        value = newGroupName,
+                        onValueChange = { newGroupName = it.take(80) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(socialLabel(language, "Group name", "গ্রুপের নাম", "समूह का नाम")) },
+                        singleLine = true,
+                        enabled = !busy
+                    )
+                    Button(
+                        onClick = {
+                            onCreate(newGroupName)
+                            newGroupName = ""
+                        },
+                        enabled = !busy && newGroupName.isNotBlank()
+                    ) {
+                        Text(socialLabel(language, "Create", "তৈরি করুন", "बनाएँ"))
+                    }
+                }
+            }
+        }
+        items(invites, key = { "invite:${it.first}" }) { (groupId, groupName) ->
+            Card {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        socialLabel(
+                            language,
+                            "Invitation to $groupName",
+                            "$groupName-এ আমন্ত্রণ",
+                            "$groupName का आमंत्रण"
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(onClick = { onAcceptInvite(groupId) }, enabled = !busy) {
+                        Text(socialLabel(language, "Accept", "গ্রহণ করুন", "स्वीकारें"))
+                    }
+                }
+            }
+        }
+        items(groups, key = { it.id }) { group ->
+            val isAdmin = uid in group.admins
+            Card {
+                Column(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(group.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        socialLabel(
+                            language,
+                            "${group.members.size}/32 members · ${group.lastMessage.ifBlank { "No messages yet" }}",
+                            "${group.members.size}/32 সদস্য · ${group.lastMessage.ifBlank { "এখনো বার্তা নেই" }}",
+                            "${group.members.size}/32 सदस्य · ${group.lastMessage.ifBlank { "अभी संदेश नहीं हैं" }}"
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(onClick = { onOpen(group) }, enabled = !busy) {
+                        Text(socialLabel(language, "Open group", "গ্রুপ খুলুন", "समूह खोलें"))
+                    }
+                    if (isAdmin) {
+                        OutlinedTextField(
+                            value = inviteTargets[group.id].orEmpty(),
+                            onValueChange = { inviteTargets = inviteTargets + (group.id to it.take(128)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(socialLabel(language, "Invite account UID", "অ্যাকাউন্ট UID আমন্ত্রণ", "खाता UID आमंत्रित करें")) },
+                            singleLine = true,
+                            enabled = !busy
+                        )
+                        TextButton(
+                            onClick = {
+                                onInvite(group.id, inviteTargets[group.id].orEmpty().trim())
+                                inviteTargets = inviteTargets - group.id
+                            },
+                            enabled = !busy && !inviteTargets[group.id].isNullOrBlank()
+                        ) {
+                            Text(socialLabel(language, "Invite (they must accept)", "আমন্ত্রণ (তাদের গ্রহণ করতে হবে)", "आमंत्रित करें (उन्हें स्वीकार करना होगा)"))
+                        }
+                        OutlinedTextField(
+                            value = renameDrafts[group.id] ?: group.name,
+                            onValueChange = { renameDrafts = renameDrafts + (group.id to it.take(80)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(socialLabel(language, "Rename group", "গ্রুপের নাম বদলান", "समूह का नाम बदलें")) },
+                            singleLine = true,
+                            enabled = !busy
+                        )
+                        TextButton(
+                            onClick = {
+                                onRename(group.id, renameDrafts[group.id] ?: group.name)
+                                renameDrafts = renameDrafts - group.id
+                            },
+                            enabled = !busy && !renameDrafts[group.id].isNullOrBlank()
+                        ) {
+                            Text(socialLabel(language, "Save name", "নাম সংরক্ষণ", "नाम सेव करें"))
+                        }
+                        group.members.filterNot { it == uid }.forEach { memberUid ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(memberUid, modifier = Modifier.weight(1f))
+                                if (memberUid !in group.admins) {
+                                    TextButton(
+                                        onClick = { onPromote(group.id, memberUid) },
+                                        enabled = !busy
+                                    ) {
+                                        Text(socialLabel(language, "Make admin", "অ্যাডমিন করুন", "एडमिन बनाएँ"))
+                                    }
+                                    TextButton(
+                                        onClick = { onRemove(group.id, memberUid) },
+                                        enabled = !busy
+                                    ) {
+                                        Text(
+                                            socialLabel(language, "Remove", "সরান", "हटाएँ"),
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    TextButton(onClick = { onLeave(group.id) }, enabled = !busy) {
+                        Text(
+                            socialLabel(language, "Leave group", "গ্রুপ ছাড়ুন", "समूह छोड़ें"),
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun CircleGroupChatScreen(
+    language: AppLanguage,
+    uid: String,
+    group: CircleGroup,
+    store: DostStore,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val repository = remember(context) { PeopleRepository(context) }
+    val scope = rememberCoroutineScope()
+    var messages by remember(group.id) { mutableStateOf(emptyList<SocialChatMessage>()) }
+    var draft by rememberSaveable(group.id) { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var muted by remember(group.id) {
+        mutableStateOf(store.isConversationMuted("circle:${group.id}"))
+    }
+
+    DisposableEffect(uid, group.id) {
+        val registration = try {
+            repository.listenCircleGroupMessages(
+                uid,
+                group.id,
+                onChange = { messages = it },
+                onError = {
+                    error = peopleFailureMessage(
+                        it,
+                        language,
+                        socialLabel(language, "Could not load group messages.", "গ্রুপের বার্তা লোড করা যায়নি।", "समूह संदेश लोड नहीं हो सके।")
+                    )
+                }
+            )
+        } catch (exception: Exception) {
+            error = peopleFailureMessage(
+                exception,
+                language,
+                socialLabel(language, "Could not load group messages.", "গ্রুপের বার্তা লোড করা যায়নি।", "समूह संदेश लोड नहीं हो सके।")
+            )
+            null
+        }
+        onDispose { registration?.remove() }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(group.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            socialLabel(
+                                language,
+                                "${group.members.size} members",
+                                "${group.members.size} জন সদস্য",
+                                "${group.members.size} सदस्य"
+                            ),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                },
+                navigationIcon = { DostBackButton(language, onBack) },
+                actions = {
+                    TextButton(onClick = {
+                        muted = !muted
+                        store.setConversationMuted("circle:${group.id}", muted)
+                    }) {
+                        Text(socialLabel(language, if (muted) "Unmute" else "Mute", if (muted) "চালু" else "নীরব", if (muted) "अनम्यूट" else "म्यूट"))
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (error.isNotBlank()) {
+                Text(
+                    error,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)
+            ) {
+                items(messages, key = { it.id }) { message ->
+                    Surface(
+                        color = if (message.senderUid == uid) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                            Text(
+                                if (message.senderUid == uid) {
+                                    socialLabel(language, "You", "আপনি", "आप")
+                                } else {
+                                    message.senderUid.take(12)
+                                },
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(message.text)
+                        }
+                    }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it.take(2_000) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text(socialLabel(language, "Message", "বার্তা", "संदेश")) },
+                    enabled = !busy
+                )
+                IconButton(
+                    onClick = {
+                        val text = draft.trim()
+                        if (text.isBlank() || busy) return@IconButton
+                        busy = true
+                        error = ""
+                        val messageId = UUID.randomUUID().toString()
+                        scope.launch {
+                            try {
+                                repository.sendCircleGroupMessage(uid, group.id, text, messageId)
+                                draft = ""
+                            } catch (exception: Exception) {
+                                error = peopleFailureMessage(
+                                    exception,
+                                    language,
+                                    socialLabel(language, "Could not send this message.", "বার্তা পাঠানো যায়নি।", "संदेश नहीं भेजा जा सका।")
+                                )
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    enabled = draft.isNotBlank() && !busy
+                ) {
+                    Icon(
+                        Icons.Filled.Send,
+                        contentDescription = socialLabel(language, "Send message", "বার্তা পাঠান", "संदेश भेजें")
+                    )
+                }
+            }
         }
     }
 }

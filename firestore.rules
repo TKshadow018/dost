@@ -408,9 +408,10 @@ service cloud.firestore {
         && inviteeUid.size() <= 128
         && !(inviteeUid in group.members)
         && neitherBlocked(request.auth.uid, inviteeUid)
-        && data.keys().hasAll(['groupId', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
-        && data.keys().hasOnly(['groupId', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.keys().hasAll(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.keys().hasOnly(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
         && data.groupId == groupId
+        && data.groupName == group.name
         && data.inviteeUid == inviteeUid
         && data.invitedBy == request.auth.uid
         && data.status == 'pending'
@@ -429,16 +430,47 @@ service cloud.firestore {
         && data.acceptedAt == request.time;
     }
 
+    function validCircleGroupInviteReissue(groupId, inviteeUid) {
+      let group = get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
+      let oldInvite = resource.data;
+      let data = request.resource.data;
+      return circleGroupMember(group)
+        && request.auth.uid in group.admins
+        && inviteeUid is string
+        && !(inviteeUid in group.members)
+        && oldInvite.groupId == groupId
+        && oldInvite.inviteeUid == inviteeUid
+        && oldInvite.status == 'accepted'
+        && neitherBlocked(request.auth.uid, inviteeUid)
+        && data.keys().hasAll(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.keys().hasOnly(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt'])
+        && data.groupId == groupId
+        && data.groupName == group.name
+        && data.inviteeUid == inviteeUid
+        && data.invitedBy == request.auth.uid
+        && data.status == 'pending'
+        && data.createdAt == request.time;
+    }
+
     function validCircleGroupUpdate(groupId) {
       let oldData = resource.data;
       let newData = request.resource.data;
       let changed = newData.diff(oldData).affectedKeys();
       let admin = circleGroupMember(oldData) && request.auth.uid in oldData.admins;
       let leaving = circleGroupMember(oldData)
-        && oldData.members.size() > 1
         && oldData.members.toSet().difference([request.auth.uid].toSet()) == newData.members.toSet()
         && oldData.admins.toSet().difference([request.auth.uid].toSet()) == newData.admins.toSet()
+        && (newData.members.size() == 0 || newData.admins.size() > 0)
         && changed.hasOnly(['members', 'admins', 'updatedAt'])
+        && newData.updatedAt == request.time;
+      let removingMember = admin
+        && oldData.members.size() > 1
+        && newData.members.size() == oldData.members.size() - 1
+        && oldData.members.hasAll(newData.members)
+        && newData.members.hasAll(oldData.admins)
+        && request.auth.uid in newData.members
+        && newData.admins == oldData.admins
+        && changed.hasOnly(['members', 'updatedAt'])
         && newData.updatedAt == request.time;
       let acceptingInvite = newData.members.size() == oldData.members.size() + 1
         && request.auth.uid in newData.members
@@ -447,12 +479,21 @@ service cloud.firestore {
         && newData.admins == oldData.admins
         && changed.hasOnly(['members', 'updatedAt'])
         && newData.updatedAt == request.time
+        && exists(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid))
+        && get(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid)).data.status == 'pending'
         && existsAfter(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid))
         && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)/invites/$(request.auth.uid)).data.status == 'accepted';
       let renamed = changed.hasOnly(['name', 'updatedAt'])
         && newData.name is string
         && newData.name.size() >= 1
         && newData.name.size() <= 80
+        && newData.updatedAt == request.time;
+      let promotingAdmin = admin
+        && newData.members == oldData.members
+        && newData.admins.size() == oldData.admins.size() + 1
+        && newData.admins.hasAll(oldData.admins)
+        && newData.members.hasAll(newData.admins)
+        && changed.hasOnly(['admins', 'updatedAt'])
         && newData.updatedAt == request.time;
       let sending = changed.hasOnly([
           'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
@@ -475,13 +516,17 @@ service cloud.firestore {
       return (circleGroupMember(oldData) || acceptingInvite)
         && newData.members is list
         && newData.members.size() <= 32
+        && newData.members.toSet().size() == newData.members.size()
+        && newData.admins is list
+        && newData.admins.size() <= newData.members.size()
+        && newData.admins.toSet().size() == newData.admins.size()
         && newData.createdBy == oldData.createdBy
         && newData.createdAt == oldData.createdAt
         && newData.diff(oldData).affectedKeys().hasOnly([
           'members', 'admins', 'name', 'updatedAt',
           'lastMessage', 'lastMessageSenderUid', 'lastMessageAt', 'lastMessageId'
         ])
-        && (leaving || (admin && renamed) || acceptingInvite || sending);
+        && (leaving || removingMember || (admin && (renamed || promotingAdmin)) || acceptingInvite || sending);
     }
 
     match /publicProfiles/{uid} {
@@ -711,9 +756,12 @@ service cloud.firestore {
         allow get: if circleEligible()
           && (request.auth.uid == inviteeUid
             || (circleGroupMember(parentGroup()) && request.auth.uid in parentGroup().admins));
-        allow list: if circleGroupMember(parentGroup()) && request.auth.uid in parentGroup().admins;
+        allow list: if circleEligible()
+          && (resource.data.inviteeUid == request.auth.uid
+            || (circleGroupMember(parentGroup()) && request.auth.uid in parentGroup().admins));
         allow create: if validCircleGroupInviteCreate(groupId, inviteeUid);
-        allow update: if validCircleGroupInviteAccept(groupId, inviteeUid);
+        allow update: if validCircleGroupInviteAccept(groupId, inviteeUid)
+          || validCircleGroupInviteReissue(groupId, inviteeUid);
         allow delete: if false;
       }
 
