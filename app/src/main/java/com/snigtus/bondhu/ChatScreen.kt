@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.*
 import androidx.compose.ui.unit.*
 import com.snigtus.dost.ui.theme.DostTheme
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.*
 
 @Composable
@@ -113,6 +114,9 @@ internal fun ChatScreen(
     }
     var showFriendInfo by remember { mutableStateOf(false) }
     var showTeenSessionReminder by remember { mutableStateOf(false) }
+    var aiFriendBlocked by remember(friend.id) { mutableStateOf(store.isAiFriendBlocked(friend.id)) }
+    var showAiReportDialog by remember(friend.id) { mutableStateOf(false) }
+    var aiReportReason by remember(friend.id) { mutableStateOf("") }
     val displayedMessages = remember(messages, searchQuery, dismissedChatNoticeId) {
         messages.filter { message ->
             (!isChatNotice(message) || message.category == ERROR_MESSAGE_CATEGORY) &&
@@ -122,7 +126,7 @@ internal fun ChatScreen(
         }
     }
     val friendAgeBlocked = friendAgeResult(friend.age) != AccountAgeResult.VALID
-    val profileBlocked = friend.profilePending || friendAgeBlocked
+    val profileBlocked = friend.profilePending || friendAgeBlocked || aiFriendBlocked
     val userAge = store.userAge()
     LaunchedEffect(friend.id, userAge) {
         if (ageCohortForAge(userAge.toIntOrNull() ?: 0) == DostAgeCohort.TEEN) {
@@ -260,6 +264,34 @@ internal fun ChatScreen(
                                 onClick = { showChatMenu = false; onOpenMemories() }
                             )
                             DropdownMenuItem(text = { Text(LocalizedText.SESSION_SUMMARIES.resolve(language)) }, onClick = { showChatMenu = false; sessionSummaries = store.loadSessionSummaries(friend.id).takeLast(10).reversed(); showSessionSummaries = true })
+                            DropdownMenuItem(
+                                text = {
+                                    Text(chatLabel(language, "Report AI chat", "AI চ্যাট রিপোর্ট করুন", "AI चैट की रिपोर्ट करें"))
+                                },
+                                onClick = {
+                                    showChatMenu = false
+                                    aiReportReason = ""
+                                    showAiReportDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        chatLabel(
+                                            language,
+                                            if (aiFriendBlocked) "Unblock character" else "Block character",
+                                            if (aiFriendBlocked) "চরিত্র আনব্লক করুন" else "চরিত্র ব্লক করুন",
+                                            if (aiFriendBlocked) "पात्र को अनब्लॉक करें" else "पात्र को ब्लॉक करें"
+                                        )
+                                    )
+                                },
+                                onClick = {
+                                    showChatMenu = false
+                                    val blocked = !aiFriendBlocked
+                                    aiFriendBlocked = blocked
+                                    ConversationManager.setAiFriendBlocked(friend.id, blocked)
+                                }
+                            )
                             DropdownMenuItem(text = { Text(LocalizedText.MINIMIZE_CHAT.resolve(language)) }, onClick = { showChatMenu = false; onFloatingChat() })
                         }
                     }
@@ -490,6 +522,18 @@ internal fun ChatScreen(
                     )
                 }
             }
+            if (aiFriendBlocked) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Text(
+                        chatLabel(language, "This AI character is blocked. Unblock it from chat options to continue.", "এই AI চরিত্রটি ব্লক করা হয়েছে। চালিয়ে যেতে চ্যাটের বিকল্প থেকে আনব্লক করুন।", "यह AI पात्र ब्लॉक है। जारी रखने के लिए चैट विकल्पों में इसे अनब्लॉक करें।"),
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
             if (friend.profilePending) {
                 ProfileCreationNotice(language, profileGenerating, profileError, onRetryProfile, onUseBasicProfile)
             }
@@ -638,8 +682,52 @@ internal fun ChatScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showTeenSessionReminder = false }) {
+                TextButton(onClick = {
+                    showTeenSessionReminder = false
+                    onBack()
+                }) {
                     Text(chatLabel(language, "Take a break", "বিরতি নিন", "विराम लें"))
+                }
+            }
+        )
+    }
+    if (showAiReportDialog) {
+        AlertDialog(
+            onDismissRequest = { showAiReportDialog = false },
+            title = { Text(chatLabel(language, "Report AI chat", "AI চ্যাট রিপোর্ট করুন", "AI चैट की रिपोर्ट करें")) },
+            text = {
+                OutlinedTextField(
+                    value = aiReportReason,
+                    onValueChange = { aiReportReason = it.take(500) },
+                    label = { Text(chatLabel(language, "What should we review?", "কী পর্যালোচনা করা উচিত?", "हमें क्या समीक्षा करनी चाहिए?")) },
+                    minLines = 3
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = aiReportReason.trim().length >= 3,
+                    onClick = {
+                        showAiReportDialog = false
+                        val uid = FirebaseAuth.getInstance().currentUser?.uid
+                        if (uid == null) {
+                            error = chatLabel(language, "Sign in again to submit a report.", "রিপোর্ট পাঠাতে আবার সাইন ইন করুন।", "रिपोर्ट भेजने के लिए फिर से साइन इन करें।")
+                        } else {
+                            coroutineScope.launch {
+                                try {
+                                    PeopleRepository(context).reportAiCharacter(uid, friend.id, aiReportReason)
+                                    aiReportReason = ""
+                                    snackbarHostState.showSnackbar(chatLabel(language, "Report submitted for priority review.", "রিপোর্টটি অগ্রাধিকার পর্যালোচনার জন্য পাঠানো হয়েছে।", "रिपोर्ट प्राथमिकता समीक्षा के लिए भेजी गई।"))
+                                } catch (exception: Exception) {
+                                    error = peopleFailureMessage(exception, language, chatLabel(language, "Could not submit the report.", "রিপোর্ট পাঠানো যায়নি।", "रिपोर्ट नहीं भेजी जा सकी।"))
+                                }
+                            }
+                        }
+                    }
+                ) { Text(chatLabel(language, "Send report", "রিপোর্ট পাঠান", "रिपोर्ट भेजें")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAiReportDialog = false }) {
+                    Text(LocalizedText.CANCEL.resolve(language))
                 }
             }
         )

@@ -262,11 +262,16 @@ async function createSecureOrg(
   });
 }
 
-function circleGroup({ members = ["alice"], admins = ["alice"], name = "Friends" } = {}) {
+function circleGroup({
+  members = ["alice"],
+  admins = ["alice"],
+  name = "Friends",
+  creatorUid = "alice",
+} = {}) {
   return {
     members,
     admins,
-    createdBy: "alice",
+    createdBy: creatorUid,
     name,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -325,8 +330,29 @@ test("Shield remains unavailable until its server-controlled flag is enabled", a
   }));
 });
 
-async function addSecureOrgMember(actorUid, orgId, targetUid, role = "member", actorClaims = {}) {
+async function addSecureOrgMember(
+  actorUid,
+  orgId,
+  targetUid,
+  role = "member",
+  actorClaims = {},
+  targetAgeCohort = "adult",
+) {
   const firestore = secureUser(actorUid, actorClaims);
+  const inviteRef = doc(firestore, `secureOrgs/${orgId}/invites/${targetUid}`);
+  await assertSucceeds(setDoc(inviteRef, {
+    inviteeUid: targetUid,
+    displayName: targetUid,
+    invitedBy: actorUid,
+    status: "pending",
+    createdAt: serverTimestamp(),
+  }));
+  const invitee = user(targetUid, { dostAgeCohort: targetAgeCohort });
+  await assertSucceeds(updateDoc(doc(invitee, `secureOrgs/${orgId}/invites/${targetUid}`), {
+    status: "accepted",
+    acceptedAgeCohort: targetAgeCohort,
+    acceptedAt: serverTimestamp(),
+  }));
   const eventId = `evt-${targetUid}-${++secureAuditSequence}`;
   const organization = await getDoc(doc(firestore, `secureOrgs/${orgId}`));
   const memberCount = organization.get("memberCount");
@@ -647,7 +673,11 @@ test("a downgraded Shield org can remove members until it reaches its new seat c
 
 test("Shield permits 13+ members without granting them an owner plan", async () => {
   await createSecureOrg("secure-teen", "alice");
-  await assertSucceeds(addSecureOrgMember("alice", "secure-teen", "teen"));
+  await assertFails(setDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-teen/members/teen",
+  ), secureMember("teen", "alice", "member")));
+  await assertSucceeds(addSecureOrgMember("alice", "secure-teen", "teen", "member", {}, "teen"));
   const teen = secureUser("teen", {
     dostAgeEligible: false,
     dostAgeEligibleUntil: 1,
@@ -662,6 +692,62 @@ test("Shield permits 13+ members without granting them an owner plan", async () 
     text: "Invited teen members can participate.",
     createdAt: serverTimestamp(),
   }));
+});
+
+test("Shield group and direct blocks immediately restrict reads and sends", async () => {
+  await createSecureOrg("secure-blocks", "alice");
+  await addSecureOrgMember("alice", "secure-blocks", "bob");
+  await assertSucceeds(setDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-blocks/groupChats/main/blockedUsers/bob",
+  ), {
+    blockedUid: "bob",
+    blockedByUid: "alice",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(
+    secureUser("bob"),
+    "secureOrgs/secure-blocks/groupChats/main",
+  )));
+  await assertFails(setDoc(doc(
+    secureUser("bob"),
+    "secureOrgs/secure-blocks/groupChats/main/messages/blocked",
+  ), {
+    senderUid: "bob",
+    text: "This must be blocked.",
+    createdAt: serverTimestamp(),
+  }));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "secureOrgs/secure-blocks/directChats/alice-bob"), {
+      members: ["alice", "bob"],
+      createdBy: "alice",
+      createdAt: new Date(),
+    });
+  });
+  await assertSucceeds(setDoc(doc(user("alice"), "peopleBlocks/alice/blockedUsers/bob"), {
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(
+    secureUser("bob"),
+    "secureOrgs/secure-blocks/directChats/alice-bob",
+  )));
+  await assertFails(getDoc(doc(
+    secureUser("alice"),
+    "secureOrgs/secure-blocks/directChats/alice-bob",
+  )));
+  await assertFails(setDoc(doc(
+    secureUser("bob"),
+    "secureOrgs/secure-blocks/directChats/alice-bob/messages/blocked",
+  ), {
+    senderUid: "bob",
+    text: "This must be blocked.",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDocs(collection(
+    secureUser("alice"),
+    "secureOrgs/secure-blocks/directChats/alice-bob/messages",
+  )));
 });
 
 test("Shield messaging is allowed during the 14-day grace period and read-only afterward", async () => {
@@ -723,6 +809,67 @@ test("a user can create a private profile but cannot read another private profil
     setDoc(doc(user("alice"), "publicProfiles/alice"), profile({ isPublic: false })),
   );
   await assertFails(getDoc(doc(user("bob"), "publicProfiles/alice")));
+});
+
+test("teen Circle privacy defaults keep handles, presence, and photos private", async () => {
+  const teen = user("teen", { dostAgeCohort: "teen" });
+  await assertSucceeds(setDoc(doc(teen, "circleProfiles/teen"), {
+    uid: "teen",
+    ageCohort: "teen",
+    handleLookupEnabled: false,
+    lastSeenVisibility: "nobody",
+    onlineVisibility: "nobody",
+    photoVisibility: "contacts",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(teen, "circleProfiles/teen"), {
+    uid: "teen",
+    ageCohort: "teen",
+    handleLookupEnabled: true,
+    lastSeenVisibility: "contacts",
+    onlineVisibility: "contacts",
+    photoVisibility: "contacts",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(teen, "circleHandles/teen-handle"), {
+    ownerUid: "teen",
+    createdAt: serverTimestamp(),
+  }));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const firestore = context.firestore();
+    await setDoc(doc(firestore, "circleHandles/teen-handle"), { ownerUid: "teen" });
+    await setDoc(doc(firestore, "circlePresence/teen"), {
+      lastSeenAt: serverTimestamp(),
+      online: true,
+      updatedAt: serverTimestamp(),
+    });
+    await setDoc(doc(firestore, "circleProfilePhotos/teen"), {
+      photoUrl: "https://example.invalid/photo",
+      updatedAt: serverTimestamp(),
+    });
+    await setDoc(doc(firestore, "circleContacts/teen/contacts/alice"), { status: "accepted" });
+    await setDoc(doc(firestore, "circleContacts/alice/contacts/teen"), { status: "accepted" });
+  });
+  await assertSucceeds(getDoc(doc(teen, "circleProfiles/teen")));
+  await assertSucceeds(getDoc(doc(teen, "circlePresence/teen")));
+  await assertSucceeds(getDoc(doc(teen, "circleProfilePhotos/teen")));
+  await assertSucceeds(getDoc(doc(user("alice"), "circleProfilePhotos/teen")));
+  await assertFails(getDoc(doc(user("alice"), "circleProfiles/teen")));
+  await assertFails(getDoc(doc(user("alice"), "circleHandles/teen-handle")));
+  await assertFails(getDoc(doc(user("alice"), "circlePresence/teen")));
+  await assertFails(getDoc(doc(user("mallory"), "circleProfilePhotos/teen")));
+
+  await assertSucceeds(setDoc(doc(teen, "circleProfiles/teen"), {
+    uid: "teen",
+    ageCohort: "teen",
+    handleLookupEnabled: true,
+    lastSeenVisibility: "nobody",
+    onlineVisibility: "nobody",
+    photoVisibility: "contacts",
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(user("alice"), "circleHandles/teen-handle")));
 });
 
 test("People data requires an unexpired server age-eligibility claim", async () => {
@@ -948,6 +1095,10 @@ test("message push tokens are private and writable only by their owner", async (
     updatedAt: serverTimestamp(),
     text: "must not be stored in a push token",
   }));
+  await assertSucceeds(setDoc(doc(user("teen", { dostAgeCohort: "teen" }), "peopleMessageTokens/teen/devices/device-1"), {
+    token: "fcm-registration-token".padEnd(64, "t"),
+    updatedAt: serverTimestamp(),
+  }));
 });
 
 test("creating a chat requires two adult public profiles and exact snapshots", async () => {
@@ -1154,6 +1305,7 @@ test("a recipient can report a pending contact request but an outsider cannot", 
     targetUid: "alice",
     contactRequestId: "alice",
     reason: "Inappropriate contact request",
+    priorityReview: true,
     createdAt: serverTimestamp(),
   };
   await assertSucceeds(setDoc(doc(user("bob"), "peopleReports/request-report"), report));
@@ -1269,6 +1421,15 @@ test("Circle group creation is private and group membership is capped", async ()
   await assertSucceeds(
     setDoc(doc(user("alice"), "circleGroups/friends"), circleGroup()),
   );
+  const teen = user("teen", { dostAgeCohort: "teen" });
+  await assertSucceeds(setDoc(doc(teen, "circleGroups/teen-friends"), circleGroup({
+    members: ["teen"],
+    admins: ["teen"],
+    creatorUid: "teen",
+  })));
+  await assertSucceeds(setDoc(doc(teen, "peopleBlocks/teen/blockedUsers/alice"), {
+    createdAt: serverTimestamp(),
+  }));
   await assertFails(
     getDoc(doc(user("mallory"), "circleGroups/friends")),
   );
@@ -1278,6 +1439,26 @@ test("Circle group creation is private and group membership is capped", async ()
       admins: ["alice"],
     })),
   );
+});
+
+test("blocking a Circle group member immediately denies group access and messages", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "circleGroups/friends"), circleGroup({
+      members: ["alice", "bob"],
+    }));
+  });
+  await assertSucceeds(setDoc(doc(user("alice"), "circleGroups/friends/blockedUsers/bob"), {
+    blockedUid: "bob",
+    blockedByUid: "alice",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(user("bob"), "circleGroups/friends")));
+  await assertFails(getDocs(collection(user("bob"), "circleGroups/friends/messages")));
+  await assertFails(setDoc(doc(user("bob"), "circleGroups/friends/blockedUsers/alice"), {
+    blockedUid: "alice",
+    blockedByUid: "bob",
+    createdAt: serverTimestamp(),
+  }));
 });
 
 test("Circle group invites require admin authority and invitee acceptance", async () => {
@@ -1664,6 +1845,10 @@ test("blocking either participant prevents both from sending new messages", asyn
     }),
   );
 
+  await assertFails(getDoc(doc(user("alice"), "peopleChats/alice-bob")));
+  await assertFails(getDoc(doc(user("bob"), "peopleChats/alice-bob")));
+  await assertFails(getDocs(collection(user("alice"), "peopleChats/alice-bob/messages")));
+  await assertFails(getDocs(collection(user("bob"), "peopleChats/alice-bob/messages")));
   await assertFails(sendChatMessage("alice", "blocked-1", "Hello", { alice: 0, bob: 1 }));
   await assertFails(sendChatMessage("bob", "blocked-2", "Hello", { alice: 1, bob: 0 }));
 });
@@ -1675,10 +1860,15 @@ test("reports can only be submitted by a participant about the other chat partic
     targetUid: "bob",
     conversationId: "alice-bob",
     reason: "Inappropriate messages",
+    priorityReview: true,
     createdAt: serverTimestamp(),
   };
 
   await assertSucceeds(setDoc(doc(user("alice"), "peopleReports/report-1"), report));
+  await assertFails(setDoc(doc(user("alice"), "peopleReports/unprioritized-report"), {
+    ...report,
+    priorityReview: false,
+  }));
   await assertFails(
     setDoc(doc(user("mallory"), "peopleReports/report-2"), {
       ...report,
@@ -1701,6 +1891,7 @@ test("public profile reports require public adult profiles and a single profile 
     targetUid: "bob",
     profileUid: "bob",
     reason: "Profile impersonation",
+    priorityReview: true,
     createdAt: serverTimestamp(),
   };
   await assertSucceeds(
@@ -1732,6 +1923,87 @@ test("public profile reports require public adult profiles and a single profile 
       conversationId: "alice-bob",
     }),
   );
+});
+
+test("teen reports for Explore AI, Circle, Shield, and Cipher are priority-labelled", async () => {
+  const teen = user("teen", { dostAgeCohort: "teen" });
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "circleGroups/teen-group"), circleGroup({
+      members: ["teen", "bob"],
+      admins: ["teen"],
+      creatorUid: "teen",
+    }));
+  });
+  await assertSucceeds(setDoc(doc(teen, "safetyReports/ai-report"), {
+    reporterUid: "teen",
+    surface: "explore_ai",
+    targetId: "friend-1",
+    reason: "Unsafe AI reply",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(teen, "safetyReports/unprioritized-ai-report"), {
+    reporterUid: "teen",
+    surface: "explore_ai",
+    targetId: "friend-1",
+    reason: "Unsafe AI reply",
+    priorityReview: false,
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(teen, "safetyReports/circle-report"), {
+    reporterUid: "teen",
+    surface: "circle_group",
+    groupId: "teen-group",
+    targetId: "bob",
+    reason: "Harassing messages",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(user("mallory"), "safetyReports/outsider-report"), {
+    reporterUid: "mallory",
+    surface: "circle_group",
+    groupId: "teen-group",
+    targetId: "bob",
+    reason: "Harassing messages",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
+
+  await setSecureFeatureEnabled(true);
+  await createSecureOrg("secure-reports", "alice");
+  await addSecureOrgMember("alice", "secure-reports", "teen", "member", {}, "teen");
+  await assertSucceeds(setDoc(doc(teen, "safetyReports/shield-report"), {
+    reporterUid: "teen",
+    surface: "shield",
+    organizationId: "secure-reports",
+    targetId: "alice",
+    reason: "Inappropriate group messages",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(user("alice"), "safetyReports/about-teen-report"), {
+    reporterUid: "alice",
+    surface: "shield",
+    organizationId: "secure-reports",
+    targetId: "teen",
+    reason: "Safety concern",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
+
+  await setCipherFeatureEnabled(true);
+  await seedCircleChat();
+  await seedCipherChat();
+  const cipherTeen = user("alice", { dostAgeCohort: "teen" });
+  await assertSucceeds(setDoc(doc(cipherTeen, "safetyReports/cipher-report"), {
+    reporterUid: "alice",
+    surface: "cipher",
+    conversationId: "circle-chat",
+    targetId: "bob",
+    reason: "Threatening Cipher messages",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
 });
 
 test("Cipher chat creation requires its server claim and default-off feature flag", async () => {
@@ -1796,4 +2068,23 @@ test("Cipher chats are restricted to source Circle members and ciphertext-only m
       ct: "A".repeat(2689),
     }),
   );
+});
+
+test("blocking a Cipher participant denies chat access but still permits a safety report", async () => {
+  await setCipherFeatureEnabled(true);
+  await seedCircleChat();
+  await seedCipherChat();
+  await assertSucceeds(setDoc(doc(user("alice"), "peopleBlocks/alice/blockedUsers/bob"), {
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(user("alice"), "cipherChats/circle-chat")));
+  await assertSucceeds(setDoc(doc(user("alice"), "safetyReports/cipher-after-block"), {
+    reporterUid: "alice",
+    surface: "cipher",
+    conversationId: "circle-chat",
+    targetId: "bob",
+    reason: "I need to report this person.",
+    priorityReview: true,
+    createdAt: serverTimestamp(),
+  }));
 });

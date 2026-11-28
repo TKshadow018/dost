@@ -322,6 +322,16 @@ class DostStore(context: Context, requestedProfileNamespace: String? = null) {
     fun markChatNoticeDismissed(friendId: String, messageId: String) {
         preferences.edit().putString("dismissed_chat_notice_$friendId", messageId).apply()
     }
+    fun isAiFriendBlocked(friendId: String): Boolean =
+        friendId in preferences.getStringSet("blocked_ai_friend_ids", emptySet()).orEmpty()
+    fun setAiFriendBlocked(friendId: String, blocked: Boolean) {
+        require(friendId.isNotBlank())
+        val ids = preferences.getStringSet("blocked_ai_friend_ids", emptySet())
+            .orEmpty()
+            .toMutableSet()
+        if (blocked) ids += friendId else ids -= friendId
+        preferences.edit().putStringSet("blocked_ai_friend_ids", ids).apply()
+    }
     fun saveOpenRouterApiKey(apiKey: String) {
         if (apiKey.isBlank()) {
             preferences.edit().remove("openrouter_key_encrypted").apply()

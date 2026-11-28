@@ -2245,6 +2245,9 @@ internal fun CircleGroupChatScreen(
     var draft by rememberSaveable(group.id) { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var safetyAction by remember { mutableStateOf("") }
+    var safetyTargetUid by remember { mutableStateOf("") }
+    var reportReason by rememberSaveable(group.id) { mutableStateOf("") }
     var muted by remember(group.id) {
         mutableStateOf(store.isConversationMuted("circle:${group.id}"))
     }
@@ -2394,6 +2397,22 @@ internal fun CircleGroupChatScreen(
                                 showChatSettings = false
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text(socialLabel(language, "Report a member", "সদস্যকে রিপোর্ট করুন", "सदस्य की रिपोर्ट करें")) },
+                            onClick = {
+                                showChatSettings = false
+                                safetyAction = "report"
+                                safetyTargetUid = ""
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(socialLabel(language, "Block a member", "সদস্যকে ব্লক করুন", "सदस्य को ब्लॉक करें")) },
+                            onClick = {
+                                showChatSettings = false
+                                safetyAction = "block"
+                                safetyTargetUid = ""
+                            }
+                        )
                     }
                     TextButton(onClick = {
                         muted = !muted
@@ -2464,6 +2483,119 @@ internal fun CircleGroupChatScreen(
                         }
                     }
                 }
+            }
+
+            if (safetyAction.isNotBlank() && safetyTargetUid.isBlank()) {
+                AlertDialog(
+                        onDismissRequest = { safetyAction = "" },
+                        title = {
+                            Text(
+                                socialLabel(
+                                    language,
+                                    if (safetyAction == "report") "Choose a member to report" else "Choose a member to block",
+                                    if (safetyAction == "report") "রিপোর্ট করার সদস্য বেছে নিন" else "ব্লক করার সদস্য বেছে নিন",
+                                    if (safetyAction == "report") "रिपोर्ट करने के लिए सदस्य चुनें" else "ब्लॉक करने के लिए सदस्य चुनें"
+                                )
+                            )
+                        },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                group.members.filterNot { it == uid }.forEach { memberUid ->
+                                    TextButton(
+                                        onClick = {
+                                            safetyTargetUid = memberUid
+                                            if (safetyAction == "block") safetyAction = "confirm_block"
+                                            else safetyAction = "confirm_report"
+                                        }
+                                    ) {
+                                        Text(memberUid.take(32))
+                                    }
+                                }
+                                if (group.members.none { it != uid }) {
+                                    Text(socialLabel(language, "There are no other members.", "অন্য কোনো সদস্য নেই।", "कोई अन्य सदस्य नहीं है।"))
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { safetyAction = "" }) {
+                                Text(LocalizedText.CANCEL.resolve(language))
+                            }
+                        }
+                )
+            }
+
+            if (safetyAction == "confirm_report") {
+                AlertDialog(
+                        onDismissRequest = { safetyAction = "" },
+                        title = { Text(socialLabel(language, "Report this member", "এই সদস্যকে রিপোর্ট করুন", "इस सदस्य की रिपोर्ट करें")) },
+                        text = {
+                            OutlinedTextField(
+                                value = reportReason,
+                                onValueChange = { reportReason = it.take(500) },
+                                label = { Text(socialLabel(language, "What happened?", "কী ঘটেছে?", "क्या हुआ?")) },
+                                minLines = 3
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = reportReason.trim().length >= 3 && !busy,
+                                onClick = {
+                                    busy = true
+                                    scope.launch {
+                                        try {
+                                            repository.reportCircleGroupMember(uid, group.id, safetyTargetUid, reportReason)
+                                            reportReason = ""
+                                            safetyAction = ""
+                                            error = socialLabel(language, "Report submitted for priority review.", "রিপোর্টটি অগ্রাধিকার পর্যালোচনার জন্য পাঠানো হয়েছে।", "रिपोर्ट प्राथमिकता समीक्षा के लिए भेजी गई।")
+                                        } catch (exception: Exception) {
+                                            error = peopleFailureMessage(exception, language, socialLabel(language, "Could not submit the report.", "রিপোর্ট পাঠানো যায়নি।", "रिपोर्ट नहीं भेजी जा सकी।"))
+                                        } finally {
+                                            busy = false
+                                        }
+                                    }
+                                }
+                            ) { Text(socialLabel(language, "Send report", "রিপোর্ট পাঠান", "रिपोर्ट भेजें")) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { safetyAction = "" }) {
+                                Text(LocalizedText.CANCEL.resolve(language))
+                            }
+                        }
+                )
+            }
+
+            if (safetyAction == "confirm_block") {
+                AlertDialog(
+                        onDismissRequest = { if (!busy) safetyAction = "" },
+                        title = { Text(socialLabel(language, "Block this member?", "এই সদস্যকে ব্লক করবেন?", "इस सदस्य को ब्लॉक करें?")) },
+                        text = {
+                            Text(socialLabel(language, "They will no longer be able to open or send messages in this group.", "তারা আর এই গ্রুপ খুলতে বা বার্তা পাঠাতে পারবে না।", "वे अब इस समूह को खोल या संदेश नहीं भेज पाएँगे।"))
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = !busy,
+                                onClick = {
+                                    busy = true
+                                    scope.launch {
+                                        try {
+                                            repository.blockCircleGroupMember(uid, group.id, safetyTargetUid)
+                                            safetyAction = ""
+                                            error = socialLabel(language, "Member blocked in this group.", "এই গ্রুপে সদস্যকে ব্লক করা হয়েছে।", "इस समूह में सदस्य ब्लॉक है।")
+                                        } catch (exception: Exception) {
+                                            error = peopleFailureMessage(exception, language, socialLabel(language, "Could not block this member.", "সদস্যকে ব্লক করা যায়নি।", "सदस्य को ब्लॉक नहीं किया जा सका।"))
+                                        } finally {
+                                            busy = false
+                                        }
+                                    }
+                                }
+                            ) { Text(socialLabel(language, "Block", "ব্লক", "ब्लॉक"), color = MaterialTheme.colorScheme.error) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { safetyAction = "" }) {
+                                Text(LocalizedText.CANCEL.resolve(language))
+                            }
+                        }
+                )
             }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),

@@ -1292,6 +1292,20 @@ internal class PeopleRepository(context: Context) {
             .set(mapOf("createdAt" to FieldValue.serverTimestamp())).await()
     }
 
+    suspend fun blockCircleGroupMember(uid: String, groupId: String, peerUid: String) {
+        requireSignedIn(uid)
+        require(groupId.isNotBlank() && peerUid.isNotBlank() && peerUid != uid)
+        database().collection(CIRCLE_GROUPS).document(groupId)
+            .collection("blockedUsers").document(peerUid)
+            .set(
+                mapOf(
+                    "blockedUid" to peerUid,
+                    "blockedByUid" to uid,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+    }
+
     suspend fun reportUser(uid: String, peerUid: String, conversationId: String, reason: String) {
         val trimmed = validatedReportReason(uid, peerUid, reason)
         database().collection(REPORTS).add(mapOf(
@@ -1299,6 +1313,7 @@ internal class PeopleRepository(context: Context) {
             "targetUid" to peerUid,
             "conversationId" to conversationId,
             "reason" to trimmed,
+            "priorityReview" to true,
             "createdAt" to FieldValue.serverTimestamp()
         )).await()
     }
@@ -1310,6 +1325,7 @@ internal class PeopleRepository(context: Context) {
             "targetUid" to peerUid,
             "contactRequestId" to peerUid,
             "reason" to trimmed,
+            "priorityReview" to true,
             "createdAt" to FieldValue.serverTimestamp()
         )).await()
     }
@@ -1321,6 +1337,49 @@ internal class PeopleRepository(context: Context) {
             "targetUid" to peerUid,
             "profileUid" to peerUid,
             "reason" to trimmed,
+            "priorityReview" to true,
+            "createdAt" to FieldValue.serverTimestamp()
+        )).await()
+    }
+
+    suspend fun reportCircleGroupMember(uid: String, groupId: String, peerUid: String, reason: String) {
+        val trimmed = validatedReportReason(uid, peerUid, reason)
+        require(groupId.isNotBlank())
+        database().collection(SAFETY_REPORTS).add(mapOf(
+            "reporterUid" to uid,
+            "surface" to "circle_group",
+            "groupId" to groupId,
+            "targetId" to peerUid,
+            "reason" to trimmed,
+            "priorityReview" to true,
+            "createdAt" to FieldValue.serverTimestamp()
+        )).await()
+    }
+
+    suspend fun reportAiCharacter(uid: String, friendId: String, reason: String) {
+        requireSignedIn(uid)
+        val trimmed = reason.trim()
+        require(friendId.isNotBlank() && friendId.length <= 128 && trimmed.length in 3..500)
+        database().collection(SAFETY_REPORTS).add(mapOf(
+            "reporterUid" to uid,
+            "surface" to "explore_ai",
+            "targetId" to friendId,
+            "reason" to trimmed,
+            "priorityReview" to true,
+            "createdAt" to FieldValue.serverTimestamp()
+        )).await()
+    }
+
+    suspend fun reportCipherMember(uid: String, chatId: String, peerUid: String, reason: String) {
+        val trimmed = validatedReportReason(uid, peerUid, reason)
+        require(chatId.isNotBlank())
+        database().collection(SAFETY_REPORTS).add(mapOf(
+            "reporterUid" to uid,
+            "surface" to "cipher",
+            "conversationId" to chatId,
+            "targetId" to peerUid,
+            "reason" to trimmed,
+            "priorityReview" to true,
             "createdAt" to FieldValue.serverTimestamp()
         )).await()
     }
@@ -1511,6 +1570,7 @@ internal class PeopleRepository(context: Context) {
         const val BLOCKS = "peopleBlocks"
         const val BLOCKED_USERS = "blockedUsers"
         const val REPORTS = "peopleReports"
+        const val SAFETY_REPORTS = "safetyReports"
         const val CONTACT_REQUESTS = "peopleContactRequests"
         const val INCOMING_REQUESTS = "incoming"
         const val CONTACT_APPROVALS = "peopleContactApprovals"

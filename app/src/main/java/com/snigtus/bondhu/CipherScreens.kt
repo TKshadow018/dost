@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.view.WindowManager
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +25,8 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -76,6 +79,10 @@ internal fun CipherScreen(
     var busy by remember { mutableStateOf(false) }
     var showDisclosure by remember { mutableStateOf(false) }
     var shareConfirmed by remember { mutableStateOf(false) }
+    var showSafetyMenu by remember { mutableStateOf(false) }
+    var showReportDialog by remember { mutableStateOf(false) }
+    var showBlockConfirmation by remember { mutableStateOf(false) }
+    var reportReason by remember(conversation.id) { mutableStateOf("") }
 
     fun lock() {
         messageKey?.fill(0)
@@ -159,6 +166,28 @@ internal fun CipherScreen(
                 title = { Text("Cipher · ${conversation.peer.displayName}") },
                 navigationIcon = { DostBackButton(language, onBack) },
                 actions = {
+                    Box {
+                        TextButton(onClick = { showSafetyMenu = true }) {
+                            Text(cipherText(language, "Safety"))
+                        }
+                        DropdownMenu(expanded = showSafetyMenu, onDismissRequest = { showSafetyMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(cipherText(language, "Report this person")) },
+                                onClick = {
+                                    showSafetyMenu = false
+                                    reportReason = ""
+                                    showReportDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(cipherText(language, "Block this person")) },
+                                onClick = {
+                                    showSafetyMenu = false
+                                    showBlockConfirmation = true
+                                }
+                            )
+                        }
+                    }
                     if (chat != null && messageKey != null) {
                         TextButton(onClick = { lock() }) {
                             Icon(Icons.Filled.Lock, contentDescription = null)
@@ -385,6 +414,86 @@ internal fun CipherScreen(
             confirmButton = {
                 TextButton(onClick = { showDisclosure = false }) {
                     Text(cipherText(language, "Close"))
+                }
+            }
+        )
+    }
+
+    if (showReportDialog) {
+        AlertDialog(
+            onDismissRequest = { showReportDialog = false },
+            title = { Text(cipherText(language, "Report this person")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(cipherText(language, "Messages are never attached. Reports from or about teens receive priority review."))
+                    OutlinedTextField(
+                        value = reportReason,
+                        onValueChange = { reportReason = it.take(500) },
+                        label = { Text(cipherText(language, "What happened?")) },
+                        minLines = 3
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = reportReason.trim().length >= 3 && !busy,
+                    onClick = {
+                        showReportDialog = false
+                        busy = true
+                        scope.launch {
+                            try {
+                                PeopleRepository(context).reportCipherMember(
+                                    uid,
+                                    conversation.id,
+                                    conversation.peer.uid,
+                                    reportReason
+                                )
+                                reportReason = ""
+                                error = cipherText(language, "Report submitted for priority review.")
+                            } catch (exception: Exception) {
+                                error = exception.message ?: cipherText(language, "Could not submit the report.")
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    }
+                ) { Text(cipherText(language, "Send report")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReportDialog = false }) {
+                    Text(cipherText(language, "Cancel"))
+                }
+            }
+        )
+    }
+
+    if (showBlockConfirmation) {
+        AlertDialog(
+            onDismissRequest = { if (!busy) showBlockConfirmation = false },
+            title = { Text(cipherText(language, "Block this person?")) },
+            text = { Text(cipherText(language, "They will no longer be able to access this Cipher chat or send messages in the linked Circle chat.")) },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        showBlockConfirmation = false
+                        busy = true
+                        scope.launch {
+                            try {
+                                PeopleRepository(context).blockUser(uid, conversation.peer.uid)
+                                onBack()
+                            } catch (exception: Exception) {
+                                error = exception.message ?: cipherText(language, "Could not block this person.")
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    }
+                ) { Text(cipherText(language, "Block")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBlockConfirmation = false }) {
+                    Text(cipherText(language, "Cancel"))
                 }
             }
         )
