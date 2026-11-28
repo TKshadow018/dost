@@ -1528,6 +1528,39 @@ test("Circle group messages require membership and an atomic group summary updat
   );
 });
 
+test("Circle group invitees can list pending invites with a collection-group query", async () => {
+  await createCircleGroup();
+  await assertSucceeds(
+    setDoc(doc(user("alice"), "circleGroups/friends/invites/teen"), {
+      groupId: "friends",
+      groupName: "Friends",
+      inviteeUid: "teen",
+      invitedBy: "alice",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    }),
+  );
+  const teen = user("teen", { dostAgeCohort: "teen" });
+  const pending = await assertSucceeds(getDocs(query(
+    collectionGroup(teen, "invites"),
+    where("inviteeUid", "==", "teen"),
+    where("status", "==", "pending"),
+  )));
+  assert.equal(pending.size, 1);
+  assert.equal(pending.docs[0].get("groupId"), "friends");
+  await assertSucceeds(getDoc(doc(teen, "circleGroups/friends/invites/teen")));
+  await assertFails(getDocs(query(
+    collectionGroup(user("mallory"), "invites"),
+    where("inviteeUid", "==", "teen"),
+    where("status", "==", "pending"),
+  )));
+  await assertFails(getDocs(query(
+    collectionGroup(user("alice"), "invites"),
+    where("inviteeUid", "==", "teen"),
+    where("status", "==", "pending"),
+  )));
+});
+
 test("only a participant can send a correctly attributed bounded message", async () => {
   await seedChat();
   await assertSucceeds(sendChatMessage("alice", "message-1", "Hello", { alice: 0, bob: 1 }));

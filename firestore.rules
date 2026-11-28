@@ -788,6 +788,17 @@ service cloud.firestore {
       }
     }
 
+    match /{path=**}/invites/{inviteeUid} {
+      allow get: if circleEligible()
+        && request.auth.uid == resource.data.inviteeUid
+        && resource.data.inviteeUid == inviteeUid
+        && resource.data.keys().hasAll(['groupId', 'groupName', 'inviteeUid', 'invitedBy', 'status', 'createdAt']);
+      allow list: if circleEligible()
+        && request.auth.uid == resource.data.inviteeUid
+        && resource.data.status == 'pending';
+      allow create, update, delete: if false;
+    }
+
     match /peopleContactRequests/{recipientUid}/incoming/{senderUid} {
       allow get: if ageEligible()
         && (request.auth.uid == recipientUid || request.auth.uid == senderUid)
