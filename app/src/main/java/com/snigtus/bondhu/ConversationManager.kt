@@ -142,7 +142,7 @@ object ConversationManager {
         }
 
     fun send(friend: Friend, text: String, language: AppLanguage, imagePath: String = "", sendImmediately: Boolean = false) {
-        if (!store.exploreEnabled()) return
+        if (!store.exploreEnabled() || store.isAiFriendBlocked(friend.id)) return
         if (text.isBlank() && imagePath.isBlank()) return
         if (friend.profilePending || !isValidAiFriend(friend)) return
         val requestGeneration = dataImportGeneration
@@ -196,6 +196,7 @@ object ConversationManager {
                     "You are currently at ${busyRoutine.reason.ifBlank { friend.busyReason }}. Reply now and, only if natural, briefly mention why you are busy."
                 } else ""
                 val answer = requestReply(friend, sessionId, language, ephemeralInstruction = busyInstruction)
+                if (store.isAiFriendBlocked(friend.id)) return@launch
                 if (!withCurrentImportGeneration(requestGeneration) {
                     if (answer.parseFailed) {
                         appendAssistant(friend.id, unreadableReply(language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
@@ -217,8 +218,10 @@ object ConversationManager {
                     return@launch
                 }
             } catch (error: Throwable) {
-                withCurrentImportGeneration(requestGeneration) {
-                    appendAssistant(friend.id, failureReply(error, language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
+                if (!store.isAiFriendBlocked(friend.id)) {
+                    withCurrentImportGeneration(requestGeneration) {
+                        appendAssistant(friend.id, failureReply(error, language), modelId = selectedModel, category = ERROR_MESSAGE_CATEGORY)
+                    }
                 }
             } finally {
                 withCurrentImportGeneration(requestGeneration) {
@@ -255,6 +258,14 @@ object ConversationManager {
         if (activeFriendId == friendId) activeFriendId = null
     }
 
+    fun setAiFriendBlocked(friendId: String, blocked: Boolean) {
+        store.setAiFriendBlocked(friendId, blocked)
+        if (!blocked) return
+        synchronized(sendGuard(friendId)) { outboundQueue.clear(friendId) }
+        waitingForScheduleState.update { it - friendId }
+        if (::appContext.isInitialized) ConversationWorkScheduler.cancelAllForFriend(appContext, friendId)
+    }
+
     fun removeFriend(friendId: String) {
         // Delete images first while we still have the message list, then clear state.
         messagesFor(friendId).forEach { message ->
@@ -272,7 +283,7 @@ object ConversationManager {
     }
 
     fun refreshBusyReply(friend: Friend) {
-        if (!isValidAiFriend(friend)) return
+        if (store.isAiFriendBlocked(friend.id) || !isValidAiFriend(friend)) return
         if (store.hasScheduledReply(friend.id)) {
             val sessionId = store.currentSessionId(friend.id)
             if (sessionId != null) ConversationWorkScheduler.scheduleBusyReply(appContext, friend, sessionId, store.language())
@@ -286,6 +297,7 @@ object ConversationManager {
     }
 
     fun resumeFriendProactive(friendId: String) {
+        if (store.isAiFriendBlocked(friendId)) return
         store.resumeProactive(friendId)
         store.loadFriends().firstOrNull { it.id == friendId }?.let {
             if (!isValidAiFriend(it)) return@let
@@ -298,6 +310,13 @@ object ConversationManager {
         if (!::store.isInitialized || !::appContext.isInitialized) return
         store.loadFriends().forEach { friend ->
             if (!store.exploreEnabled()) {
+                ConversationWorkScheduler.cancelAllForFriend(appContext, friend.id)
+                store.setScheduledReply(friend.id, false)
+                waitingForScheduleState.update { it - friend.id }
+                sendingState.update { it - friend.id }
+                return@forEach
+            }
+            if (store.isAiFriendBlocked(friend.id)) {
                 ConversationWorkScheduler.cancelAllForFriend(appContext, friend.id)
                 store.setScheduledReply(friend.id, false)
                 waitingForScheduleState.update { it - friend.id }
@@ -324,7 +343,7 @@ object ConversationManager {
     }
 
     private fun refreshScheduledFollowUp(friend: Friend) {
-        if (!isValidAiFriend(friend) || !store.proactiveEnabled() || store.isProactivePaused(friend.id)) return
+        if (store.isAiFriendBlocked(friend.id) || !isValidAiFriend(friend) || !store.proactiveEnabled() || store.isProactivePaused(friend.id)) return
         val followUp = store.loadProactiveMessages(friend.id)
             .filter {
                 it.trigger == ProactiveTrigger.FOLLOW_UP &&
@@ -345,7 +364,7 @@ object ConversationManager {
     }
 
     private fun scheduleInactivityQuestion(friend: Friend, language: AppLanguage, sessionId: String, delayMillis: Long = store.automaticFollowUpMinutes() * 60_000L) {
-        if (!isValidAiFriend(friend)) return
+        if (store.isAiFriendBlocked(friend.id) || !isValidAiFriend(friend)) return
         val latestUserMessage = messagesFor(friend.id).lastOrNull { it.sessionId == sessionId && it.role == "user" } ?: return
         ConversationWorkScheduler.scheduleCheckIn(appContext, friend, sessionId, language, delayMillis, latestUserMessage.timestampMillis)
     }
@@ -433,6 +452,7 @@ object ConversationManager {
     private fun typingDelayMillis(): Long = 700L + java.util.concurrent.ThreadLocalRandom.current().nextLong(1_300L)
 
     fun regenerateReply(friend: Friend, language: AppLanguage) {
+        if (store.isAiFriendBlocked(friend.id)) return
         val requestGeneration = dataImportGeneration
         lateinit var sessionId: String
         synchronized(dataImportGuard) {
@@ -453,6 +473,7 @@ object ConversationManager {
             try {
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, sessionId, language)
+                if (store.isAiFriendBlocked(friend.id)) return@launch
                 if (!withCurrentImportGeneration(requestGeneration) {
                     if (answer.parseFailed) {
                         appendAssistant(friend.id, unreadableReply(language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
@@ -468,8 +489,10 @@ object ConversationManager {
                     return@launch
                 }
             } catch (error: Throwable) {
-                withCurrentImportGeneration(requestGeneration) {
-                    appendAssistant(friend.id, failureReply(error, language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                if (!store.isAiFriendBlocked(friend.id)) {
+                    withCurrentImportGeneration(requestGeneration) {
+                        appendAssistant(friend.id, failureReply(error, language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                    }
                 }
             } finally {
                 withCurrentImportGeneration(requestGeneration) {
@@ -481,8 +504,9 @@ object ConversationManager {
 
     private suspend fun requestReply(friend: Friend, sessionId: String, language: AppLanguage, forceFollowUp: Boolean = false, seedMessage: ChatMessage? = null, ephemeralInstruction: String = ""): AiReply {
         check(store.exploreEnabled()) { "Explore mode is turned off." }
+        check(!store.isAiFriendBlocked(friend.id)) { "This AI character is blocked." }
         val client = OpenRouterClient(
-            requestAllowed = { store.exploreEnabled() },
+            requestAllowed = { store.exploreEnabled() && !store.isAiFriendBlocked(friend.id) },
             authTokenProvider = { FirebaseAuthRepository(appContext).currentIdToken() }
         )
         val selectedModel = store.aiModel()
@@ -543,6 +567,7 @@ object ConversationManager {
         sendImmediately: Boolean = false,
         proactiveMessageId: String? = null
     ): Boolean {
+        if (store.isAiFriendBlocked(friendId)) return true
         val requestGeneration = dataImportGeneration
         val proactiveMessage = proactiveMessageId?.takeIf { it.isNotBlank() }?.let(store::proactiveMessage)
         if (proactiveMessage != null && messagesFor(friendId).any { it.messageId == proactiveMessage.idempotencyKey }) return true
@@ -580,6 +605,10 @@ object ConversationManager {
                 "You are currently at ${busyRoutine.reason.ifBlank { friend.busyReason }}. Reply now and, only if natural, briefly mention why you are busy."
             } else ""
             val answer = requestReply(friend, sessionId, language, forceFollowUp, ephemeralInstruction = busyInstruction)
+            if (store.isAiFriendBlocked(friendId)) {
+                store.setScheduledReply(friendId, false)
+                return true
+            }
             withCurrentImportGeneration(requestGeneration) {
                 if (forceFollowUp && (!store.proactiveEnabled() || store.isProactivePaused(friendId))) {
                     store.setScheduledReply(friendId, false)
@@ -742,6 +771,7 @@ object ConversationManager {
             val answer = runCatching {
                 requestReply(friend, plan.sessionId, language, forceFollowUp = false, ephemeralInstruction = plan.instruction)
             }.getOrNull() ?: return true
+            if (store.isAiFriendBlocked(friendId)) return true
             val response = listOf(
                 answer.text,
                 answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }?.let(::limitToSingleQuestion).orEmpty()
@@ -769,6 +799,7 @@ object ConversationManager {
     }
 
     suspend fun runUserReminder(friendId: String, proactiveMessageId: String, language: AppLanguage): Boolean {
+        if (store.isAiFriendBlocked(friendId)) return true
         val requestGeneration = dataImportGeneration
         val proactiveMessage = store.proactiveMessage(proactiveMessageId) ?: return true
         val event = store.loadPlannedEvents(friendId).firstOrNull { it.id == proactiveMessage.eventId }
@@ -794,6 +825,7 @@ object ConversationManager {
                 "$certainty Be warm and brief, and do not imply that you personally attended or witnessed it."
             val sessionId = store.currentSessionId(friendId) ?: proactiveMessage.sessionId
             val answer = requestReply(friend, sessionId, language, forceFollowUp = true, ephemeralInstruction = instruction)
+            if (store.isAiFriendBlocked(friendId)) return true
             if (answer.parseFailed) return false
             val response = listOf(answer.text, answer.followUpQuestion.takeIf { answer.followUpDelayMinutes == null }
                 ?.let(::limitToSingleQuestion).orEmpty()).filter { it.isNotBlank() }.joinToString("\n\n")
@@ -831,6 +863,12 @@ object ConversationManager {
             if (requestGeneration != dataImportGeneration) return
             synchronized(sendGuard(friendId)) {
                 jobs.remove(friendId)
+                if (store.isAiFriendBlocked(friendId)) {
+                    outboundQueue.clear(friendId)
+                    sendingState.update { it - friendId }
+                    waitingForScheduleState.update { it - friendId }
+                    return
+                }
                 val queued = outboundQueue.takeReady(friendId)
                 if (queued.isEmpty()) {
                     sendingState.update { it - friendId }
@@ -869,6 +907,7 @@ object ConversationManager {
                 ConversationWorkScheduler.cancelCheckIn(appContext, friend.id)
                 delay(typingDelayMillis())
                 val answer = requestReply(friend, pending.sessionId, pending.language)
+                if (store.isAiFriendBlocked(friend.id)) return@launch
                 if (!withCurrentImportGeneration(requestGeneration) {
                     if (answer.parseFailed) {
                         appendAssistant(friend.id, unreadableReply(pending.language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
@@ -890,8 +929,10 @@ object ConversationManager {
                     return@launch
                 }
             } catch (error: Throwable) {
-                withCurrentImportGeneration(requestGeneration) {
-                    appendAssistant(friend.id, failureReply(error, pending.language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                if (!store.isAiFriendBlocked(friend.id)) {
+                    withCurrentImportGeneration(requestGeneration) {
+                        appendAssistant(friend.id, failureReply(error, pending.language), modelId = store.aiModel(), category = ERROR_MESSAGE_CATEGORY)
+                    }
                 }
             } finally {
                 withCurrentImportGeneration(requestGeneration) {

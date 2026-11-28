@@ -29,6 +29,17 @@ service cloud.firestore {
       return hasProfile(uid) && profile(uid).isPublic == true;
     }
 
+    function circleContactPath(ownerUid, contactUid) {
+      return /databases/$(database)/documents/circleContacts/$(ownerUid)/contacts/$(contactUid);
+    }
+
+    function mutualCircleContacts(firstUid, secondUid) {
+      return exists(circleContactPath(firstUid, secondUid))
+        && exists(circleContactPath(secondUid, firstUid))
+        && get(circleContactPath(firstUid, secondUid)).data.status == 'accepted'
+        && get(circleContactPath(secondUid, firstUid)).data.status == 'accepted';
+    }
+
     function sameAgeCohort(firstUid, secondUid) {
       return hasProfile(firstUid)
         && hasProfile(secondUid)
@@ -42,6 +53,10 @@ service cloud.firestore {
     function neitherBlocked(firstUid, secondUid) {
       return !exists(blockPath(firstUid, secondUid))
         && !exists(blockPath(secondUid, firstUid));
+    }
+
+    function circleGroupBlockedPath(groupId, uid) {
+      return /databases/$(database)/documents/circleGroups/$(groupId)/blockedUsers/$(uid);
     }
 
     function cipherFeatureEnabled() {
@@ -97,7 +112,7 @@ service cloud.firestore {
         && neitherBlocked(members[0], members[1]);
     }
 
-    function cipherMember(chatData) {
+    function cipherParticipant(chatData) {
       let members = chatData.members;
       return cipherFeatureEnabled()
         && cipherAgeEligible()
@@ -105,7 +120,12 @@ service cloud.firestore {
         && members.size() == 2
         && request.auth.uid in members
         && exists(cipherSourceChatPath(chatData.sourceCircleChatId))
-        && get(cipherSourceChatPath(chatData.sourceCircleChatId)).data.members == members
+        && get(cipherSourceChatPath(chatData.sourceCircleChatId)).data.members == members;
+    }
+
+    function cipherMember(chatData) {
+      let members = chatData.members;
+      return cipherParticipant(chatData)
         && neitherBlocked(members[0], members[1]);
     }
 
@@ -371,6 +391,83 @@ service cloud.firestore {
         && request.auth.uid in groupData.members;
     }
 
+    function circleGroupCanAccess(groupId, groupData) {
+      return circleGroupMember(groupData)
+        && !exists(circleGroupBlockedPath(groupId, request.auth.uid));
+    }
+
+    function validSafetyReport(data) {
+      let baseValid = circleEligible()
+        && data.keys().hasAll([
+          'reporterUid', 'surface', 'targetId', 'reason', 'priorityReview', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'reporterUid', 'surface', 'targetId', 'reason', 'priorityReview', 'createdAt',
+          'groupId', 'conversationId', 'organizationId'
+        ])
+        && data.reporterUid == request.auth.uid
+        && data.targetId is string
+        && data.targetId != request.auth.uid
+        && data.targetId.size() > 0
+        && data.targetId.size() <= 128
+        && data.reason is string
+        && data.reason.size() >= 3
+        && data.reason.size() <= 500
+        && data.priorityReview == true
+        && data.createdAt == request.time;
+      return baseValid
+        && (
+          (data.surface == 'circle_group'
+            && data.keys().hasAll(['groupId'])
+            && !data.keys().hasAny(['conversationId', 'organizationId'])
+            && exists(/databases/$(database)/documents/circleGroups/$(data.groupId))
+            && circleGroupMember(get(/databases/$(database)/documents/circleGroups/$(data.groupId)).data)
+            && data.targetId in get(/databases/$(database)/documents/circleGroups/$(data.groupId)).data.members)
+          || (data.surface == 'explore_ai'
+            && !data.keys().hasAny(['groupId', 'conversationId', 'organizationId']))
+          || (data.surface == 'cipher'
+            && data.keys().hasAll(['conversationId'])
+            && !data.keys().hasAny(['groupId', 'organizationId'])
+            && exists(/databases/$(database)/documents/cipherChats/$(data.conversationId))
+            && cipherParticipant(get(/databases/$(database)/documents/cipherChats/$(data.conversationId)).data)
+            && data.targetId in get(/databases/$(database)/documents/cipherChats/$(data.conversationId)).data.members
+            && data.targetId != request.auth.uid)
+          || (data.surface == 'shield'
+            && data.keys().hasAll(['organizationId'])
+            && !data.keys().hasAny(['groupId', 'conversationId'])
+            && exists(/databases/$(database)/documents/secureOrgs/$(data.organizationId)/members/$(request.auth.uid))
+            && get(/databases/$(database)/documents/secureOrgs/$(data.organizationId)/members/$(request.auth.uid)).data.status == 'active'
+            && exists(/databases/$(database)/documents/secureOrgs/$(data.organizationId)/members/$(data.targetId))
+            && get(/databases/$(database)/documents/secureOrgs/$(data.organizationId)/members/$(data.targetId)).data.status == 'active'
+            && data.targetId != request.auth.uid)
+        );
+    }
+
+    function validCirclePrivacyProfile(uid, requireLookupOff) {
+      let data = request.resource.data;
+      return circleEligible()
+        && request.auth.uid == uid
+        && data.keys().hasAll([
+          'uid', 'ageCohort', 'handleLookupEnabled', 'lastSeenVisibility',
+          'onlineVisibility', 'photoVisibility', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'ageCohort', 'handleLookupEnabled', 'lastSeenVisibility',
+          'onlineVisibility', 'photoVisibility', 'updatedAt'
+        ])
+        && data.uid == uid
+        && data.ageCohort == request.auth.token.dostAgeCohort
+        && data.handleLookupEnabled is bool
+        && data.lastSeenVisibility in ['contacts', 'nobody']
+        && data.onlineVisibility in ['contacts', 'nobody']
+        && data.photoVisibility == 'contacts'
+        && data.updatedAt == request.time
+        && (request.auth.token.dostAgeCohort != 'teen'
+          || (!requireLookupOff || data.handleLookupEnabled == false)
+            && data.lastSeenVisibility == 'nobody'
+            && data.onlineVisibility == 'nobody'));
+    }
+
     function validCircleGroupCreate() {
       let data = request.resource.data;
       return circleEligible()
@@ -551,6 +648,67 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == uid;
     }
 
+    match /circleProfiles/{uid} {
+      allow get: if circleEligible() && request.auth.uid == uid;
+      allow list: if false;
+      allow create: if validCirclePrivacyProfile(uid, true);
+      allow update: if resource.data.uid == uid && validCirclePrivacyProfile(uid, false);
+      allow delete: if circleEligible() && request.auth.uid == uid;
+    }
+
+    match /circleHandles/{handle} {
+      function profileForOwner(ownerUid) {
+        return exists(/databases/$(database)/documents/circleProfiles/$(ownerUid))
+          ? get(/databases/$(database)/documents/circleProfiles/$(ownerUid)).data
+          : null;
+      }
+
+      allow get: if circleEligible()
+        && resource.data.ownerUid is string
+        && (resource.data.ownerUid == request.auth.uid
+          || (profileForOwner(resource.data.ownerUid) is map
+            && (profileForOwner(resource.data.ownerUid).ageCohort != 'teen'
+              || profileForOwner(resource.data.ownerUid).handleLookupEnabled == true)));
+      allow list: if false;
+      allow create: if circleEligible()
+        && request.resource.data.keys().hasAll(['ownerUid', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['ownerUid', 'createdAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && exists(/databases/$(database)/documents/circleProfiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/circleProfiles/$(request.auth.uid)).data.uid == request.auth.uid
+        && (get(/databases/$(database)/documents/circleProfiles/$(request.auth.uid)).data.ageCohort != 'teen'
+          || get(/databases/$(database)/documents/circleProfiles/$(request.auth.uid)).data.handleLookupEnabled == true)
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /circlePresence/{uid} {
+      allow get: if circleEligible()
+        && (request.auth.uid == uid
+          || (mutualCircleContacts(uid, request.auth.uid)
+            && get(/databases/$(database)/documents/circleProfiles/$(uid)).data.onlineVisibility == 'contacts'
+            && get(/databases/$(database)/documents/circleProfiles/$(uid)).data.lastSeenVisibility == 'contacts'));
+      allow list: if false;
+      allow create, update: if circleEligible()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['lastSeenAt', 'online', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if circleEligible() && request.auth.uid == uid;
+    }
+
+    match /circleProfilePhotos/{uid} {
+      allow get: if circleEligible()
+        && (request.auth.uid == uid
+          || (mutualCircleContacts(uid, request.auth.uid)
+            && get(/databases/$(database)/documents/circleProfiles/$(uid)).data.photoVisibility == 'contacts'));
+      allow list: if false;
+      allow create, update: if circleEligible()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['photoUrl', 'updatedAt'])
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if circleEligible() && request.auth.uid == uid;
+    }
+
     match /peopleChats/{chatId} {
       function callDocumentPath(callId) {
         return /databases/$(database)/documents/peopleChats/$(chatId)/calls/$(callId);
@@ -667,7 +825,10 @@ service cloud.firestore {
       }
 
       allow create: if validNewChat(chatId);
-      allow get, list: if ageEligible() && isAdultChat(resource.data) && isMember(resource.data);
+      allow get, list: if ageEligible()
+        && isAdultChat(resource.data)
+        && isMember(resource.data)
+        && neitherBlocked(request.auth.uid, otherMember(resource.data.members));
       allow update: if ageEligible() && isAdultChat(resource.data) && isMember(resource.data)
         && neitherBlocked(request.auth.uid, otherMember(resource.data.members))
         && request.resource.data.members == resource.data.members
@@ -686,7 +847,10 @@ service cloud.firestore {
           return get(parentChatPath()).data;
         }
 
-        allow get, list: if ageEligible() && isAdultChat(parentChat()) && isMember(parentChat());
+        allow get, list: if ageEligible()
+          && isAdultChat(parentChat())
+          && isMember(parentChat())
+          && neitherBlocked(request.auth.uid, otherMember(parentChat().members));
         allow create: if ageEligible()
           && isAdultChat(parentChat())
           && isMember(parentChat())
@@ -744,9 +908,28 @@ service cloud.firestore {
 
     match /circleGroups/{groupId} {
       allow create: if validCircleGroupCreate();
-      allow get, list: if circleGroupMember(resource.data);
-      allow update: if validCircleGroupUpdate(groupId);
+      allow get, list: if circleGroupCanAccess(groupId, resource.data);
+      allow update: if !exists(circleGroupBlockedPath(groupId, request.auth.uid))
+        && validCircleGroupUpdate(groupId);
       allow delete: if false;
+
+      match /blockedUsers/{blockedUid} {
+        function parentGroup() {
+          return get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
+        }
+
+        allow get, list: if circleGroupMember(parentGroup());
+        allow create: if circleGroupMember(parentGroup())
+          && blockedUid is string
+          && blockedUid != request.auth.uid
+          && blockedUid in parentGroup().members
+          && request.resource.data.keys().hasAll(['blockedUid', 'blockedByUid', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['blockedUid', 'blockedByUid', 'createdAt'])
+          && request.resource.data.blockedUid == blockedUid
+          && request.resource.data.blockedByUid == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
 
       match /invites/{inviteeUid} {
         function parentGroup() {
@@ -770,9 +953,9 @@ service cloud.firestore {
           return get(/databases/$(database)/documents/circleGroups/$(groupId)).data;
         }
 
-        allow get, list: if circleGroupMember(parentGroup());
+        allow get, list: if circleGroupCanAccess(groupId, parentGroup());
         allow create: if circleEligible()
-          && circleGroupMember(parentGroup())
+          && circleGroupCanAccess(groupId, parentGroup())
           && request.resource.data.keys().hasAll(['senderUid', 'text', 'createdAt'])
           && request.resource.data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
           && request.resource.data.senderUid == request.auth.uid
@@ -783,7 +966,8 @@ service cloud.firestore {
           && existsAfter(/databases/$(database)/documents/circleGroups/$(groupId))
           && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessageId == messageId
           && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessage == request.resource.data.text
-          && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessageSenderUid == request.auth.uid;
+          && getAfter(/databases/$(database)/documents/circleGroups/$(groupId)).data.lastMessageSenderUid == request.auth.uid
+          && !exists(circleGroupBlockedPath(groupId, request.auth.uid));
         allow update, delete: if false;
       }
     }
@@ -825,8 +1009,8 @@ service cloud.firestore {
     }
 
     match /peopleBlocks/{ownerUid}/blockedUsers/{blockedUid} {
-      allow get, list: if ageEligible() && request.auth.uid == ownerUid;
-      allow create, update: if ageEligible()
+      allow get, list: if circleEligible() && request.auth.uid == ownerUid;
+      allow create, update: if circleEligible()
         && request.auth.uid == ownerUid
         && ownerUid != blockedUid
         && request.resource.data.keys().hasOnly(['createdAt'])
@@ -861,12 +1045,13 @@ service cloud.firestore {
     }
 
     match /peopleReports/{reportId} {
-      allow create: if ageEligible()
+      allow create: if circleEligible()
         && request.resource.data.keys().hasAll([
-          'reporterUid', 'targetUid', 'reason', 'createdAt'
+          'reporterUid', 'targetUid', 'reason', 'priorityReview', 'createdAt'
         ])
         && request.resource.data.keys().hasOnly([
-          'reporterUid', 'targetUid', 'conversationId', 'contactRequestId', 'profileUid', 'reason', 'createdAt'
+          'reporterUid', 'targetUid', 'conversationId', 'contactRequestId', 'profileUid',
+          'reason', 'priorityReview', 'createdAt'
         ])
         && request.resource.data.reporterUid == request.auth.uid
         && request.resource.data.targetUid is string
@@ -874,6 +1059,7 @@ service cloud.firestore {
         && request.resource.data.reason is string
         && request.resource.data.reason.size() >= 3
         && request.resource.data.reason.size() <= 500
+        && request.resource.data.priorityReview == true
         && request.resource.data.createdAt == request.time
         && (
           (request.resource.data.keys().hasAny(['conversationId'])
@@ -901,6 +1087,11 @@ service cloud.firestore {
             && profileIsPublic(request.auth.uid)
             && profile(request.auth.uid).ageCohort == 'adult')
         );
+      allow get, list, update, delete: if false;
+    }
+
+    match /safetyReports/{reportId} {
+      allow create: if validSafetyReport(request.resource.data);
       allow get, list, update, delete: if false;
     }
 
@@ -994,6 +1185,21 @@ service cloud.firestore {
         return /databases/$(database)/documents/secureOrgs/$(orgId)/members/$(uid);
       }
 
+      function invitePath(uid) {
+        return /databases/$(database)/documents/secureOrgs/$(orgId)/invites/$(uid);
+      }
+
+      function acceptedInvite(uid) {
+        return exists(invitePath(uid))
+          && get(invitePath(uid)).data.inviteeUid == uid
+          && get(invitePath(uid)).data.status == 'accepted'
+          && get(invitePath(uid)).data.acceptedAgeCohort in ['teen', 'adult'];
+      }
+
+      function shieldGroupBlockPath(uid) {
+        return /databases/$(database)/documents/secureOrgs/$(orgId)/groupChats/main/blockedUsers/$(uid);
+      }
+
       function auditPath(auditId) {
         return /databases/$(database)/documents/secureOrgs/$(orgId)/auditLog/$(auditId);
       }
@@ -1030,6 +1236,10 @@ service cloud.firestore {
 
       function isMember() {
         return activeMember(request.auth.uid);
+      }
+
+      function shieldGroupCanAccess() {
+        return isMember() && !exists(shieldGroupBlockPath(request.auth.uid));
       }
 
       function isOwner() {
@@ -1229,11 +1439,14 @@ service cloud.firestore {
         let isMemberAdmission = shieldPlanActive()
           && isManager()
           && data.role == 'member'
+          && acceptedInvite(memberUid)
           && auditMatches(data.auditEventId, memberUid, 'member_added', 'member', 'active')
           && memberCountTransition(data.auditEventId, memberUid, 'member_added', 1);
         let isManagerAdmission = shieldPlanActive()
           && isOwner()
           && data.role == 'manager'
+          && acceptedInvite(memberUid)
+          && get(invitePath(memberUid)).data.acceptedAgeCohort == 'adult'
           && auditMatches(data.auditEventId, memberUid, 'manager_added', 'manager', 'active')
           && memberCountTransition(data.auditEventId, memberUid, 'manager_added', 1);
         return secureFeatureEnabled()
@@ -1263,6 +1476,41 @@ service cloud.firestore {
           && (isOwnerBootstrap || isMemberAdmission || isManagerAdmission);
       }
 
+      function validShieldInviteCreate(inviteeUid) {
+        let data = request.resource.data;
+        return isManager()
+          && shieldPlanActive()
+          && shieldSeatsWithinLimit()
+          && inviteeUid is string
+          && inviteeUid.matches('^[A-Za-z0-9_-]{1,128}$')
+          && inviteeUid != request.auth.uid
+          && !exists(memberPath(inviteeUid))
+          && data.keys().hasAll(['inviteeUid', 'displayName', 'invitedBy', 'status', 'createdAt'])
+          && data.keys().hasOnly(['inviteeUid', 'displayName', 'invitedBy', 'status', 'createdAt'])
+          && data.inviteeUid == inviteeUid
+          && data.displayName is string
+          && data.displayName.size() > 0
+          && data.displayName.size() <= 60
+          && data.invitedBy == request.auth.uid
+          && data.status == 'pending'
+          && data.createdAt == request.time;
+      }
+
+      function validShieldInviteAccept(inviteeUid) {
+        let data = request.resource.data;
+        return shieldMemberAgeEligible()
+          && request.auth.uid == inviteeUid
+          && resource.data.inviteeUid == inviteeUid
+          && resource.data.status == 'pending'
+          && data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'acceptedAgeCohort', 'acceptedAt'
+          ])
+          && data.status == 'accepted'
+          && data.acceptedAgeCohort == request.auth.token.get('dostAgeCohort', '')
+          && data.acceptedAgeCohort in ['teen', 'adult']
+          && data.acceptedAt == request.time;
+      }
+
       function validMemberCountMutation(memberUid, auditId, action) {
         let eventPath = auditPath(auditId);
         let eventExists = existsAfter(eventPath);
@@ -1283,6 +1531,9 @@ service cloud.firestore {
         let actorRole = secureActorRole();
         return eventExists
           && actorRole == 'owner'
+          && (action != 'manager_promoted'
+            || (acceptedInvite(memberUid)
+              && get(invitePath(memberUid)).data.acceptedAgeCohort == 'adult'))
           && event is map
           && event.actorUid == request.auth.uid
           && event.targetUid == memberUid
@@ -1381,6 +1632,14 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      match /invites/{inviteeUid} {
+        allow get, list: if (request.auth.uid == inviteeUid && shieldMemberAgeEligible())
+          || isManager();
+        allow create: if validShieldInviteCreate(inviteeUid);
+        allow update: if validShieldInviteAccept(inviteeUid);
+        allow delete: if false;
+      }
+
       match /auditLog/{auditId} {
         allow get, list: if isManager();
         allow create: if signedIn() && validAuditCreate(auditId);
@@ -1399,7 +1658,7 @@ service cloud.firestore {
             && getAfter(ownerPath).data.status == 'active';
         }
 
-        allow get, list: if chatId == 'main' && isMember();
+        allow get, list: if chatId == 'main' && shieldGroupCanAccess();
         allow create: if chatId == 'main'
           && request.resource.data.keys().hasAll(['createdBy', 'createdAt'])
           && request.resource.data.keys().hasOnly(['createdBy', 'createdAt'])
@@ -1407,6 +1666,21 @@ service cloud.firestore {
           && request.resource.data.createdAt == request.time
           && (isManager() || initialOwnerGroup());
         allow update, delete: if false;
+
+        match /blockedUsers/{blockedUid} {
+          allow get, list: if false;
+          allow create: if chatId == 'main'
+            && isMember()
+            && blockedUid is string
+            && blockedUid != request.auth.uid
+            && activeMember(blockedUid)
+            && request.resource.data.keys().hasAll(['blockedUid', 'blockedByUid', 'createdAt'])
+            && request.resource.data.keys().hasOnly(['blockedUid', 'blockedByUid', 'createdAt'])
+            && request.resource.data.blockedUid == blockedUid
+            && request.resource.data.blockedByUid == request.auth.uid
+            && request.resource.data.createdAt == request.time;
+          allow update, delete: if false;
+        }
 
         match /messages/{messageId} {
           function validTextMessage() {
@@ -1420,8 +1694,8 @@ service cloud.firestore {
               && data.createdAt == request.time;
           }
 
-          allow get, list: if chatId == 'main' && isMember();
-          allow create: if chatId == 'main' && isMember()
+          allow get, list: if chatId == 'main' && shieldGroupCanAccess();
+          allow create: if chatId == 'main' && shieldGroupCanAccess()
             && shieldPlanWithinGrace()
             && shieldSeatsWithinLimit()
             && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/groupChats/main)
@@ -1442,23 +1716,31 @@ service cloud.firestore {
             && activeMember(members[1]);
         }
 
-        allow get, list: if isOwner()
+        allow get, list: if resource.data.members is list
+          && neitherBlocked(resource.data.members[0], resource.data.members[1])
+          && (isOwner()
           || (isMember()
             && resource.data.members is list
             && request.auth.uid in resource.data.members
             && activeMember(resource.data.members[0])
-            && activeMember(resource.data.members[1]));
+            && activeMember(resource.data.members[1])
+          ));
         allow create: if isMember()
           && shieldPlanWithinGrace()
           && shieldSeatsWithinLimit()
           && request.resource.data.keys().hasAll(['members', 'createdBy', 'createdAt'])
           && request.resource.data.keys().hasOnly(['members', 'createdBy', 'createdAt'])
           && validDirectMembers(request.resource.data.members)
+          && neitherBlocked(request.resource.data.members[0], request.resource.data.members[1])
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt == request.time;
         allow update, delete: if false;
 
         match /messages/{messageId} {
+          function parentDirectChat() {
+            return get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data;
+          }
+
           function directMembers() {
             let path = /databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId);
             return existsAfter(path) ? getAfter(path).data.members : [];
@@ -1478,15 +1760,20 @@ service cloud.firestore {
               && request.auth.uid in members
               && members.size() == 2
               && activeMember(members[0])
-              && activeMember(members[1]);
+              && activeMember(members[1])
+              && neitherBlocked(members[0], members[1]);
           }
 
-          allow get, list: if isOwner()
+          allow get, list: if exists(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId))
+            && parentDirectChat().members is list
+            && neitherBlocked(parentDirectChat().members[0], parentDirectChat().members[1])
+            && (isOwner()
             || (isMember()
               && exists(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId))
-              && request.auth.uid in get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members
-              && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[0])
-              && activeMember(get(/databases/$(database)/documents/secureOrgs/$(orgId)/directChats/$(chatId)).data.members[1]));
+              && request.auth.uid in parentDirectChat().members
+              && activeMember(parentDirectChat().members[0])
+              && activeMember(parentDirectChat().members[1])
+            ));
           allow create: if isMember()
             && shieldPlanWithinGrace()
             && shieldSeatsWithinLimit()

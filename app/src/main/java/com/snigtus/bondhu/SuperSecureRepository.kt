@@ -399,13 +399,33 @@ internal class SuperSecureRepository(context: Context) {
         memberUid: String,
         displayName: String,
         role: SecureOrgRole
-    ) {
+    ): Boolean {
         requireSignedIn(uid)
         require(memberUid.matches(UID_PATTERN) && memberUid != uid) { "Enter another valid Firebase UID." }
         require(displayName.trim().length <= MAX_MEMBER_NAME_LENGTH) { "Member name is too long." }
         require(role != SecureOrgRole.OWNER) { "A new owner cannot be added." }
         val organization = organizationRef(organizationId)
         val memberRef = organization.collection(MEMBERS).document(memberUid)
+        val inviteRef = organization.collection(INVITES).document(memberUid)
+        val invite = inviteRef.get(Source.SERVER).await()
+        if (!invite.exists()) {
+            inviteRef.set(mapOf(
+                "inviteeUid" to memberUid,
+                "displayName" to displayName.trim().ifBlank { "Member" },
+                "invitedBy" to uid,
+                "status" to "pending",
+                "createdAt" to FieldValue.serverTimestamp()
+            )).await()
+            return false
+        }
+        check(invite.getString("status") == "accepted") {
+            "The member must accept the invitation before being added."
+        }
+        if (role == SecureOrgRole.MANAGER) {
+            check(invite.getString("acceptedAgeCohort") == "adult") {
+                "Only adults may organization managers."
+            }
+        }
         val auditId = UUID.randomUUID().toString()
         database().runTransaction { transaction ->
             val orgSnapshot = transaction.get(organization)
@@ -447,6 +467,63 @@ internal class SuperSecureRepository(context: Context) {
             )
             null
         }.await()
+        return true
+    }
+
+    suspend fun acceptInvitation(uid: String, organizationId: String) {
+        requireSignedIn(uid)
+        require(organizationId.matches(ORG_ID_PATTERN)) { "Enter a valid organization ID." }
+        val user = app?.let { FirebaseAuth.getInstance(it).currentUser }
+            ?: throw IllegalStateException("Sign in to accept this invitation.")
+        val token = user.getIdToken(true).await()
+        val ageCohort = token.claims["dostAgeCohort"] as? String
+        check(ageCohort in listOf("teen", "adult")) {
+            "A verified 13+ age cohort is required to join Shield."
+        }
+        organizationRef(organizationId).collection(INVITES).document(uid).update(
+            mapOf(
+                "status" to "accepted",
+                "acceptedAgeCohort" to ageCohort,
+                "acceptedAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+    }
+
+    suspend fun blockShieldMember(uid: String, organizationId: String, peerUid: String, groupChat: Boolean) {
+        requireSignedIn(uid)
+        require(peerUid.isNotBlank() && peerUid != uid)
+        val blockedRef = if (groupChat) {
+            organizationRef(organizationId).collection(GROUP_CHATS).document(MAIN_GROUP_CHAT)
+                .collection("blockedUsers").document(peerUid)
+        } else {
+            database().collection("peopleBlocks").document(uid)
+                .collection("blockedUsers").document(peerUid)
+        }
+        val block = if (groupChat) {
+            mapOf(
+                "blockedUid" to peerUid,
+                "blockedByUid" to uid,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+        } else {
+            mapOf("createdAt" to FieldValue.serverTimestamp())
+        }
+        blockedRef.set(block).await()
+    }
+
+    suspend fun reportShieldMember(uid: String, organizationId: String, peerUid: String, reason: String) {
+        requireSignedIn(uid)
+        val trimmed = reason.trim()
+        require(peerUid.isNotBlank() && peerUid != uid && trimmed.length in 3..500)
+        database().collection(SAFETY_REPORTS).add(mapOf(
+            "reporterUid" to uid,
+            "surface" to "shield",
+            "organizationId" to organizationId,
+            "targetId" to peerUid,
+            "reason" to trimmed,
+            "priorityReview" to true,
+            "createdAt" to FieldValue.serverTimestamp()
+        )).await()
     }
 
     suspend fun updateMember(
@@ -670,6 +747,8 @@ internal class SuperSecureRepository(context: Context) {
         const val DIRECT_CHATS = "directChats"
         const val MESSAGES = "messages"
         const val AUDIT_LOG = "auditLog"
+        const val INVITES = "invites"
+        const val SAFETY_REPORTS = "safetyReports"
         const val MAIN_GROUP_CHAT = "main"
         const val ACTIVE = "active"
         const val REMOVED = "removed"
